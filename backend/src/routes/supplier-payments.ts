@@ -60,18 +60,23 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       }
     );
 
-    // Update remaining_debt in Purchases table
+    // Update remaining_debt in PurchaseOrders table
     // If purchaseId is provided, update that specific purchase
     // Otherwise, distribute payment across all unpaid purchases for this supplier (oldest first)
     if (purchaseId) {
       // Update specific purchase
       await query(
-        `UPDATE Purchases
+        `UPDATE PurchaseOrders
          SET remaining_debt = CASE
            WHEN remaining_debt - @amount < 0 THEN 0
            ELSE remaining_debt - @amount
          END,
          paid_amount = ISNULL(paid_amount, 0) + @amount,
+         payment_status = CASE
+           WHEN remaining_debt - @amount <= 0 THEN 'paid'
+           WHEN ISNULL(paid_amount, 0) + @amount > 0 THEN 'partial'
+           ELSE 'unpaid'
+         END,
          updated_at = GETDATE()
          WHERE id = @purchaseId AND store_id = @storeId`,
         { purchaseId, amount, storeId }
@@ -84,7 +89,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
             id,
             remaining_debt,
             SUM(remaining_debt) OVER (ORDER BY created_at ASC ROWS UNBOUNDED PRECEDING) as running_total
-          FROM Purchases
+          FROM PurchaseOrders
           WHERE supplier_id = @supplierId
             AND store_id = @storeId
             AND remaining_debt > 0
@@ -101,8 +106,13 @@ router.post('/', async (req: AuthRequest, res: Response) => {
             WHEN pd.running_total - p.remaining_debt < @amount THEN @amount - (pd.running_total - p.remaining_debt)
             ELSE 0
           END,
+          p.payment_status = CASE
+            WHEN pd.running_total <= @amount THEN 'paid'
+            WHEN pd.running_total - p.remaining_debt < @amount THEN 'partial'
+            ELSE p.payment_status
+          END,
           p.updated_at = GETDATE()
-        FROM Purchases p
+        FROM PurchaseOrders p
         INNER JOIN PaymentDistribution pd ON p.id = pd.id
         WHERE pd.running_total - p.remaining_debt < @amount`,
         { supplierId, storeId, amount }

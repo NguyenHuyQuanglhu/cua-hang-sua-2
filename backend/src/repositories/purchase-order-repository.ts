@@ -192,9 +192,18 @@ export class PurchaseOrderRepository extends BaseRepository<PurchaseOrder> {
       const purchaseOrderId = crypto.randomUUID();
       const now = new Date();
       const orderRecord = await transactionInsert<PurchaseOrderRecord>(transaction, 'PurchaseOrders', {
-        id: purchaseOrderId, store_id: storeId, order_number: orderNumber, supplier_id: input.supplierId || null,
-        import_date: new Date(input.importDate), total_amount: input.totalAmount, notes: input.notes || null,
-        created_at: now, updated_at: now,
+        id: purchaseOrderId, 
+        store_id: storeId, 
+        order_number: orderNumber, 
+        supplier_id: input.supplierId || null,
+        import_date: new Date(input.importDate), 
+        total_amount: input.totalAmount, 
+        paid_amount: 0,
+        remaining_debt: input.totalAmount,
+        payment_status: 'unpaid',
+        notes: input.notes || null,
+        created_at: now,
+        // updated_at will be set automatically by database DEFAULT
       });
       if (!orderRecord) throw new Error('Failed to create purchase order');
       const items: PurchaseOrderItemWithProduct[] = [];

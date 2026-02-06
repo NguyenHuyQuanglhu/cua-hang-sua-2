@@ -16,6 +16,7 @@ import {
   Lock,
   QrCode,
   Banknote,
+  RefreshCw,
 } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
@@ -198,6 +199,72 @@ export default function POSPage() {
   const [showQRPaymentDialog, setShowQRPaymentDialog] = useState(false);
   const [showPaymentGatewayDialog, setShowPaymentGatewayDialog] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethod | null>(null);
+
+  // Load cart from localStorage on mount
+  useEffect(() => {
+    const savedCart = localStorage.getItem('pos-cart');
+    const savedCustomerId = localStorage.getItem('pos-customer-id');
+    const savedDiscountType = localStorage.getItem('pos-discount-type');
+    const savedDiscountValue = localStorage.getItem('pos-discount-value');
+    const savedPointsUsed = localStorage.getItem('pos-points-used');
+    
+    if (savedCart) {
+      try {
+        setCart(JSON.parse(savedCart));
+      } catch (e) {
+        console.error('Failed to parse saved cart:', e);
+      }
+    }
+    if (savedCustomerId) setSelectedCustomerId(savedCustomerId);
+    if (savedDiscountType) setDiscountType(savedDiscountType as 'percentage' | 'amount');
+    if (savedDiscountValue) setDiscountValue(Number(savedDiscountValue));
+    if (savedPointsUsed) setPointsUsed(Number(savedPointsUsed));
+  }, []);
+
+  // Update cart items with latest stock info when products data changes
+  useEffect(() => {
+    if (cart.length > 0 && products.length > 0 && productsMap.size > 0) {
+      setCart(prevCart => prevCart.map(item => {
+        const product = productsMap.get(item.productId);
+        if (!product) return item;
+        
+        const stockInBaseUnit = getStockInBaseUnit(product.id);
+        return {
+          ...item,
+          stockInfo: {
+            ...item.stockInfo,
+            stockInBaseUnit: stockInBaseUnit,
+          }
+        };
+      }));
+    }
+  }, [products]);
+
+  // Save cart to localStorage whenever it changes
+  useEffect(() => {
+    if (cart.length > 0) {
+      localStorage.setItem('pos-cart', JSON.stringify(cart));
+    } else {
+      localStorage.removeItem('pos-cart');
+    }
+  }, [cart]);
+
+  // Save other state to localStorage
+  useEffect(() => {
+    localStorage.setItem('pos-customer-id', selectedCustomerId);
+  }, [selectedCustomerId]);
+
+  useEffect(() => {
+    localStorage.setItem('pos-discount-type', discountType);
+  }, [discountType]);
+
+  useEffect(() => {
+    localStorage.setItem('pos-discount-value', String(discountValue));
+  }, [discountValue]);
+
+  useEffect(() => {
+    localStorage.setItem('pos-points-used', String(pointsUsed));
+  }, [pointsUsed]);
   
   // Invoice print dialog state
   const [showInvoiceDialog, setShowInvoiceDialog] = useState(false);
@@ -293,9 +360,12 @@ export default function POSPage() {
     setShiftsLoading(true);
     try {
       const result = await getActiveShift();
+      console.log('[POS] Active shift result:', result);
       if (result.success && result.shift) {
+        console.log('[POS] Setting active shift:', result.shift);
         setActiveShift(result.shift as Shift);
       } else {
+        console.log('[POS] No active shift found');
         setActiveShift(null);
       }
     } catch (error) {
@@ -380,9 +450,11 @@ export default function POSPage() {
       const stockInBaseUnit = getStockInBaseUnit(product.id)
       const maxQuantity = Math.floor(stockInBaseUnit / (currentItem.stockInfo?.conversionFactor || 1))
       
-      // Only increment if we haven't reached max stock
-      if (currentItem.quantity < maxQuantity) {
+      // Only increment if we haven't reached max stock (allow 0 stock for pre-orders)
+      if (stockInBaseUnit === 0 || currentItem.quantity < maxQuantity) {
         newCart[existingItemIndex].quantity += 1
+        // Update stock info
+        newCart[existingItemIndex].stockInfo.stockInBaseUnit = stockInBaseUnit
         setCart(newCart)
       } else {
         toast({
@@ -439,8 +511,16 @@ export default function POSPage() {
           },
         },
       ])
+      
+      // Show warning if stock is 0
+      if (stockInBaseUnit === 0) {
+        toast({
+          title: "Cảnh báo",
+          description: `Sản phẩm "${product.name}" hiện tại hết hàng. Vui lòng nhập thêm trước khi bán.`,
+        })
+      }
     }
-  }, [cart, getStockInBaseUnit, getUnitInfo])
+  }, [cart, getStockInBaseUnit, getUnitInfo, toast])
 
   // Update cart item unit
   const updateCartItemUnit = (productId: string, newUnitId: string) => {
@@ -470,6 +550,15 @@ export default function POSPage() {
       const stockInBaseUnit = item.stockInfo?.stockInBaseUnit || 0;
       const conversionFactor = item.stockInfo?.conversionFactor || 1;
       const maxQuantity = Math.floor(stockInBaseUnit / conversionFactor);
+      
+      // Allow 0 stock for pre-orders, but show warning
+      if (stockInBaseUnit === 0 && newQuantity > 0) {
+        toast({
+          title: "Cảnh báo",
+          description: `Sản phẩm "${item.productName}" hiện tại hết hàng. Đơn hàng này sẽ được xử lý sau khi nhập thêm hàng.`,
+        })
+        return { ...item, quantity: newQuantity };
+      }
       
       // Limit quantity to available stock
       const limitedQuantity = Math.min(Math.max(0, newQuantity), maxQuantity);
@@ -758,6 +847,13 @@ export default function POSPage() {
       setPointsUsed(0);
       setSelectedPaymentMethod(null);
       
+      // Clear localStorage
+      localStorage.removeItem('pos-cart');
+      localStorage.removeItem('pos-customer-id');
+      localStorage.removeItem('pos-discount-type');
+      localStorage.removeItem('pos-discount-value');
+      localStorage.removeItem('pos-points-used');
+      
       // Refresh data to get updated stock and customer debt
       fetchProducts();
       fetchCustomers();
@@ -872,6 +968,23 @@ export default function POSPage() {
               disabled={isSubmitting || isLocked}
             />
           </div>
+          <Button 
+            variant="outline" 
+            size="icon" 
+            className="h-12 w-12 shrink-0" 
+            onClick={() => {
+              fetchProducts();
+              fetchCustomers();
+              toast({
+                title: 'Đã cập nhật',
+                description: 'Dữ liệu sản phẩm và khách hàng đã được làm mới.',
+              });
+            }}
+            disabled={isLocked}
+            title="Làm mới dữ liệu"
+          >
+            <RefreshCw className="h-5 w-5" />
+          </Button>
            <Popover open={productSearchOpen} onOpenChange={setProductSearchOpen}>
             <PopoverTrigger asChild>
                 <Button type="button" variant="outline" className="h-12" disabled={isLocked}>
@@ -1325,6 +1438,12 @@ export default function POSPage() {
                     setAppliedVoucher(null)
                     setVoucherDiscount(0)
                     setPointsUsed(0);
+                    // Clear localStorage
+                    localStorage.removeItem('pos-cart');
+                    localStorage.removeItem('pos-customer-id');
+                    localStorage.removeItem('pos-discount-type');
+                    localStorage.removeItem('pos-discount-value');
+                    localStorage.removeItem('pos-points-used');
                     }}
                     disabled={isSubmitting || isLocked}
                 >

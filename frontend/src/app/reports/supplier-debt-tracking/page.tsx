@@ -1,14 +1,8 @@
-
 'use client'
 
-import * as React from "react"
 import { useState, useMemo, useEffect } from "react"
-import Link from "next/link"
-import { Search, ArrowUp, ArrowDown, File, Calendar as CalendarIcon, ChevronDown, ChevronRight } from "lucide-react"
+import { Search, ArrowUp, ArrowDown, File } from "lucide-react"
 import * as xlsx from 'xlsx';
-import { DateRange } from "react-day-picker"
-import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, startOfYear, endOfYear, startOfQuarter, endOfQuarter } from "date-fns"
-import { apiClient } from "@/lib/api-client"
 
 import {
   Card,
@@ -30,131 +24,104 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useStore } from "@/contexts/store-context"
-import { Supplier, PurchaseOrder, SupplierPayment } from "@/lib/types"
-import { formatCurrency, cn } from "@/lib/utils"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Calendar } from "@/components/ui/calendar"
+import { formatCurrency } from "@/lib/utils"
+import { fetchWithAuth } from "@/lib/fetch-with-auth"
+import { PurchaseOrderPaymentForm } from "./components/purchase-order-payment-form"
 
-export type SupplierDebtTrackingInfo = {
+type PurchaseOrderDebt = {
+  id: string;
+  orderNumber: string;
   supplierId: string;
   supplierName: string;
-  supplierPhone?: string;
-  openingBalance: number;
-  incurredAmount: number;
+  importDate: string;
+  totalAmount: number;
   paidAmount: number;
-  closingBalance: number;
-  paymentsDuring: SupplierPayment[];
+  remainingDebt: number;
+  paymentStatus: string;
 }
 
-type SortKey = 'supplierName' | 'openingBalance' | 'incurredAmount' | 'paidAmount' | 'closingBalance';
+type SortKey = 'orderNumber' | 'supplierName' | 'importDate' | 'totalAmount' | 'paidAmount' | 'remainingDebt';
 
 export default function SupplierDebtTrackingPage() {
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>('closingBalance');
+  const [sortKey, setSortKey] = useState<SortKey>('importDate');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
-  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
-  const [dateRange, setDateRange] = useState<DateRange | undefined>({
-    from: startOfMonth(new Date()),
-    to: endOfMonth(new Date()),
-  });
+  const [isPaymentFormOpen, setIsPaymentFormOpen] = useState(false);
+  const [selectedPurchaseOrder, setSelectedPurchaseOrder] = useState<PurchaseOrderDebt | undefined>(undefined);
 
   const { currentStore } = useStore();
 
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [purchases, setPurchases] = useState<PurchaseOrder[]>([]);
-  const [payments, setPayments] = useState<SupplierPayment[]>([]);
-  const [suppliersLoading, setSuppliersLoading] = useState(true);
-  const [purchasesLoading, setPurchasesLoading] = useState(true);
-  const [paymentsLoading, setPaymentsLoading] = useState(true);
+  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrderDebt[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!currentStore) return;
 
     const fetchData = async () => {
       try {
-        setSuppliersLoading(true);
-        const suppliersData = await apiClient.getSuppliers();
-        setSuppliers(Array.isArray(suppliersData) ? suppliersData : (suppliersData as any).data || []);
-        setSuppliersLoading(false);
-
-        setPurchasesLoading(true);
-        const purchasesData = await apiClient.getPurchases();
-        setPurchases(Array.isArray(purchasesData) ? purchasesData : (purchasesData as any).data || []);
-        setPurchasesLoading(false);
-
-        setPaymentsLoading(true);
-        const paymentsData = await apiClient.getSupplierPayments();
-        setPayments(Array.isArray(paymentsData) ? paymentsData : (paymentsData as any).data || []);
-        setPaymentsLoading(false);
+        setLoading(true);
+        const purchasesRes = await fetchWithAuth('/api/purchases?pageSize=1000');
+        if (purchasesRes.ok) {
+          const data = await purchasesRes.json();
+          const purchases = Array.isArray(data) ? data : (data.data || []);
+          
+          // Map to PurchaseOrderDebt format
+          const mapped: PurchaseOrderDebt[] = purchases.map((p: any) => ({
+            id: p.id,
+            orderNumber: p.orderNumber,
+            supplierId: p.supplierId,
+            supplierName: p.supplierName || 'Không có nhà cung cấp',
+            importDate: p.importDate,
+            totalAmount: p.totalAmount || 0,
+            paidAmount: p.paidAmount || 0,
+            remainingDebt: p.remainingDebt || 0,
+            paymentStatus: p.paymentStatus || 'unpaid',
+          }));
+          
+          setPurchaseOrders(mapped);
+        }
+        setLoading(false);
       } catch (error) {
-        console.error('Error fetching supplier debt tracking data:', error);
-        setSuppliersLoading(false);
-        setPurchasesLoading(false);
-        setPaymentsLoading(false);
+        console.error('Error fetching purchase orders:', error);
+        setLoading(false);
       }
     };
 
     fetchData();
   }, [currentStore]);
 
-  const debtTrackingData = useMemo((): SupplierDebtTrackingInfo[] => {
-    if (!suppliers || !purchases || !payments || !dateRange?.from) return [];
-
-    const fromDate = dateRange.from;
-    const toDate = dateRange.to || fromDate;
-
-    return suppliers.map(supplier => {
-      // Opening Balance
-      const purchasesBefore = purchases.filter(p => p.supplierId === supplier.id && new Date(p.importDate) < fromDate);
-      const paymentsBefore = payments.filter(p => p.supplierId === supplier.id && new Date(p.paymentDate) < fromDate);
-      const openingBalance = purchasesBefore.reduce((sum, p) => sum + p.totalAmount, 0) - paymentsBefore.reduce((sum, p) => sum + p.amount, 0);
-
-      // Incurred and Paid during the period
-      const purchasesDuring = purchases.filter(p => p.supplierId === supplier.id && new Date(p.importDate) >= fromDate && new Date(p.importDate) <= toDate);
-      const paymentsDuring = payments.filter(p => p.supplierId === supplier.id && new Date(p.paymentDate) >= fromDate && new Date(p.paymentDate) <= toDate);
-      const incurredAmount = purchasesDuring.reduce((sum, p) => sum + p.totalAmount, 0);
-      const paidAmount = paymentsDuring.reduce((sum, p) => sum + p.amount, 0);
-
-      const closingBalance = openingBalance + incurredAmount - paidAmount;
-
-      return {
-        supplierId: supplier.id,
-        supplierName: supplier.name,
-        supplierPhone: supplier.phone,
-        openingBalance,
-        incurredAmount,
-        paidAmount,
-        closingBalance,
-        paymentsDuring: paymentsDuring.sort((a,b) => new Date(b.paymentDate).getTime() - new Date(a.paymentDate).getTime()),
-      };
-    }).filter(data => 
-        data.openingBalance !== 0 || 
-        data.incurredAmount !== 0 || 
-        data.paidAmount !== 0 || 
-        data.closingBalance !== 0
-    );
-  }, [suppliers, purchases, payments, dateRange]);
-
   const filteredData = useMemo(() => {
-    return debtTrackingData.filter(data => 
-        data.supplierName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (data.supplierPhone && data.supplierPhone.includes(searchTerm))
-    );
-  }, [debtTrackingData, searchTerm]);
+    let filtered = purchaseOrders;
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      filtered = filtered.filter(data => 
+        data.orderNumber.toLowerCase().includes(term) ||
+        data.supplierName.toLowerCase().includes(term)
+      );
+    }
+    return filtered;
+  }, [purchaseOrders, searchTerm]);
 
   const sortedData = useMemo(() => {
     let sortableItems = [...filteredData];
-    sortableItems.sort((a, b) => {
-        const valA = a[sortKey];
-        const valB = b[sortKey];
+    if (sortKey) {
+      sortableItems.sort((a, b) => {
+        let valA = a[sortKey as keyof PurchaseOrderDebt] || '';
+        let valB = b[sortKey as keyof PurchaseOrderDebt] || '';
+
         if (typeof valA === 'string' && typeof valB === 'string') {
-          return sortDirection === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+          valA = valA.toLowerCase();
+          valB = valB.toLowerCase();
         }
-        return sortDirection === 'asc' ? valA - valB : valB - valA;
+
+        if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
+        if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
+        return 0;
       });
+    }
     return sortableItems;
   }, [filteredData, sortKey, sortDirection]);
-
+  
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
@@ -164,39 +131,40 @@ export default function SupplierDebtTrackingPage() {
     }
   };
 
-  const toggleRow = (supplierId: string) => {
-    setExpandedRows(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(supplierId)) {
-        newSet.delete(supplierId);
-      } else {
-        newSet.add(supplierId);
-      }
-      return newSet;
-    });
-  };
-  
-  const setDatePreset = (preset: 'this_week' | 'this_month' | 'this_quarter' | 'this_year' | 'all') => {
-    const now = new Date();
-    if (preset === 'all') {
-      setDateRange(undefined);
-      return;
-    }
-    switch (preset) {
-      case 'this_week':
-        setDateRange({ from: startOfWeek(now, { weekStartsOn: 1 }), to: endOfWeek(now, { weekStartsOn: 1 }) });
-        break;
-      case 'this_month':
-        setDateRange({ from: startOfMonth(now), to: endOfMonth(now) });
-        break;
-      case 'this_quarter':
-        setDateRange({ from: startOfQuarter(now), to: endOfQuarter(now) });
-        break;
-      case 'this_year':
-        setDateRange({ from: startOfYear(now), to: endOfYear(now) });
-        break;
-    }
+  const handleOpenPaymentForm = (purchaseOrder: PurchaseOrderDebt) => {
+    setSelectedPurchaseOrder(purchaseOrder);
+    setIsPaymentFormOpen(true);
   }
+
+  const handlePaymentSuccess = async () => {
+    // Refetch data after successful payment
+    try {
+      setLoading(true);
+      const purchasesRes = await fetchWithAuth('/api/purchases?pageSize=1000');
+      if (purchasesRes.ok) {
+        const data = await purchasesRes.json();
+        const purchases = Array.isArray(data) ? data : (data.data || []);
+        
+        const mapped: PurchaseOrderDebt[] = purchases.map((p: any) => ({
+          id: p.id,
+          orderNumber: p.orderNumber,
+          supplierId: p.supplierId,
+          supplierName: p.supplierName || 'Không có nhà cung cấp',
+          importDate: p.importDate,
+          totalAmount: p.totalAmount || 0,
+          paidAmount: p.paidAmount || 0,
+          remainingDebt: p.remainingDebt || 0,
+          paymentStatus: p.paymentStatus || 'unpaid',
+        }));
+        
+        setPurchaseOrders(mapped);
+      }
+    } catch (error) {
+      console.error('Error refetching data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const SortableHeader = ({ sortKey: key, children, className }: { sortKey: SortKey; children: React.ReactNode; className?: string }) => (
     <TableHead className={className}>
@@ -208,186 +176,149 @@ export default function SupplierDebtTrackingPage() {
       </Button>
     </TableHead>
   );
-
+  
   const totalRow = useMemo(() => {
-    return sortedData.reduce((acc, curr) => ({
-      openingBalance: acc.openingBalance + curr.openingBalance,
-      incurredAmount: acc.incurredAmount + curr.incurredAmount,
-      paidAmount: acc.paidAmount + curr.paidAmount,
-      closingBalance: acc.closingBalance + curr.closingBalance,
-    }), { openingBalance: 0, incurredAmount: 0, paidAmount: 0, closingBalance: 0 });
+    return {
+      totalAmount: sortedData.reduce((acc, curr) => acc + curr.totalAmount, 0),
+      paidAmount: sortedData.reduce((acc, curr) => acc + curr.paidAmount, 0),
+      remainingDebt: sortedData.reduce((acc, curr) => acc + curr.remainingDebt, 0),
+    };
   }, [sortedData]);
 
   const handleExportExcel = () => {
     const dataToExport = sortedData.map((data, index) => ({
       'STT': index + 1,
+      'Số đơn': data.orderNumber,
       'Nhà cung cấp': data.supplierName,
-      'Nợ đầu kỳ': data.openingBalance,
-      'Phát sinh': data.incurredAmount,
-      'Thanh toán': data.paidAmount,
-      'Nợ cuối kỳ': data.closingBalance,
+      'Ngày nhập': new Date(data.importDate).toLocaleDateString('vi-VN'),
+      'Tổng tiền': data.totalAmount,
+      'Đã trả': data.paidAmount,
+      'Còn nợ': data.remainingDebt,
+      'Trạng thái': data.paymentStatus === 'paid' ? 'Đã thanh toán' : data.paymentStatus === 'partial' ? 'Thanh toán một phần' : 'Chưa thanh toán',
     }));
 
-    const worksheet = xlsx.utils.json_to_sheet([...dataToExport, {
-        'Nhà cung cấp': 'Tổng cộng',
-        'Nợ đầu kỳ': totalRow.openingBalance,
-        'Phát sinh': totalRow.incurredAmount,
-        'Thanh toán': totalRow.paidAmount,
-        'Nợ cuối kỳ': totalRow.closingBalance,
-    }]);
+    const totalRowData = {
+      'Số đơn': 'Tổng cộng',
+      'Tổng tiền': totalRow.totalAmount,
+      'Đã trả': totalRow.paidAmount,
+      'Còn nợ': totalRow.remainingDebt,
+    };
 
-    worksheet['!cols'] = [ {wch: 5}, {wch: 30}, {wch: 20}, {wch: 20}, {wch: 20}, {wch: 20} ];
-    const numberFormat = '#,##0';
-    dataToExport.forEach((_, index) => {
-       const rowIndex = index + 2;
-       ['C', 'D', 'E', 'F'].forEach(col => {
-           const cell = worksheet[`${col}${rowIndex}`];
-           if(cell) cell.z = numberFormat;
-       });
-   });
-
-   const totalRowIndex = dataToExport.length + 2;
-    ['C', 'D', 'E', 'F'].forEach(col => {
-      const cell = worksheet[`${col}${totalRowIndex}`];
-      if(cell) {
-        cell.z = numberFormat;
-        cell.s = { font: { bold: true } };
-      }
-    });
-
+    const worksheet = xlsx.utils.json_to_sheet([...dataToExport, totalRowData]);
     const workbook = xlsx.utils.book_new();
-    xlsx.utils.book_append_sheet(workbook, worksheet, "DoiSoatCongNoNCC");
-    xlsx.writeFile(workbook, "bao_cao_doi_soat_cong_no_ncc.xlsx");
+    xlsx.utils.book_append_sheet(workbook, worksheet, "ChiTietCongNo");
+
+    worksheet['!cols'] = [ { wch: 5 }, { wch: 15 }, { wch: 30 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 15 }, { wch: 20 } ];
+    
+    xlsx.writeFile(workbook, "chi_tiet_cong_no_theo_don.xlsx");
   };
 
-  const isLoading = suppliersLoading || purchasesLoading || paymentsLoading;
-
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Báo cáo Đối soát Công nợ Nhà cung cấp</CardTitle>
-        <CardDescription>
-          Phân tích chi tiết công nợ phải trả cho nhà cung cấp trong một khoảng thời gian.
-        </CardDescription>
-        <div className="flex flex-wrap items-center gap-4 pt-4">
-           <Popover>
-              <PopoverTrigger asChild>
-                <Button id="date" variant={"outline"} className={cn("w-[300px] justify-start text-left font-normal", !dateRange && "text-muted-foreground")}>
-                  <CalendarIcon className="mr-2 h-4 w-4" />
-                  {dateRange?.from ? (dateRange.to ? (<>{format(dateRange.from, "dd/MM/yyyy")} - {format(dateRange.to, "dd/MM/yyyy")}</>) : format(dateRange.from, "dd/MM/yyyy")) : (<span>Chọn kỳ báo cáo</span>)}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
-                 <Calendar initialFocus mode="range" defaultMonth={dateRange?.from} selected={dateRange} onSelect={setDateRange} numberOfMonths={2} />
-                 <div className="p-2 border-t grid grid-cols-3 gap-1">
-                    <Button variant="ghost" size="sm" onClick={() => setDatePreset('this_week')}>Tuần này</Button>
-                    <Button variant="ghost" size="sm" onClick={() => setDatePreset('this_month')}>Tháng này</Button>
-                    <Button variant="ghost" size="sm" onClick={() => setDatePreset('this_quarter')}>Quý này</Button>
-                    <Button variant="ghost" size="sm" onClick={() => setDatePreset('this_year')}>Năm nay</Button>
-                    <Button variant="ghost" size="sm" onClick={() => setDatePreset('all')}>Tất cả</Button>
-                </div>
-              </PopoverContent>
-            </Popover>
-            <div className="relative ml-auto">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                type="search"
-                placeholder="Tìm nhà cung cấp..."
-                className="w-full rounded-lg bg-background pl-8 md:w-80"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-            <Button onClick={handleExportExcel} variant="outline">
-              <File className="mr-2 h-4 w-4" />
-              Xuất Excel
-            </Button>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-12"></TableHead>
-              <SortableHeader sortKey="supplierName">Nhà cung cấp</SortableHeader>
-              <SortableHeader sortKey="openingBalance" className="text-right">Nợ đầu kỳ</SortableHeader>
-              <SortableHeader sortKey="incurredAmount" className="text-right">Phát sinh</SortableHeader>
-              <SortableHeader sortKey="paidAmount" className="text-right">Thanh toán</SortableHeader>
-              <SortableHeader sortKey="closingBalance" className="text-right">Nợ cuối kỳ</SortableHeader>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {isLoading && <TableRow><TableCell colSpan={6} className="text-center h-24">Đang tải dữ liệu...</TableCell></TableRow>}
-            {!isLoading && sortedData.map((data) => {
-              const isExpanded = expandedRows.has(data.supplierId);
-              return (
-                <React.Fragment key={data.supplierId}>
-                  <TableRow className="cursor-pointer" onClick={() => toggleRow(data.supplierId)}>
-                    <TableCell>
-                      {data.paymentsDuring.length > 0 && (
-                        <Button variant="ghost" size="icon" className="h-6 w-6">
-                            {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                        </Button>
-                      )}
-                    </TableCell>
-                    <TableCell className="font-medium">{data.supplierName}</TableCell>
-                    <TableCell className="text-right">{formatCurrency(data.openingBalance)}</TableCell>
-                    <TableCell className="text-right text-blue-600">{formatCurrency(data.incurredAmount)}</TableCell>
-                    <TableCell className="text-right text-green-600">{formatCurrency(data.paidAmount)}</TableCell>
-                    <TableCell className={`text-right font-semibold ${data.closingBalance > 0 ? 'text-destructive' : ''}`}>{formatCurrency(data.closingBalance)}</TableCell>
-                  </TableRow>
-                  {isExpanded && data.paymentsDuring.length > 0 && (
-                     <TableRow className="bg-muted/50 hover:bg-muted/50">
-                        <TableCell colSpan={6}>
-                          <div className="p-4">
-                            <h4 className="font-semibold mb-2">Chi tiết thanh toán trong kỳ</h4>
-                             <Table>
-                              <TableHeader>
-                                <TableRow>
-                                  <TableHead>Ngày thanh toán</TableHead>
-                                  <TableHead>Ghi chú</TableHead>
-                                  <TableHead className="text-right">Số tiền</TableHead>
-                                </TableRow>
-                              </TableHeader>
-                              <TableBody>
-                                {data.paymentsDuring.map(payment => (
-                                  <TableRow key={payment.id}>
-                                    <TableCell>{format(new Date(payment.paymentDate), 'dd/MM/yyyy')}</TableCell>
-                                    <TableCell>{payment.notes}</TableCell>
-                                    <TableCell className="text-right">{formatCurrency(payment.amount)}</TableCell>
-                                  </TableRow>
-                                ))}
-                              </TableBody>
-                            </Table>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                  )}
-                </React.Fragment>
-              )
-            })}
-            {!isLoading && sortedData.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} className="text-center h-24">Không có dữ liệu công nợ trong kỳ.</TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-          <ShadcnTableFooter>
-            <TableRow className="text-base font-bold">
-              <TableCell colSpan={2}>Tổng cộng</TableCell>
-              <TableCell className="text-right">{formatCurrency(totalRow.openingBalance)}</TableCell>
-              <TableCell className="text-right">{formatCurrency(totalRow.incurredAmount)}</TableCell>
-              <TableCell className="text-right">{formatCurrency(totalRow.paidAmount)}</TableCell>
-              <TableCell className={`text-right ${totalRow.closingBalance > 0 ? 'text-destructive' : ''}`}>{formatCurrency(totalRow.closingBalance)}</TableCell>
-            </TableRow>
-          </ShadcnTableFooter>
-        </Table>
-      </CardContent>
-       <CardFooter>
-          <div className="text-xs text-muted-foreground">
-            Hiển thị <strong>{sortedData.length}</strong> nhà cung cấp có giao dịch trong kỳ.
+    <>
+      {selectedPurchaseOrder && (
+        <PurchaseOrderPaymentForm
+          isOpen={isPaymentFormOpen}
+          onOpenChange={setIsPaymentFormOpen}
+          purchaseOrder={selectedPurchaseOrder}
+          onSuccess={handlePaymentSuccess}
+        />
+      )}
+      <Card>
+        <CardHeader>
+          <div className="flex justify-between items-start">
+              <div>
+                  <CardTitle>Chi tiết Công nợ theo Đơn hàng</CardTitle>
+                  <CardDescription>
+                  Theo dõi và thanh toán từng đơn nhập hàng riêng biệt.
+                  </CardDescription>
+              </div>
+              <div className="text-right">
+                  <p className="text-sm text-muted-foreground">Tổng nợ phải trả</p>
+                  <p className={`text-2xl font-bold ${totalRow.remainingDebt > 0 ? 'text-destructive' : 'text-primary'}`}>
+                      {formatCurrency(totalRow.remainingDebt)}
+                  </p>
+              </div>
           </div>
-        </CardFooter>
-    </Card>
-  );
+          <div className="flex items-center gap-4 pt-4">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                    type="search"
+                    placeholder="Tìm kiếm theo số đơn hoặc nhà cung cấp..."
+                    className="w-full rounded-lg bg-background pl-8 md:w-80"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                />
+              </div>
+              <Button onClick={handleExportExcel} variant="outline" className="ml-auto">
+                <File className="mr-2 h-4 w-4" />
+                Xuất Excel
+              </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <Table>
+              <TableHeader>
+                  <TableRow>
+                      <TableHead className="w-16">STT</TableHead>
+                      <SortableHeader sortKey="orderNumber">Số đơn</SortableHeader>
+                      <SortableHeader sortKey="supplierName">Nhà cung cấp</SortableHeader>
+                      <SortableHeader sortKey="importDate">Ngày nhập</SortableHeader>
+                      <SortableHeader sortKey="totalAmount" className="text-right">Tổng tiền</SortableHeader>
+                      <SortableHeader sortKey="paidAmount" className="text-right">Đã trả</SortableHeader>
+                      <SortableHeader sortKey="remainingDebt" className="text-right">Còn nợ</SortableHeader>
+                      <TableHead className="text-right">Hành động</TableHead>
+                  </TableRow>
+              </TableHeader>
+              <TableBody>
+                {loading && <TableRow><TableCell colSpan={8} className="text-center h-24">Đang tải dữ liệu...</TableCell></TableRow>}
+                {!loading && sortedData.map((data, index) => (
+                  <TableRow key={data.id}>
+                    <TableCell>{index + 1}</TableCell>
+                    <TableCell className="font-medium">{data.orderNumber}</TableCell>
+                    <TableCell>{data.supplierName}</TableCell>
+                    <TableCell>{new Date(data.importDate).toLocaleDateString('vi-VN')}</TableCell>
+                    <TableCell className="text-right">{formatCurrency(data.totalAmount)}</TableCell>
+                    <TableCell className="text-right">{formatCurrency(data.paidAmount)}</TableCell>
+                    <TableCell className={`text-right font-semibold ${data.remainingDebt > 0 ? 'text-destructive' : 'text-green-600'}`}>
+                      {formatCurrency(data.remainingDebt)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                       {data.remainingDebt > 0 && data.supplierId ? (
+                          <Button variant="outline" size="sm" onClick={() => handleOpenPaymentForm(data)}>
+                            Thanh toán
+                          </Button>
+                        ) : data.remainingDebt > 0 && !data.supplierId ? (
+                          <span className="text-sm text-muted-foreground">Không có NCC</span>
+                        ) : (
+                          <span className="text-sm text-green-600 font-medium">Đã thanh toán</span>
+                        )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {!loading && sortedData.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={8} className="text-center h-24">Không có dữ liệu.</TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+              <ShadcnTableFooter>
+                  <TableRow className="text-base font-bold">
+                      <TableCell colSpan={4}>Tổng cộng</TableCell>
+                      <TableCell className="text-right">{formatCurrency(totalRow.totalAmount)}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(totalRow.paidAmount)}</TableCell>
+                      <TableCell className={`text-right ${totalRow.remainingDebt > 0 ? 'text-destructive' : 'text-green-600'}`}>{formatCurrency(totalRow.remainingDebt)}</TableCell>
+                      <TableCell></TableCell>
+                  </TableRow>
+              </ShadcnTableFooter>
+          </Table>
+        </CardContent>
+        <CardFooter>
+            <div className="text-xs text-muted-foreground">
+              Hiển thị <strong>{sortedData.length}</strong> đơn nhập hàng.
+            </div>
+          </CardFooter>
+      </Card>
+    </>
+  )
 }

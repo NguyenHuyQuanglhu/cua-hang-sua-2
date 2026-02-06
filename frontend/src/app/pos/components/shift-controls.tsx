@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Clock,
   LogOut,
@@ -77,13 +77,49 @@ const FormattedNumberInput = ({
 export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps) {
   const [isCloseShiftDialogOpen, setIsCloseShiftDialogOpen] = useState(false)
   const [isClosing, setIsClosing] = useState(false)
-  const [endingCash, setEndingCash] = useState(0)
+  const [additionalCash, setAdditionalCash] = useState(0)
+  const [elapsedTime, setElapsedTime] = useState('')
   const { toast } = useToast()
   const router = useRouter()
+  
+  // Calculate elapsed time from shift start
+  useEffect(() => {
+    if (!activeShift?.startTime) return;
+    
+    const updateElapsedTime = () => {
+      try {
+        const startTime = new Date(activeShift.startTime).getTime()
+        if (isNaN(startTime)) {
+          setElapsedTime('00:00:00')
+          return
+        }
+        
+        const now = Date.now()
+        const diff = Math.max(0, now - startTime)
+        
+        const hours = Math.floor(diff / (1000 * 60 * 60))
+        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+        const seconds = Math.floor((diff % (1000 * 60)) / 1000)
+        
+        setElapsedTime(`${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`)
+      } catch (error) {
+        console.error('Error calculating elapsed time:', error)
+        setElapsedTime('00:00:00')
+      }
+    }
+    
+    updateElapsedTime()
+    const interval = setInterval(updateElapsedTime, 1000)
+    
+    return () => clearInterval(interval)
+  }, [activeShift?.startTime])
+  
+  // Tự động tính tiền mặt cuối ca
+  const calculatedEndingCash = activeShift.startingCash + (activeShift.cashSales || 0) - (activeShift.cashPayments || 0) + additionalCash
 
   const handleCloseShift = async () => {
     setIsClosing(true)
-    const result = await closeShift(activeShift.id, { endingCash })
+    const result = await closeShift(activeShift.id, { endingCash: calculatedEndingCash })
     if (result.success) {
       toast({
         title: 'Đã đóng ca',
@@ -117,10 +153,7 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
         </div>
         <div className="flex items-center gap-2">
           <Clock className="h-4 w-4" />
-          <span>
-            Bắt đầu lúc:{' '}
-            {new Date(activeShift.startTime).toLocaleTimeString('vi-VN')}
-          </span>
+          <span>Thời gian ca: {elapsedTime}</span>
         </div>
         <div className="flex items-center gap-2">
           <CircleDollarSign className="h-4 w-4" />
@@ -149,16 +182,69 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
-            <p className="text-sm text-muted-foreground">
-              Vui lòng đếm số tiền mặt thực tế trong ngăn kéo và nhập vào ô dưới đây.
-            </p>
+            <div className="space-y-3 p-4 bg-muted rounded-lg">
+              <div className="flex justify-between text-sm">
+                <span>Bắt đầu ca lúc:</span>
+                <span className="font-semibold">
+                  {new Date(activeShift.startTime).toLocaleString('vi-VN', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric'
+                  })}
+                </span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span>Đóng ca lúc:</span>
+                <span className="font-semibold">
+                  {new Date().toLocaleString('vi-VN', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric'
+                  })}
+                </span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span>Thời gian làm việc:</span>
+                <span className="font-semibold text-blue-600">{elapsedTime}</span>
+              </div>
+              <div className="border-t pt-2"></div>
+              <div className="flex justify-between text-sm">
+                <span>Tiền đầu ca:</span>
+                <span className="font-semibold">{formatCurrency(activeShift.startingCash)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span>Doanh thu tiền mặt:</span>
+                <span className="font-semibold text-green-600">+{formatCurrency(activeShift.cashSales || 0)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span>Chi tiền mặt:</span>
+                <span className="font-semibold text-red-600">-{formatCurrency(activeShift.cashPayments || 0)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span>Thanh toán ngoài (nếu có):</span>
+                <span className="font-semibold text-blue-600">+{formatCurrency(additionalCash)}</span>
+              </div>
+              <div className="border-t pt-2 flex justify-between font-bold">
+                <span>Tiền mặt cuối ca (tự động):</span>
+                <span className="text-lg text-primary">{formatCurrency(calculatedEndingCash)}</span>
+              </div>
+            </div>
+            
             <div className="space-y-2">
-              <Label htmlFor="endingCash">Tiền mặt cuối ca</Label>
+              <Label htmlFor="additionalCash">Thanh toán ngoài (tùy chọn)</Label>
+              <p className="text-xs text-muted-foreground">
+                Nhập số tiền nếu có thanh toán ngoài không được ghi nhận trong hệ thống
+              </p>
               <FormattedNumberInput
-                id="endingCash"
-                value={endingCash}
-                onChange={setEndingCash}
+                id="additionalCash"
+                value={additionalCash}
+                onChange={setAdditionalCash}
                 className="h-12 text-lg text-right font-bold"
+                placeholder="0"
               />
             </div>
           </div>
@@ -173,7 +259,7 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
             <Button
               variant="destructive"
               onClick={handleCloseShift}
-              disabled={isClosing || endingCash <= 0}
+              disabled={isClosing}
             >
               {isClosing ? 'Đang đóng...' : 'Xác nhận Đóng ca'}
             </Button>

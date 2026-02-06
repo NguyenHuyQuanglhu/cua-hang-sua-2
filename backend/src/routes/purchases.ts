@@ -34,6 +34,11 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       dateTo,
     });
 
+    // Log first item to check if paidAmount is included
+    if (result.data.length > 0) {
+      console.log('[GET /api/purchases] Sample response:', JSON.stringify(result.data[0], null, 2));
+    }
+
     res.json({
       data: result.data,
       pagination: {

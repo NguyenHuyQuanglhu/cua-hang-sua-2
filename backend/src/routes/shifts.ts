@@ -60,6 +60,33 @@ router.get('/active', async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    // Calculate real-time cash sales and payments
+    const salesResult = await queryOne<{
+      cashSales: number;
+      totalRevenue: number;
+      salesCount: number;
+    }>(
+      `SELECT 
+        ISNULL(SUM(customer_payment), 0) as cashSales,
+        ISNULL(SUM(final_amount), 0) as totalRevenue,
+        COUNT(*) as salesCount
+       FROM Sales
+       WHERE store_id = @storeId AND shift_id = @shiftId`,
+      { storeId, shiftId: shift.id }
+    );
+
+    const paymentsResult = await queryOne<{ total: number }>(
+      `SELECT ISNULL(SUM(amount), 0) as total
+       FROM Payments
+       WHERE store_id = @storeId AND payment_date >= @startTime`,
+      { storeId, startTime: shift.start_time }
+    );
+
+    const cashSales = salesResult?.cashSales || 0;
+    const totalRevenue = salesResult?.totalRevenue || 0;
+    const salesCount = salesResult?.salesCount || 0;
+    const cashPayments = paymentsResult?.total || 0;
+
     res.json({
       id: shift.id,
       storeId: shift.store_id,
@@ -70,12 +97,12 @@ router.get('/active', async (req: AuthRequest, res: Response) => {
       endTime: shift.end_time,
       startingCash: shift.starting_cash,
       endingCash: shift.ending_cash,
-      cashSales: shift.cash_sales,
-      cashPayments: shift.cash_payments,
-      totalCashInDrawer: shift.total_cash_in_drawer,
+      cashSales: cashSales, // Real-time calculation
+      cashPayments: cashPayments, // Real-time calculation
+      totalCashInDrawer: shift.starting_cash + cashSales + cashPayments,
       cashDifference: shift.cash_difference,
-      totalRevenue: shift.total_revenue,
-      salesCount: shift.sales_count,
+      totalRevenue: totalRevenue, // Real-time calculation
+      salesCount: salesCount, // Real-time calculation
     });
   } catch (error) {
     console.error('Get active shift error:', error);
@@ -102,11 +129,14 @@ router.post('/start', async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    // Use JavaScript Date to get current time (will be in server's timezone)
+    const now = new Date();
+    
     const result = await query(
       `INSERT INTO Shifts (id, store_id, user_id, user_name, status, start_time, starting_cash, created_at, updated_at)
        OUTPUT INSERTED.*
-       VALUES (NEWID(), @storeId, @userId, @userName, 'open', GETDATE(), @startingCash, GETDATE(), GETDATE())`,
-      { storeId, userId, userName, startingCash }
+       VALUES (NEWID(), @storeId, @userId, @userName, 'open', @startTime, @startingCash, @createdAt, @updatedAt)`,
+      { storeId, userId, userName, startTime: now, startingCash, createdAt: now, updatedAt: now }
     );
 
     const shift = result[0];

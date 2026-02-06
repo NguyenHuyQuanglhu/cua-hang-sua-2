@@ -72,7 +72,7 @@ export default function SupplierDebtReportPage() {
         setSuppliersLoading(false);
 
         setPurchasesLoading(true);
-        const purchasesRes = await fetchWithAuth('/api/purchases');
+        const purchasesRes = await fetchWithAuth('/api/purchases?pageSize=1000'); // Lấy tất cả purchase orders
         if (purchasesRes.ok) {
           const data = await purchasesRes.json();
           setPurchases(Array.isArray(data) ? data : (data.data || []));
@@ -100,12 +100,23 @@ export default function SupplierDebtReportPage() {
   const supplierDebtData = useMemo((): SupplierDebtInfo[] => {
     if (!suppliers || !purchases) return [];
 
+    console.log('[supplierDebtData] First purchase:', purchases[0]);
+
     return suppliers.map(supplier => {
       const supplierPurchasesList = purchases.filter(p => p.supplierId === supplier.id);
       const totalPurchases = supplierPurchasesList.reduce((sum, p) => sum + (p.totalAmount || 0), 0);
       const totalPaid = supplierPurchasesList.reduce((sum, p) => sum + (p.paidAmount || 0), 0);
       // Use remaining_debt from purchases - this is the source of truth
       const finalDebt = supplierPurchasesList.reduce((sum, p) => sum + (p.remainingDebt || 0), 0);
+
+      if (supplier.name.includes('Abbott')) {
+        console.log('[supplierDebtData] Abbott:', {
+          supplierPurchasesList,
+          totalPurchases,
+          totalPaid,
+          finalDebt
+        });
+      }
 
       return {
         supplierId: supplier.id,
@@ -115,7 +126,7 @@ export default function SupplierDebtReportPage() {
         totalPayments: totalPaid,
         finalDebt: finalDebt,
       };
-    }).filter(data => data.totalPurchases > 0 || data.finalDebt !== 0);
+    }).filter(data => data.totalPurchases > 0 || data.totalPayments > 0); // Hiển thị nhà cung cấp có giao dịch (đã nhập hoặc đã thanh toán)
   }, [suppliers, purchases]);
 
   const filteredDebtData = useMemo(() => {
@@ -175,7 +186,7 @@ export default function SupplierDebtReportPage() {
       }
       // Also refetch purchases as remaining_debt has been updated
       setPurchasesLoading(true);
-      const purchasesRes = await fetchWithAuth('/api/purchases');
+      const purchasesRes = await fetchWithAuth('/api/purchases?pageSize=1000'); // Lấy tất cả
       if (purchasesRes.ok) {
         const data = await purchasesRes.json();
         setPurchases(Array.isArray(data) ? data : (data.data || []));
@@ -320,10 +331,12 @@ export default function SupplierDebtReportPage() {
                       {formatCurrency(data.finalDebt)}
                     </TableCell>
                     <TableCell className="text-right">
-                       {data.finalDebt > 0 && (
+                       {data.finalDebt > 0 ? (
                           <Button variant="outline" size="sm" onClick={() => handleOpenPaymentForm(data)}>
                             Thanh toán
                           </Button>
+                        ) : (
+                          <span className="text-sm text-green-600 font-medium">Đã thanh toán</span>
                         )}
                     </TableCell>
                   </TableRow>
