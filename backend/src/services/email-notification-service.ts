@@ -160,27 +160,40 @@ export class EmailNotificationService {
   }
 
   /**
-   * Send an email
+   * Send an email (public method for custom emails)
    */
-  private async sendEmail(to: string, subject: string, html: string): Promise<boolean> {
+  async sendEmail(options: {
+    to: string;
+    subject: string;
+    text?: string;
+    html?: string;
+  }): Promise<boolean> {
     if (!this.isConfigured()) {
-      console.warn('Email service not configured. Skipping email to:', to);
+      console.warn('Email service not configured. Skipping email to:', options.to);
       return false;
     }
 
     try {
       await this.transporter!.sendMail({
         from: this.config!.from,
-        to,
-        subject,
-        html,
+        to: options.to,
+        subject: options.subject,
+        text: options.text,
+        html: options.html || options.text,
       });
-      console.log('Email sent successfully to:', to);
+      console.log('Email sent successfully to:', options.to);
       return true;
     } catch (error) {
       console.error('Failed to send email:', error);
       return false;
     }
+  }
+
+  /**
+   * Send an email (private method for internal use)
+   */
+  private async sendEmailInternal(to: string, subject: string, html: string): Promise<boolean> {
+    return this.sendEmail({ to, subject, html });
   }
 
   /**
@@ -308,7 +321,7 @@ export class EmailNotificationService {
       </p>
     `;
 
-    return this.sendEmail(
+    return this.sendEmailInternal(
       order.customerEmail,
       `[${store.storeName}] Xác nhận đơn hàng #${order.orderNumber}`,
       this.generateEmailTemplate(store, content)
@@ -366,7 +379,7 @@ export class EmailNotificationService {
       </div>
     `;
 
-    return this.sendEmail(
+    return this.sendEmailInternal(
       store.contactEmail,
       `[${store.storeName}] Đơn hàng mới #${order.orderNumber} - ${formatCurrency(order.total)}`,
       this.generateEmailTemplate(store, content)
@@ -449,7 +462,7 @@ export class EmailNotificationService {
       </p>
     `;
 
-    return this.sendEmail(
+    return this.sendEmailInternal(
       order.customerEmail,
       `[${store.storeName}] Đơn hàng #${order.orderNumber} - ${STATUS_LABELS[newStatus]}`,
       this.generateEmailTemplate(store, content)

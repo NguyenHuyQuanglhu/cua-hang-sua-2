@@ -308,14 +308,14 @@ export default function ProductsPage() {
       const result = await generateProductTemplate();
       if (result.success && result.data) {
         const link = document.createElement("a");
-        link.href = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${result.data}`;
-        link.download = "product_template.xlsx";
+        link.href = `data:text/csv;charset=utf-8;base64,${result.data}`;
+        link.download = "product_template.csv";
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        toast({ title: "Thành công", description: "Đã tải xuống file mẫu." });
+        toast({ title: "Thành công", description: "Đã tải xuống file mẫu sản phẩm." });
       } else {
-        toast({ variant: "destructive", title: "Lỗi", description: result.error });
+        toast({ variant: "destructive", title: "Lỗi", description: result.error || "Không thể tạo file mẫu" });
       }
     });
   }

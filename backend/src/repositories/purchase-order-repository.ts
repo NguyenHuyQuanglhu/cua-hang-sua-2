@@ -1,6 +1,7 @@
 import { BaseRepository, QueryOptions, PaginationOptions, PaginatedResult } from './base-repository';
 import { query, queryOne, SqlValue, QueryParams } from '../db';
 import { withTransaction, transactionQuery, transactionQueryOne, transactionInsert } from '../db/transaction';
+import { cashTransactionRepository } from './cash-transaction-repository';
 
 export interface PurchaseOrder {
   id: string;
@@ -266,6 +267,27 @@ export class PurchaseOrderRepository extends BaseRepository<PurchaseOrder> {
         
         items.push(this.mapItemToEntity(itemRecord));
       }
+      
+      // Create cash transaction for the purchase (expense)
+      try {
+        await cashTransactionRepository.create(
+          {
+            storeId,
+            type: 'chi',
+            transactionDate: new Date(input.importDate).toISOString(),
+            amount: input.totalAmount,
+            reason: `Chi tiền nhập hàng - ${orderNumber}${input.supplierId ? ' từ nhà cung cấp' : ''}`,
+            category: 'Nhập hàng',
+            relatedInvoiceId: purchaseOrderId,
+          },
+          storeId
+        );
+        console.log(`[PurchaseOrderRepository] Created cash transaction for purchase ${orderNumber}: ${input.totalAmount}`);
+      } catch (cashError) {
+        // Log but don't fail the purchase if cash transaction fails
+        console.error('[PurchaseOrderRepository] Failed to create cash transaction:', cashError);
+      }
+      
       return { ...this.mapToEntity(orderRecord as unknown as Record<string, unknown>), items };
     });
   }

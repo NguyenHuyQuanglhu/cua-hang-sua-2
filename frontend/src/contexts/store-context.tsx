@@ -277,6 +277,24 @@ export function StoreProvider({ children }: StoreProviderProps) {
       return false;
     }
 
+    // Check if user has an active shift in current store
+    if (currentStore && currentStore.id !== storeId) {
+      try {
+        const activeShiftResponse = await apiClient.getActiveShift();
+        if (activeShiftResponse) {
+          setError('Vui lòng đóng ca hiện tại trước khi chuyển sang cửa hàng khác');
+          // Show a more prominent error
+          if (typeof window !== 'undefined') {
+            alert('⚠️ Bạn đang có ca làm việc đang mở!\n\nVui lòng đóng ca tại cửa hàng hiện tại trước khi chuyển sang cửa hàng khác.');
+          }
+          return false;
+        }
+      } catch (error) {
+        console.error('Error checking active shift:', error);
+        // Continue with store switch if we can't check shift status
+      }
+    }
+
     const store = stores.find(s => s.id === storeId);
     if (store) {
       setCurrentStore(store);
@@ -301,7 +319,7 @@ export function StoreProvider({ children }: StoreProviderProps) {
     }
     
     return false;
-  }, [stores, canAccessStore, saveStoreId]);
+  }, [stores, canAccessStore, saveStoreId, currentStore]);
 
   // Refresh stores data
   const refreshStores = useCallback(async () => {

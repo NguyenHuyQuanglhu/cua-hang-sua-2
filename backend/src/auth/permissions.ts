@@ -18,6 +18,7 @@ export const DEFAULT_PERMISSIONS: Record<UserRole, Permissions> = {
     customers: ['view', 'add', 'edit', 'delete'],
     suppliers: ['view', 'add', 'edit', 'delete'],
     'cash-flow': ['view', 'add', 'edit', 'delete'],
+    debt_reminder: ['view', 'add'], // Send debt reminders
     reports_shifts: ['view'],
     reports_income_statement: ['view'],
     reports_profit: ['view'],
@@ -48,6 +49,7 @@ export const DEFAULT_PERMISSIONS: Record<UserRole, Permissions> = {
     customers: ['view', 'add', 'edit'],
     suppliers: ['view', 'add', 'edit'],
     'cash-flow': ['view', 'add', 'edit'],
+    debt_reminder: ['view', 'add'], // Send debt reminders
     reports_shifts: ['view'],
     reports_income_statement: ['view'],
     reports_profit: ['view'],
@@ -76,6 +78,7 @@ export const DEFAULT_PERMISSIONS: Record<UserRole, Permissions> = {
     customers: ['view', 'add', 'edit'],
     suppliers: ['view', 'add'],
     'cash-flow': ['view', 'add'],
+    debt_reminder: ['view', 'add'], // Send debt reminders
     reports_shifts: ['view'],
     reports_profit: ['view'],
     reports_debt: ['view'],

@@ -26,8 +26,16 @@ BEGIN
         c.address,
         c.customer_type AS customerType,
         c.customer_group AS customerGroup,
+        c.gender,
+        c.birthday,
+        c.zalo,
+        c.bank_name AS bankName,
+        c.bank_account_number AS bankAccountNumber,
+        c.bank_branch AS bankBranch,
+        c.credit_limit AS creditLimit,
         c.status,
         ISNULL(c.lifetime_points, 0) AS lifetimePoints,
+        ISNULL(c.loyalty_points, 0) AS loyaltyPoints,
         c.loyalty_tier AS loyaltyTier,
         c.notes,
         -- Calculate total spent from Sales
@@ -42,12 +50,28 @@ BEGIN
             FROM Sales s 
             WHERE s.customer_id = c.id AND s.store_id = c.store_id AND s.status != 'cancelled'
         ), 0) AS totalPaid,
+        -- Calculate total payments from Payments table
+        ISNULL((
+            SELECT SUM(p.amount)
+            FROM Payments p
+            WHERE p.customer_id = c.id AND p.store_id = c.store_id
+        ), 0) AS totalPayments,
         -- Calculate debt (total sales - total paid)
         ISNULL((
             SELECT SUM(s.final_amount) - SUM(ISNULL(s.customer_payment, 0))
             FROM Sales s 
             WHERE s.customer_id = c.id AND s.store_id = c.store_id AND s.status != 'cancelled'
         ), 0) AS totalDebt,
+        -- Calculate debt from payments table
+        ISNULL((
+            SELECT SUM(s.final_amount) 
+            FROM Sales s 
+            WHERE s.customer_id = c.id AND s.store_id = c.store_id AND s.status != 'cancelled'
+        ), 0) - ISNULL((
+            SELECT SUM(p.amount)
+            FROM Payments p
+            WHERE p.customer_id = c.id AND p.store_id = c.store_id
+        ), 0) AS calculatedDebt,
         c.created_at AS createdAt,
         c.updated_at AS updatedAt
     FROM Customers c

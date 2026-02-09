@@ -124,10 +124,107 @@ export async function generateCustomerTemplate(): Promise<{
   data?: string;
   error?: string;
 }> {
-  return {
-    success: true,
-    data: '', // Base64 encoded Excel data would go here
-  };
+  try {
+    // Escape commas and quotes in CSV
+    const escapeCSV = (value: string) => {
+      if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+        return `"${value.replace(/"/g, '""')}"`;
+      }
+      return value;
+    };
+    
+    // Create a professional CSV template with instructions
+    const lines = [
+      '=== HƯỚNG DẪN SỬ DỤNG FILE MẪU KHÁCH HÀNG ===',
+      '',
+      '1. Điền thông tin khách hàng vào các dòng bên dưới phần "DỮ LIỆU"',
+      '2. Không xóa hoặc sửa dòng tiêu đề (header)',
+      '3. Các trường bắt buộc: Tên khách hàng, Số điện thoại',
+      '4. Loại khách hàng: personal (cá nhân) hoặc business (doanh nghiệp)',
+      '5. Giới tính: male (nam), female (nữ), other (khác)',
+      '6. Ngày sinh: định dạng YYYY-MM-DD (ví dụ: 1990-01-15)',
+      '7. Hạn mức tín dụng: nhập số tiền (VNĐ), để trống nếu không có',
+      '8. Sau khi điền xong, lưu file và import vào hệ thống',
+      '',
+      '=== DỮ LIỆU ===',
+      'Tên khách hàng,Email,Số điện thoại,Địa chỉ,Loại khách hàng,Nhóm khách hàng,Giới tính,Ngày sinh,Zalo,Tên ngân hàng,Số tài khoản,Chi nhánh ngân hàng,Hạn mức tín dụng,Ghi chú',
+      '',
+      '--- VÍ DỤ (Có thể xóa các dòng ví dụ này) ---',
+      [
+        'Nguyễn Văn A',
+        'nguyenvana@example.com',
+        '0901234567',
+        '123 Đường ABC, Quận 1, TP.HCM',
+        'personal',
+        'VIP',
+        'male',
+        '1990-01-15',
+        '0901234567',
+        'Vietcombank',
+        '1234567890',
+        'Chi nhánh TP.HCM',
+        '50000000',
+        'Khách hàng thân thiết'
+      ].map(escapeCSV).join(','),
+      [
+        'Trần Thị B',
+        'tranthib@example.com',
+        '0912345678',
+        '456 Đường XYZ, Quận 3, TP.HCM',
+        'personal',
+        'Thường',
+        'female',
+        '1985-05-20',
+        '0912345678',
+        'Techcombank',
+        '9876543210',
+        'Chi nhánh Quận 3',
+        '30000000',
+        'Khách hàng mới'
+      ].map(escapeCSV).join(','),
+      [
+        'Công ty TNHH ABC',
+        'contact@abc.com',
+        '0283456789',
+        '789 Đường DEF, Quận 5, TP.HCM',
+        'business',
+        'Doanh nghiệp',
+        '',
+        '',
+        '',
+        'ACB',
+        '1122334455',
+        'Chi nhánh Quận 5',
+        '100000000',
+        'Khách hàng doanh nghiệp'
+      ].map(escapeCSV).join(','),
+      '',
+      '--- ĐIỀN THÔNG TIN CỦA BẠN TỪ ĐÂY ---',
+      Array(14).fill('').join(','),
+      Array(14).fill('').join(','),
+      Array(14).fill('').join(','),
+    ];
+    
+    const csvContent = lines.join('\n');
+    
+    // Add BOM for UTF-8 to fix Vietnamese characters in Excel
+    const BOM = '\uFEFF';
+    const csvWithBOM = BOM + csvContent;
+    
+    // Convert to base64
+    const base64 = btoa(unescape(encodeURIComponent(csvWithBOM)));
+    
+    return {
+      success: true,
+      data: base64,
+    };
+  } catch (error: unknown) {
+    console.error('Error generating customer template:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Không thể tạo file mẫu',
+    };
+  }
 }
 
 /**

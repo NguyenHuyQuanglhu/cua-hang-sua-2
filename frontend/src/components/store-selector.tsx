@@ -2,6 +2,7 @@
 
 import { Store, Building2, ChevronDown, Settings2, AlertCircle } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,6 +23,7 @@ interface StoreSelectorProps {
 export function StoreSelector({ className }: StoreSelectorProps) {
   const { currentStore, stores, user, tenant, isLoading, switchStore, canAccessStore, error } = useStore();
   const [switchError, setSwitchError] = useState<string | null>(null);
+  const router = useRouter();
   
   // Check if user can manage stores (owner or admin)
   const canManageStores = user?.role === 'owner' || user?.role === 'admin';
@@ -37,8 +39,8 @@ export function StoreSelector({ className }: StoreSelectorProps) {
 
     const success = await switchStore(storeId);
     if (success) {
-      // Reload page to refresh all data for the new store
-      window.location.reload();
+      // Refresh the current page data without full reload
+      router.refresh();
     } else {
       setSwitchError('Không thể chuyển đến cửa hàng này');
     }
@@ -140,6 +142,7 @@ export function StoreSelector({ className }: StoreSelectorProps) {
 export function StoreSelectorCompact() {
   const { currentStore, stores, user, isLoading, switchStore, canAccessStore } = useStore();
   const [switchError, setSwitchError] = useState<string | null>(null);
+  const router = useRouter();
   
   // Check if user can manage stores (owner or admin)
   const canManageStores = user?.role === 'owner' || user?.role === 'admin';
@@ -156,8 +159,8 @@ export function StoreSelectorCompact() {
 
     const success = await switchStore(storeId);
     if (success) {
-      // Reload page to refresh all data for the new store
-      window.location.reload();
+      // Refresh the current page data without full reload
+      router.refresh();
     } else {
       setSwitchError('Lỗi chuyển cửa hàng');
       setTimeout(() => setSwitchError(null), 3000);

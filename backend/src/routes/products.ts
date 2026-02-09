@@ -181,6 +181,12 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    // Validate unit_id is required
+    if (!unitId) {
+      res.status(400).json({ error: 'Đơn vị tính là bắt buộc' });
+      return;
+    }
+
     // Use SP Repository instead of inline query
     const product = await productsSPRepository.create({
       storeId,
@@ -190,7 +196,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       price: price || 0,
       costPrice: costPrice || 0,
       sku: sku || null,
-      unitId: unitId || null,
+      unitId: unitId, // Now required, no fallback to null
       stockQuantity: stockQuantity || 0,
       images: images ? JSON.stringify(images) : null,
       status: status || 'active',

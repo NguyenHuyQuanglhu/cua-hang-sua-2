@@ -73,3 +73,59 @@ export async function deleteCategory(categoryId: string): Promise<{ success: boo
     };
   }
 }
+
+/**
+ * Generate category template for import
+ */
+export async function generateCategoryTemplate(): Promise<{
+  success: boolean;
+  data?: string;
+  error?: string;
+}> {
+  try {
+    // Create a professional CSV template with instructions
+    const lines = [
+      '=== HƯỚNG DẪN SỬ DỤNG FILE MẪU DANH MỤC ===',
+      '',
+      '1. Điền thông tin danh mục vào các dòng bên dưới phần "DỮ LIỆU"',
+      '2. Không xóa hoặc sửa dòng tiêu đề (header)',
+      '3. Tên danh mục là bắt buộc, mô tả là tùy chọn',
+      '4. Sau khi điền xong, lưu file và import vào hệ thống',
+      '',
+      '=== DỮ LIỆU ===',
+      'Tên danh mục,Mô tả',
+      '',
+      '--- VÍ DỤ (Có thể xóa các dòng ví dụ này) ---',
+      'Sữa tươi,Các loại sữa tươi thanh trùng và tiệt trùng',
+      'Sữa chua,Sữa chua các loại vị',
+      'Sữa bột,Sữa bột cho trẻ em và người lớn',
+      'Phô mai,Phô mai lát, que, hộp các loại',
+      'Bơ sữa,Bơ thực vật và bơ động vật',
+      '',
+      '--- ĐIỀN THÔNG TIN CỦA BẠN TỪ ĐÂY ---',
+      ',',
+      ',',
+      ',',
+    ];
+    
+    const csvContent = lines.join('\n');
+    
+    // Add BOM for UTF-8 to fix Vietnamese characters in Excel
+    const BOM = '\uFEFF';
+    const csvWithBOM = BOM + csvContent;
+    
+    // Convert to base64
+    const base64 = btoa(unescape(encodeURIComponent(csvWithBOM)));
+    
+    return {
+      success: true,
+      data: base64,
+    };
+  } catch (error: unknown) {
+    console.error('Error generating template:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Không thể tạo file mẫu',
+    };
+  }
+}

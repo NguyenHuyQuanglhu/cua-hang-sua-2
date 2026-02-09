@@ -38,6 +38,7 @@ interface Shift {
   cashDifference?: number;
   totalRevenue: number;
   salesCount: number;
+  hourlyRate?: number; // Lương theo giờ
 }
 
 interface ShiftControlsProps {
@@ -79,10 +80,11 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
   const [isClosing, setIsClosing] = useState(false)
   const [additionalCash, setAdditionalCash] = useState(0)
   const [elapsedTime, setElapsedTime] = useState('')
+  const [hoursWorked, setHoursWorked] = useState(0)
   const { toast } = useToast()
   const router = useRouter()
   
-  // Calculate elapsed time from shift start
+  // Calculate elapsed time and hours worked from shift start
   useEffect(() => {
     if (!activeShift?.startTime) return;
     
@@ -91,6 +93,7 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
         const startTime = new Date(activeShift.startTime).getTime()
         if (isNaN(startTime)) {
           setElapsedTime('00:00:00')
+          setHoursWorked(0)
           return
         }
         
@@ -102,9 +105,14 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
         const seconds = Math.floor((diff % (1000 * 60)) / 1000)
         
         setElapsedTime(`${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`)
+        
+        // Calculate hours worked (with decimal for partial hours)
+        const totalHours = diff / (1000 * 60 * 60)
+        setHoursWorked(totalHours)
       } catch (error) {
         console.error('Error calculating elapsed time:', error)
         setElapsedTime('00:00:00')
+        setHoursWorked(0)
       }
     }
     
@@ -113,6 +121,10 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
     
     return () => clearInterval(interval)
   }, [activeShift?.startTime])
+  
+  // Tính lương theo giờ
+  const hourlyRate = activeShift.hourlyRate || 20000; // Mặc định 20k/giờ
+  const calculatedSalary = Math.round(hoursWorked * hourlyRate);
   
   // Tự động tính tiền mặt cuối ca
   const calculatedEndingCash = activeShift.startingCash + (activeShift.cashSales || 0) - (activeShift.cashPayments || 0) + additionalCash
@@ -163,6 +175,7 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
           size="sm"
           variant="destructive"
           onClick={() => setIsCloseShiftDialogOpen(true)}
+          data-shift-close-button
         >
           <LogOut className="mr-2 h-4 w-4" />
           Đóng ca
@@ -173,15 +186,16 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
         open={isCloseShiftDialogOpen}
         onOpenChange={setIsCloseShiftDialogOpen}
       >
-        <DialogContent>
-          <DialogHeader>
+        <DialogContent className="max-h-[90vh] flex flex-col">
+          <DialogHeader className="shrink-0">
             <DialogTitle>Đóng và Bàn giao ca</DialogTitle>
             <DialogDescription>
               Kiểm tra lại doanh thu và số tiền mặt trong ngăn kéo trước khi
               đóng ca.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-4">
+          <div className="flex-1 overflow-y-auto py-4 min-h-0">
+            <div className="space-y-4">
             <div className="space-y-3 p-4 bg-muted rounded-lg">
               <div className="flex justify-between text-sm">
                 <span>Bắt đầu ca lúc:</span>
@@ -211,6 +225,23 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
                 <span>Thời gian làm việc:</span>
                 <span className="font-semibold text-blue-600">{elapsedTime}</span>
               </div>
+              <div className="flex justify-between text-sm">
+                <span>Lương theo giờ:</span>
+                <span className="font-semibold">{formatCurrency(hourlyRate)}/giờ</span>
+              </div>
+              <div className="flex justify-between font-semibold text-base bg-green-50 dark:bg-green-950/20 p-2 rounded">
+                <span className="text-green-700 dark:text-green-400">💰 Lương nhận được:</span>
+                <span className="text-green-700 dark:text-green-400 text-lg">{formatCurrency(calculatedSalary)}</span>
+              </div>
+              <div className="border-t pt-2"></div>
+              <div className="flex justify-between text-sm font-semibold text-lg">
+                <span>Tổng doanh thu:</span>
+                <span className="text-green-600">{formatCurrency(activeShift.totalRevenue || 0)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span>Số giao dịch:</span>
+                <span className="font-semibold">{activeShift.salesCount || 0} đơn</span>
+              </div>
               <div className="border-t pt-2"></div>
               <div className="flex justify-between text-sm">
                 <span>Tiền đầu ca:</span>
@@ -235,6 +266,19 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
             </div>
             
             <div className="space-y-2">
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  // Open sales page filtered by shift
+                  window.open(`/sales?shiftId=${activeShift.id}`, '_blank');
+                }}
+              >
+                📋 Xem chi tiết {activeShift.salesCount || 0} giao dịch trong ca
+              </Button>
+            </div>
+
+            <div className="space-y-2">
               <Label htmlFor="additionalCash">Thanh toán ngoài (tùy chọn)</Label>
               <p className="text-xs text-muted-foreground">
                 Nhập số tiền nếu có thanh toán ngoài không được ghi nhận trong hệ thống
@@ -248,7 +292,8 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
               />
             </div>
           </div>
-          <DialogFooter>
+          </div>
+          <DialogFooter className="shrink-0 border-t pt-4">
             <Button
               variant="outline"
               onClick={() => setIsCloseShiftDialogOpen(false)}

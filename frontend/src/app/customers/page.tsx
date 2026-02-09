@@ -17,6 +17,7 @@ import {
   Shield,
   AlertTriangle,
   RefreshCw,
+  Bell,
 } from "lucide-react"
 
 import {
@@ -72,7 +73,9 @@ import { Input } from "@/components/ui/input"
 import { formatCurrency } from "@/lib/utils"
 import { ImportCustomers } from "./components/import-customers"
 import { DebtPaymentDialog } from "./components/debt-payment-dialog"
+import { DebtReminderDialog } from "./components/debt-reminder-dialog"
 import { useUserRole } from "@/hooks/use-user-role"
+import { useDebtReminderPermission } from "@/hooks/use-debt-reminder-permission"
 
 
 interface Customer {
@@ -165,6 +168,7 @@ export default function CustomersPage() {
   const [groupFilter, setGroupFilter] = useState("");
   const [viewingPaymentsFor, setViewingPaymentsFor] = useState<CustomerWithDebt | null>(null);
   const [customerForPayment, setCustomerForPayment] = useState<CustomerWithDebt | null>(null);
+  const [customerForReminder, setCustomerForReminder] = useState<CustomerWithDebt | null>(null);
   const [paymentHistory, setPaymentHistory] = useState<DebtHistoryItem[]>([]);
   const [isUpdating, startTransition] = useTransition();
   const [isExporting, startExportingTransition] = useTransition();
@@ -173,6 +177,7 @@ export default function CustomersPage() {
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [loyaltyTierFilter, setLoyaltyTierFilter] = useState<LoyaltyTierFilter>('all');
   const { permissions, isLoading: isRoleLoading } = useUserRole();
+  const { canSendDebtReminder } = useDebtReminderPermission();
 
   const { toast } = useToast();
   const router = useRouter();
@@ -211,27 +216,40 @@ export default function CustomersPage() {
     fetchPaymentHistory();
   }, [viewingPaymentsFor]);
 
-  const filteredCustomers = customers?.filter(customer => {
-    if (loyaltyTierFilter !== 'all') {
-      if(loyaltyTierFilter === 'none' && customer.loyaltyTier) return false;
-      if(loyaltyTierFilter !== 'none' && customer.loyaltyTier !== loyaltyTierFilter) return false;
-    }
-    if (customerTypeFilter !== 'all' && customer.customerType !== customerTypeFilter) return false;
-    if (genderFilter !== 'all' && customer.gender !== genderFilter) return false;
-    if (groupFilter && (!customer.customerGroup || !customer.customerGroup.toLowerCase().includes(groupFilter.toLowerCase()))) return false;
+  const filteredCustomers = useMemo(() => {
+    return customers?.filter(customer => {
+      // Loyalty tier filter
+      if (loyaltyTierFilter !== 'all') {
+        if(loyaltyTierFilter === 'none' && customer.loyaltyTier) return false;
+        if(loyaltyTierFilter !== 'none' && customer.loyaltyTier !== loyaltyTierFilter) return false;
+      }
+      
+      // Customer type filter
+      if (customerTypeFilter !== 'all' && customer.customerType !== customerTypeFilter) return false;
+      
+      // Gender filter - handle undefined/null values
+      if (genderFilter !== 'all') {
+        if (!customer.gender) return false; // Skip customers without gender
+        if (customer.gender !== genderFilter) return false;
+      }
+      
+      // Group filter
+      if (groupFilter && (!customer.customerGroup || !customer.customerGroup.toLowerCase().includes(groupFilter.toLowerCase()))) return false;
 
-    const term = searchTerm.toLowerCase();
-    if (term) {
-       return (
-        customer.name.toLowerCase().includes(term) ||
-        (customer.email && customer.email.toLowerCase().includes(term)) ||
-        (customer.phone && customer.phone.toLowerCase().includes(term)) ||
-        (customer.address && customer.address.toLowerCase().includes(term))
-      );
-    }
-    
-    return true;
-  })
+      // Search term filter
+      const term = searchTerm.toLowerCase();
+      if (term) {
+         return (
+          customer.name.toLowerCase().includes(term) ||
+          (customer.email && customer.email.toLowerCase().includes(term)) ||
+          (customer.phone && customer.phone.toLowerCase().includes(term)) ||
+          (customer.address && customer.address.toLowerCase().includes(term))
+        );
+      }
+      
+      return true;
+    });
+  }, [customers, genderFilter, customerTypeFilter, loyaltyTierFilter, groupFilter, searchTerm])
 
   const handleAddCustomer = () => {
     setSelectedCustomer(undefined);
@@ -296,14 +314,14 @@ export default function CustomersPage() {
       const result = await generateCustomerTemplate();
       if (result.success && result.data) {
         const link = document.createElement("a");
-        link.href = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${result.data}`;
-        link.download = "customer_template.xlsx";
+        link.href = `data:text/csv;charset=utf-8;base64,${result.data}`;
+        link.download = "customer_template.csv";
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        toast({ title: "Thành công", description: "Đã tải xuống file mẫu." });
+        toast({ title: "Thành công", description: "Đã tải xuống file mẫu khách hàng." });
       } else {
-        toast({ variant: "destructive", title: "Lỗi", description: result.error });
+        toast({ variant: "destructive", title: "Lỗi", description: result.error || "Không thể tạo file mẫu" });
       }
     });
   }
@@ -706,6 +724,15 @@ export default function CustomersPage() {
                           {canEditCustomer && (
                             <DropdownMenuItem onClick={() => handleEditCustomer(customer)}>Sửa</DropdownMenuItem>
                           )}
+                          {hasDebt && canSendDebtReminder && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem onClick={() => setCustomerForReminder(customer)}>
+                                <Bell className="mr-2 h-4 w-4" />
+                                Gửi nhắc nợ
+                              </DropdownMenuItem>
+                            </>
+                          )}
                           {canDeleteCustomer && (
                           <DropdownMenuItem className="text-destructive" onClick={() => setCustomerToDelete(customer)} disabled={hasDebt}>Xóa</DropdownMenuItem>
                           )}
@@ -730,6 +757,28 @@ export default function CustomersPage() {
           </div>
         </CardFooter>
       </Card>
+
+      {/* Debt Reminder Dialog */}
+      {customerForReminder && (
+        <DebtReminderDialog
+          open={!!customerForReminder}
+          onOpenChange={(open) => !open && setCustomerForReminder(null)}
+          customer={{
+            id: customerForReminder.id,
+            name: customerForReminder.name,
+            email: customerForReminder.email,
+            phone: customerForReminder.phone,
+            debt: customerForReminder.calculatedDebt || customerForReminder.currentDebt || 0,
+          }}
+          onSent={() => {
+            toast({
+              title: "Thành công",
+              description: "Đã gửi thông báo nhắc nợ",
+            })
+            loadCustomers()
+          }}
+        />
+      )}
     </>
   )
 }

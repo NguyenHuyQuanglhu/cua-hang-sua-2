@@ -17,6 +17,7 @@ import {
   QrCode,
   Banknote,
   RefreshCw,
+  Clock,
 } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
@@ -185,6 +186,7 @@ export default function POSPage() {
   const [productSearchOpen, setProductSearchOpen] = useState(false)
   const [barcode, setBarcode] = useState('')
   const [customerPayment, setCustomerPayment] = useState(0)
+  const [includeDebtPayment, setIncludeDebtPayment] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const barcodeInputRef = useRef<HTMLInputElement>(null)
   const [discountType, setDiscountType] = useState<'percentage' | 'amount'>('amount');
@@ -199,6 +201,7 @@ export default function POSPage() {
   const [showQRPaymentDialog, setShowQRPaymentDialog] = useState(false);
   const [showPaymentGatewayDialog, setShowPaymentGatewayDialog] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethod | null>(null);
+  const [lastSaleId, setLastSaleId] = useState<string | null>(null);
 
   // Load cart from localStorage on mount
   useEffect(() => {
@@ -718,18 +721,27 @@ export default function POSPage() {
     return selectedCustomer?.currentDebt || 0;
   }, [selectedCustomerId, selectedCustomer]);
 
-  const totalPayable = finalAmount + previousDebt;
+  // Calculate total payable based on whether debt payment is included
+  const totalPayable = includeDebtPayment ? finalAmount + previousDebt : finalAmount;
   const remainingDebt = totalPayable - customerPayment;
-  const changeAmount = customerPayment - finalAmount;
+  const changeAmount = customerPayment - totalPayable;
 
-  // Auto-fill customer payment
+  // Check if customer exceeds credit limit
+  const exceedsCreditLimit = useMemo(() => {
+    if (!selectedCustomer || selectedCustomerId === WALK_IN_CUSTOMER_ID) return false;
+    const creditLimit = selectedCustomer.creditLimit || 0;
+    if (creditLimit === 0) return false; // No limit set
+    return remainingDebt > creditLimit;
+  }, [selectedCustomer, selectedCustomerId, remainingDebt]);
+
+  // Auto-fill customer payment based on total payable
   useEffect(() => {
-    if (finalAmount > 0) {
-      setCustomerPayment(finalAmount);
+    if (totalPayable > 0) {
+      setCustomerPayment(totalPayable);
     } else {
       setCustomerPayment(0);
     }
-  }, [finalAmount]);
+  }, [totalPayable]);
 
   // Form Submission - Create sale via SQL Server API
   const handleCreateSale = async () => {
@@ -738,6 +750,17 @@ export default function POSPage() {
         variant: 'destructive',
         title: 'Đơn hàng trống',
         description: 'Vui lòng thêm sản phẩm vào đơn hàng.',
+      })
+      return
+    }
+
+    // Check credit limit
+    if (exceedsCreditLimit) {
+      const creditLimit = selectedCustomer?.creditLimit || 0;
+      toast({
+        variant: 'destructive',
+        title: 'Vượt quá hạn mức tín dụng',
+        description: `Khách hàng "${selectedCustomer?.name}" có hạn mức ${formatCurrency(creditLimit)}. Nợ hiện tại sẽ là ${formatCurrency(remainingDebt)}. Vui lòng thu thêm tiền hoặc liên hệ quản lý để tăng hạn mức.`,
       })
       return
     }
@@ -789,7 +812,7 @@ export default function POSPage() {
       vatAmount: vatAmount,
       finalAmount: finalAmount,
       customerPayment: customerPayment,
-      previousDebt: previousDebt, 
+      previousDebt: includeDebtPayment ? previousDebt : 0, // Only include debt if checkbox is checked
       remainingDebt: remainingDebt,
       paymentMethod: paymentMethod,
       status: settings?.invoiceFormat === 'none' ? 'printed' : 'unprinted',
@@ -801,6 +824,23 @@ export default function POSPage() {
 
     if (result.success && result.saleData) {
       const invoiceNumber = result.saleData.invoiceNumber as string;
+      const saleId = result.saleData.id as string;
+      console.log('[POS] Sale created successfully');
+      console.log('[POS] Invoice Number:', invoiceNumber);
+      console.log('[POS] Sale ID:', saleId);
+      console.log('[POS] Full saleData:', result.saleData);
+      
+      if (!saleId) {
+        console.error('[POS] ERROR: saleId is undefined!', result);
+        toast({
+          variant: 'destructive',
+          title: 'Lỗi',
+          description: 'Không thể lấy ID đơn hàng. Vui lòng kiểm tra lại trong danh sách đơn hàng.',
+        });
+        return;
+      }
+      
+      setLastSaleId(saleId);
 
       // Save sale data for invoice dialog
       const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
@@ -819,8 +859,19 @@ export default function POSPage() {
 
       // Show success toast with print button
       toast({
-        title: 'Thành công!',
-        description: `Đã tạo đơn hàng ${invoiceNumber}.`,
+        title: '✅ Thanh toán thành công!',
+        description: (
+          <div className="space-y-1">
+            <p>Đơn hàng <strong>{invoiceNumber}</strong> đã được tạo</p>
+            <p className="text-xs text-muted-foreground">
+              Phương thức: {paymentMethod === 'cash' ? 'Tiền mặt' : 
+                           paymentMethod === 'card' ? 'Thẻ' : 
+                           paymentMethod === 'transfer' ? 'Chuyển khoản' :
+                           paymentMethod === 'qr' ? 'QR Code' : 
+                           paymentMethod === 'gateway' ? 'Cổng thanh toán' : 'Khác'}
+            </p>
+          </div>
+        ),
         action: (
           <button
             onClick={() => setShowInvoiceDialog(true)}
@@ -839,6 +890,7 @@ export default function POSPage() {
       // Reset state for new sale
       setCart([])
       setCustomerPayment(0)
+      setIncludeDebtPayment(false)
       setSelectedCustomerId(WALK_IN_CUSTOMER_ID)
       setDiscountValue(0)
       setDiscountType('amount')
@@ -891,10 +943,10 @@ export default function POSPage() {
         parseInt(s.slice(0, -2) + '00000'),
       ].filter(n => n > value && n.toString().length <= 9);
 
-      const finalAmountStr = Math.ceil(finalAmount).toString();
-      const len = finalAmountStr.length;
+      const amountToPayStr = Math.ceil(totalPayable).toString();
+      const len = amountToPayStr.length;
       const powerOf10 = Math.pow(10, len - 1);
-      const firstDigit = parseInt(finalAmountStr[0]);
+      const firstDigit = parseInt(amountToPayStr[0]);
       
       const nextRoundUp = (firstDigit + 1) * powerOf10;
       if (nextRoundUp > value) suggestions.push(nextRoundUp);
@@ -938,7 +990,10 @@ export default function POSPage() {
     return <StartShiftDialog userId={user!.id} userName={user!.displayName || user!.email} onShiftStarted={handleShiftStarted} />;
   }
 
-  const isLocked = !activeShift;
+  // Lock POS if no active shift OR if worked more than 12 hours (critical overtime)
+  const CRITICAL_OVERTIME_HOURS = 12;
+  const isCriticalOvertime = activeShift && activeShift.hoursWorked && activeShift.hoursWorked >= CRITICAL_OVERTIME_HOURS;
+  const isLocked = !activeShift || isCriticalOvertime;
 
   const canViewCustomers = permissions?.customers?.includes('view');
   const canAddCustomers = permissions?.customers?.includes('add');
@@ -1055,6 +1110,7 @@ export default function POSPage() {
                         key={customer.id}
                         onSelect={() => {
                           setSelectedCustomerId(customer.id)
+                          setIncludeDebtPayment(false) // Reset checkbox when changing customer
                           setCustomerSearchOpen(false)
                         }}
                       >
@@ -1100,14 +1156,69 @@ export default function POSPage() {
            {activeShift && <ShiftControls activeShift={activeShift} onShiftClosed={handleShiftClosed} />}
       </header>
 
-      <main className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6 p-6 overflow-hidden">
+      {/* Overtime Warning Banner */}
+      {activeShift && activeShift.isOvertime && (
+        <div className="bg-orange-100 dark:bg-orange-950 border-b border-orange-300 dark:border-orange-800 px-6 py-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-full bg-orange-500 flex items-center justify-center">
+                <Clock className="h-5 w-5 text-white" />
+              </div>
+              <div>
+                <p className="font-semibold text-orange-900 dark:text-orange-100">
+                  ⚠️ Đã vượt giờ làm việc quy định
+                </p>
+                <p className="text-sm text-orange-700 dark:text-orange-300">
+                  Bạn đã làm việc {activeShift.hoursWorked?.toFixed(1)} giờ (giới hạn: {activeShift.maxShiftHours} giờ). 
+                  Vui lòng đóng ca để nghỉ ngơi.
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              className="bg-orange-500 hover:bg-orange-600 text-white border-orange-600"
+              onClick={() => {
+                // Trigger close shift dialog
+                const closeButton = document.querySelector('[data-shift-close-button]') as HTMLButtonElement;
+                if (closeButton) closeButton.click();
+              }}
+            >
+              Đóng ca ngay
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <main className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6 p-6 overflow-hidden min-h-0">
         {/* Cart Items */}
-        <div className="lg:col-span-2 flex flex-col h-full relative">
+        <div className="lg:col-span-2 flex flex-col min-h-0 relative">
           {isLocked && (
              <div className="absolute inset-0 bg-background/80 flex flex-col items-center justify-center z-10">
                 <Lock className="h-16 w-16 text-muted-foreground mb-4" />
-                <p className="text-lg font-semibold text-muted-foreground">Giao diện bán hàng đã khóa</p>
-                <p className="text-sm text-muted-foreground">Vui lòng bắt đầu ca làm việc để mở khóa.</p>
+                {isCriticalOvertime ? (
+                  <>
+                    <p className="text-lg font-semibold text-red-600">🚨 Đã làm việc quá lâu!</p>
+                    <p className="text-sm text-muted-foreground text-center max-w-md mt-2">
+                      Bạn đã làm việc {activeShift?.hoursWorked?.toFixed(1)} giờ (vượt quá {CRITICAL_OVERTIME_HOURS} giờ). 
+                      Vui lòng đóng ca ngay để nghỉ ngơi. Sức khỏe của bạn rất quan trọng!
+                    </p>
+                    <Button
+                      className="mt-4"
+                      variant="destructive"
+                      onClick={() => {
+                        const closeButton = document.querySelector('[data-shift-close-button]') as HTMLButtonElement;
+                        if (closeButton) closeButton.click();
+                      }}
+                    >
+                      Đóng ca ngay
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-lg font-semibold text-muted-foreground">Giao diện bán hàng đã khóa</p>
+                    <p className="text-sm text-muted-foreground">Vui lòng bắt đầu ca làm việc để mở khóa.</p>
+                  </>
+                )}
             </div>
           )}
           <h2 className="text-xl font-semibold mb-4">Đơn hàng hiện tại ({cart.length})</h2>
@@ -1236,9 +1347,10 @@ export default function POSPage() {
         </div>
 
         {/* Payment and Summary */}
-        <div className="lg:col-span-1 bg-card border rounded-lg p-6 flex flex-col">
-           <h2 className="text-xl font-semibold mb-6">Thanh toán</h2>
-          <div className="flex-1 space-y-2 overflow-y-auto text-sm pr-2 -mr-4">
+        <div className="lg:col-span-1 bg-card border rounded-lg p-6 flex flex-col min-h-0 overflow-hidden">
+           <h2 className="text-xl font-semibold mb-6 shrink-0">Thanh toán</h2>
+          <ScrollArea className="flex-1 pr-4 -mr-4">
+            <div className="space-y-2 text-sm">
               <div className="flex justify-between items-center">
                 <Label>Tổng tiền hàng</Label>
                 <p className="font-semibold text-base">{formatCurrency(totalAmount)}</p>
@@ -1361,16 +1473,65 @@ export default function POSPage() {
               )}
 
                {previousDebt > 0 && (
-                <div className="flex justify-between items-center text-sm text-destructive">
-                  <Label>Nợ cũ</Label>
-                  <p className="font-semibold">{formatCurrency(previousDebt)}</p>
-                </div>
+                <>
+                  <div className="flex justify-between items-center text-sm text-destructive">
+                    <Label>Nợ cũ</Label>
+                    <p className="font-semibold">{formatCurrency(previousDebt)}</p>
+                  </div>
+                  
+                  {/* Checkbox to include debt payment */}
+                  <div className="flex items-center space-x-2 p-2 bg-orange-50 dark:bg-orange-950/20 rounded border border-orange-200 dark:border-orange-800">
+                    <Checkbox
+                      id="includeDebtPayment"
+                      checked={includeDebtPayment}
+                      onCheckedChange={(checked) => {
+                        setIncludeDebtPayment(checked as boolean);
+                        // Auto-update payment amount when checkbox changes
+                        if (checked) {
+                          setCustomerPayment(finalAmount + previousDebt);
+                        } else {
+                          setCustomerPayment(finalAmount);
+                        }
+                      }}
+                    />
+                    <label
+                      htmlFor="includeDebtPayment"
+                      className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                    >
+                      Thanh toán cả nợ cũ ({formatCurrency(previousDebt)})
+                    </label>
+                  </div>
+                </>
               )}
 
               <div className="flex justify-between items-center font-bold text-base">
                 <Label>Tổng phải trả</Label>
                 <p className="">{formatCurrency(totalPayable)}</p>
               </div>
+
+              {/* Credit limit warning */}
+              {selectedCustomer && selectedCustomerId !== WALK_IN_CUSTOMER_ID && selectedCustomer.creditLimit > 0 && (
+                <div className={cn(
+                  "p-2 rounded text-xs",
+                  exceedsCreditLimit ? "bg-destructive/10 text-destructive" : 
+                  remainingDebt > selectedCustomer.creditLimit * 0.8 ? "bg-orange-50 dark:bg-orange-950/20 text-orange-600" :
+                  "bg-muted text-muted-foreground"
+                )}>
+                  <div className="flex justify-between items-center">
+                    <span>Hạn mức tín dụng:</span>
+                    <span className="font-semibold">{formatCurrency(selectedCustomer.creditLimit)}</span>
+                  </div>
+                  {remainingDebt > 0 && (
+                    <div className="flex justify-between items-center mt-1">
+                      <span>Nợ sau giao dịch:</span>
+                      <span className="font-semibold">{formatCurrency(remainingDebt)}</span>
+                    </div>
+                  )}
+                  {exceedsCreditLimit && (
+                    <p className="mt-1 font-semibold">⚠️ Vượt quá hạn mức!</p>
+                  )}
+                </div>
+              )}
 
               <div className="space-y-2">
                 <Label htmlFor="customerPayment">
@@ -1427,13 +1588,15 @@ export default function POSPage() {
                 </div>
               )}
           </div>
-            <div className="flex gap-2">
+          </ScrollArea>
+            <div className="flex gap-2 mt-4 pt-4 border-t shrink-0">
                 <Button
                     variant="outline"
                     className="w-full h-14"
                     onClick={() => {
                     setCart([])
                     setCustomerPayment(0)
+                    setIncludeDebtPayment(false)
                     setDiscountValue(0)
                     setAppliedVoucher(null)
                     setVoucherDiscount(0)
@@ -1453,15 +1616,15 @@ export default function POSPage() {
                 <Button
                     className="w-full h-14 text-lg"
                     onClick={handleCreateSale}
-                    disabled={isSubmitting || cart.length === 0 || isLocked}
+                    disabled={isSubmitting || cart.length === 0 || isLocked || exceedsCreditLimit}
                 >
                     {selectedPaymentMethod === 'qr' && <QrCode className="mr-2 h-5 w-5" />}
                     {selectedPaymentMethod === 'cash' && <Banknote className="mr-2 h-5 w-5" />}
-                    {!selectedPaymentMethod && 'Thanh toán'}
-                    {selectedPaymentMethod === 'qr' && 'QR Code'}
-                    {selectedPaymentMethod === 'cash' && 'Tiền mặt'}
-                    {selectedPaymentMethod === 'card' && 'Thẻ'}
-                    {selectedPaymentMethod === 'transfer' && 'Chuyển khoản'}
+                    {exceedsCreditLimit ? 'Vượt hạn mức' : !selectedPaymentMethod ? 'Thanh toán' : ''}
+                    {!exceedsCreditLimit && selectedPaymentMethod === 'qr' && 'QR Code'}
+                    {!exceedsCreditLimit && selectedPaymentMethod === 'cash' && 'Tiền mặt'}
+                    {!exceedsCreditLimit && selectedPaymentMethod === 'card' && 'Thẻ'}
+                    {!exceedsCreditLimit && selectedPaymentMethod === 'transfer' && 'Chuyển khoản'}
                 </Button>
             </div>
         </div>

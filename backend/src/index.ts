@@ -41,6 +41,7 @@ import promotionRoutes from './routes/promotions';
 import voucherRoutes from './routes/vouchers';
 import printingRoutes from './routes/printing';
 import devicesRoutes from './routes/devices';
+import debtReminderRoutes from './routes/debt-reminder';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -115,6 +116,7 @@ app.use('/api/promotions', promotionRoutes);
 app.use('/api/vouchers', voucherRoutes);
 app.use('/api/printing', printingRoutes);
 app.use('/api/devices', devicesRoutes);
+app.use('/api/debt-reminder', debtReminderRoutes);
 
 // Error handling middleware
 app.use(

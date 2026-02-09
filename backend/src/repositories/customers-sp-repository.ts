@@ -19,14 +19,22 @@ interface CustomerSPRecord {
   email: string | null;
   address: string | null;
   customerType: string | null;
+  customerGroup: string | null;
+  gender: string | null;
+  birthday: string | null;
+  zalo: string | null;
+  bankName: string | null;
+  bankAccountNumber: string | null;
+  bankBranch: string | null;
+  creditLimit: number | null;
   loyaltyTier: string | null;
+  loyaltyPoints: number | null;
   totalPaid: number | null;
   totalDebt: number | null;
   totalSales: number | null;
   calculatedDebt: number | null; // Calculated from Sales table
   totalPayments: number | null; // Calculated from Payments table
   status: string | null;
-  customerGroup: string | null;
   lifetimePoints: number | null;
   notes: string | null;
   createdAt: Date;
@@ -44,13 +52,22 @@ export interface Customer {
   email?: string;
   address?: string;
   customerType?: string;
+  customerGroup?: string;
+  gender?: string;
+  birthday?: string;
+  zalo?: string;
+  bankName?: string;
+  bankAccountNumber?: string;
+  bankBranch?: string;
+  creditLimit?: number;
   loyaltyTier?: string;
+  loyaltyPoints?: number;
   totalSpent?: number;
   totalPaid?: number;
   totalDebt?: number;
   calculatedDebt?: number; // Debt calculated from Sales
+  totalPayments?: number;
   status?: string;
-  customerGroup?: string;
   lifetimePoints?: number;
   notes?: string;
   createdAt?: string;
@@ -68,7 +85,19 @@ export interface CreateCustomerSPInput {
   email?: string | null;
   address?: string | null;
   customerType?: string;
+  customerGroup?: string | null;
+  gender?: string | null;
+  birthday?: string | null;
+  zalo?: string | null;
+  bankName?: string | null;
+  bankAccountNumber?: string | null;
+  bankBranch?: string | null;
+  creditLimit?: number;
   loyaltyTier?: string;
+  loyaltyPoints?: number;
+  lifetimePoints?: number;
+  status?: string;
+  notes?: string | null;
 }
 
 /**
@@ -80,8 +109,19 @@ export interface UpdateCustomerSPInput {
   email?: string | null;
   address?: string | null;
   customerType?: string;
-  loyaltyTier?: string;
+  customerGroup?: string | null;
+  gender?: string | null;
+  birthday?: string | null;
+  zalo?: string | null;
+  bankName?: string | null;
+  bankAccountNumber?: string | null;
+  bankBranch?: string | null;
+  creditLimit?: number;
   lifetimePoints?: number;
+  loyaltyPoints?: number;
+  loyaltyTier?: string;
+  status?: string;
+  notes?: string | null;
 }
 
 /**
@@ -123,13 +163,22 @@ export class CustomersSPRepository extends SPBaseRepository<Customer> {
       email: record.email || undefined,
       address: record.address || undefined,
       customerType: record.customerType || 'retail',
+      customerGroup: record.customerGroup || undefined,
+      gender: record.gender || undefined,
+      birthday: record.birthday || undefined,
+      zalo: record.zalo || undefined,
+      bankName: record.bankName || undefined,
+      bankAccountNumber: record.bankAccountNumber || undefined,
+      bankBranch: record.bankBranch || undefined,
+      creditLimit: record.creditLimit ?? 0,
       loyaltyTier: record.loyaltyTier || 'bronze',
+      loyaltyPoints: record.loyaltyPoints ?? 0,
       totalSpent: record.totalSales ?? 0,
       totalPaid: record.totalPaid ?? record.totalPayments ?? 0,
+      totalPayments: record.totalPayments ?? 0,
       totalDebt: record.totalDebt ?? 0,
       calculatedDebt: record.calculatedDebt ?? record.totalDebt ?? 0, // Use calculated if available
       status: record.status || 'active',
-      customerGroup: record.customerGroup || undefined,
       lifetimePoints: record.lifetimePoints ?? 0,
       notes: record.notes || undefined,
       createdAt: record.createdAt
@@ -162,8 +211,20 @@ export class CustomersSPRepository extends SPBaseRepository<Customer> {
       phone: input.phone || null,
       email: input.email || null,
       address: input.address || null,
-      customerType: input.customerType || 'retail',
+      customerType: input.customerType || 'personal',
+      customerGroup: input.customerGroup || null,
+      gender: input.gender || null,
+      birthday: input.birthday || null,
+      zalo: input.zalo || null,
+      bankName: input.bankName || null,
+      bankAccountNumber: input.bankAccountNumber || null,
+      bankBranch: input.bankBranch || null,
+      creditLimit: input.creditLimit ?? 0,
+      status: input.status || 'active',
+      lifetimePoints: input.lifetimePoints ?? 0,
+      loyaltyPoints: input.loyaltyPoints ?? 0,
       loyaltyTier: input.loyaltyTier || 'bronze',
+      notes: input.notes || null,
     };
 
     // sp_Customers_Create returns the created customer directly
@@ -204,7 +265,19 @@ export class CustomersSPRepository extends SPBaseRepository<Customer> {
       email: data.email,
       address: data.address,
       customerType: data.customerType,
+      customerGroup: data.customerGroup,
+      gender: data.gender,
+      birthday: data.birthday,
+      zalo: data.zalo,
+      bankName: data.bankName,
+      bankAccountNumber: data.bankAccountNumber,
+      bankBranch: data.bankBranch,
+      creditLimit: data.creditLimit,
+      status: data.status,
+      lifetimePoints: data.lifetimePoints,
+      loyaltyPoints: data.loyaltyPoints,
       loyaltyTier: data.loyaltyTier,
+      notes: data.notes,
     };
 
     const result = await this.executeSPSingle<AffectedRowsResult>(

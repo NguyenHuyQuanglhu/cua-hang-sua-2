@@ -88,6 +88,7 @@ import { Calendar } from "@/components/ui/calendar"
 import { deleteSaleTransaction, updateSaleStatus, getSales } from "./actions"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
+import { useStore } from "@/contexts/store-context"
 
 type SaleStatus = 'all' | 'pending' | 'unprinted' | 'printed';
 type SortKey = 'invoiceNumber' | 'customer' | 'transactionDate' | 'status' | 'finalAmount';
@@ -123,6 +124,7 @@ const getStatusText = (status: Sale['status']) => {
 
 
 export default function SalesPage() {
+  const { currentStore } = useStore();
   const [sales, setSales] = useState<Sale[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -189,6 +191,19 @@ export default function SalesPage() {
   useEffect(() => {
     fetchSales();
   }, [fetchSales]);
+
+  // Reload sales when store changes - CLEAR old data first
+  useEffect(() => {
+    if (currentStore) {
+      console.log('[Sales Page] Store changed to:', currentStore.name, currentStore.id);
+      // Clear old sales immediately to prevent stale data
+      setSales([]);
+      setTotal(0);
+      setPage(1);
+      // Then fetch new sales
+      fetchSales();
+    }
+  }, [currentStore?.id]);
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -289,9 +304,29 @@ export default function SalesPage() {
     setSaleToDelete(null);
   }
   
-  const handleStatusChange = (saleId: string, status: Sale['status']) => {
+  const handleStatusChange = (sale: Sale, status: Sale['status']) => {
+    // Validate: Only allow updating sales from current store
+    if (!currentStore) {
+      toast({
+        variant: "destructive",
+        title: "Lỗi",
+        description: "Không xác định được cửa hàng hiện tại",
+      });
+      return;
+    }
+
+    console.log('[Sales Page] Changing status:', { 
+      saleId: sale.id, 
+      invoiceNumber: sale.invoiceNumber,
+      status,
+      currentStore: currentStore.name 
+    });
+    
     startStatusTransition(async () => {
-      const result = await updateSaleStatus(saleId, status);
+      console.log('[Sales Page] Calling updateSaleStatus...');
+      const result = await updateSaleStatus(sale.id, status);
+      console.log('[Sales Page] Update result:', result);
+      
       if (result.success) {
         toast({
           title: "Thành công!",
@@ -299,10 +334,32 @@ export default function SalesPage() {
         });
         fetchSales();
       } else {
+        console.error('[Sales Page] Update failed:', result.error);
+        
+        // If sale not found, it's from another store - refresh data
+        if (result.error?.includes('not found')) {
+          console.warn('[Sales Page] Sale not found - refreshing data');
+          toast({
+            title: "Đang làm mới dữ liệu...",
+            description: "Đơn hàng không thuộc cửa hàng hiện tại. Đang cập nhật...",
+          });
+          
+          // Clear stale data and refetch
+          setSales([]);
+          setTotal(0);
+          router.refresh(); // Refresh server data without full reload
+          
+          // Refetch after a short delay
+          setTimeout(() => {
+            fetchSales();
+          }, 500);
+          return;
+        }
+        
         toast({
           variant: "destructive",
-          title: "Ôi! Đã có lỗi xảy ra.",
-          description: result.error,
+          title: "Không thể cập nhật",
+          description: result.error || "Đơn hàng này không thuộc cửa hàng hiện tại hoặc đã bị xóa",
         });
       }
     });
@@ -567,19 +624,19 @@ export default function SalesPage() {
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="start">
                                 <DropdownMenuItem 
-                                  onClick={() => handleStatusChange(sale.id, 'pending')}
+                                  onClick={() => handleStatusChange(sale, 'pending')}
                                   disabled={sale.status === 'pending' || isUpdatingStatus}
                                 >
                                   Chờ xử lý
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
-                                  onClick={() => handleStatusChange(sale.id, 'unprinted')}
+                                  onClick={() => handleStatusChange(sale, 'unprinted')}
                                   disabled={sale.status === 'unprinted' || isUpdatingStatus}
                                 >
                                   Chưa in
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
-                                  onClick={() => handleStatusChange(sale.id, 'printed')}
+                                  onClick={() => handleStatusChange(sale, 'printed')}
                                   disabled={sale.status === 'printed' || isUpdatingStatus}
                                 >
                                   Đã in

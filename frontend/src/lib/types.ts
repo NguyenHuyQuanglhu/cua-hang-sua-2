@@ -307,6 +307,10 @@ export type Shift = {
   cashDifference?: number; // Difference between theoretical and actual
   totalRevenue: number;
   salesCount: number;
+  hourlyRate?: number; // Lương theo giờ
+  maxShiftHours?: number; // Giới hạn giờ làm việc
+  hoursWorked?: number; // Số giờ đã làm
+  isOvertime?: boolean; // Đã vượt giờ quy định
 }
 
 

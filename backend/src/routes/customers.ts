@@ -73,10 +73,18 @@ router.get('/', async (req: AuthRequest, res: Response) => {
           name: c.name,
           phone: c.phone,
           address: c.address,
-          status: c.status,
-          loyaltyTier: calculateLoyaltyTier(lifetimePoints), // Use calculated tier
           customerType: c.customerType,
           customerGroup: c.customerGroup,
+          gender: c.gender,
+          birthday: c.birthday,
+          zalo: c.zalo,
+          bankName: c.bankName,
+          bankAccountNumber: c.bankAccountNumber,
+          bankBranch: c.bankBranch,
+          creditLimit: c.creditLimit ?? 0,
+          status: c.status,
+          loyaltyTier: calculateLoyaltyTier(lifetimePoints), // Use calculated tier
+          loyaltyPoints: c.loyaltyPoints ?? 0,
           lifetimePoints: lifetimePoints,
           notes: c.notes,
           totalDebt: debt,
@@ -125,18 +133,24 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
       name: customer.name,
       phone: customer.phone,
       address: customer.address,
-      status: customer.status,
-      loyaltyTier: calculatedTier, // Use calculated tier instead of stored
       customerType: customer.customerType,
       customerGroup: customer.customerGroup,
+      gender: customer.gender,
+      birthday: customer.birthday,
+      zalo: customer.zalo,
+      bankName: customer.bankName,
+      bankAccountNumber: customer.bankAccountNumber,
+      bankBranch: customer.bankBranch,
+      creditLimit: customer.creditLimit ?? 0,
+      status: customer.status,
+      loyaltyTier: calculatedTier, // Use calculated tier instead of stored
+      loyaltyPoints: customer.loyaltyPoints ?? 0,
       lifetimePoints: lifetimePoints,
-      loyaltyPoints: lifetimePoints, // Same as lifetimePoints for now
       notes: customer.notes,
       totalDebt: debt,
       currentDebt: debt, // Alias for frontend
       calculatedDebt: debt,
       totalPaid: customer.totalPaid ?? 0,
-      creditLimit: 0, // Default credit limit
       createdAt: customer.createdAt,
       updatedAt: customer.updatedAt,
     });
@@ -157,7 +171,19 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       phone,
       address,
       customerType,
+      customerGroup,
+      gender,
+      birthday,
+      zalo,
+      bankName,
+      bankAccountNumber,
+      bankBranch,
+      creditLimit,
       loyaltyTier,
+      loyaltyPoints,
+      lifetimePoints,
+      status,
+      notes,
     } = req.body;
 
     const customerId = uuidv4();
@@ -170,8 +196,20 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       email: email || null,
       phone: phone || null,
       address: address || null,
-      customerType: customerType || 'retail',
+      customerType: customerType || 'personal',
+      customerGroup: customerGroup || null,
+      gender: gender || null,
+      birthday: birthday || null,
+      zalo: zalo || null,
+      bankName: bankName || null,
+      bankAccountNumber: bankAccountNumber || null,
+      bankBranch: bankBranch || null,
+      creditLimit: creditLimit ?? 0,
       loyaltyTier: loyaltyTier || 'bronze',
+      loyaltyPoints: loyaltyPoints ?? 0,
+      lifetimePoints: lifetimePoints ?? 0,
+      status: status || 'active',
+      notes: notes || null,
     });
 
     res.status(201).json({ id: customer.id, success: true });
@@ -193,7 +231,19 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
       phone,
       address,
       customerType,
+      customerGroup,
+      gender,
+      birthday,
+      zalo,
+      bankName,
+      bankAccountNumber,
+      bankBranch,
+      creditLimit,
       loyaltyTier,
+      loyaltyPoints,
+      lifetimePoints,
+      status,
+      notes,
     } = req.body;
 
     // Use SP Repository instead of inline query
@@ -203,7 +253,19 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
       phone: phone !== undefined ? phone : undefined,
       address: address !== undefined ? address : undefined,
       customerType: customerType !== undefined ? customerType : undefined,
+      customerGroup: customerGroup !== undefined ? customerGroup : undefined,
+      gender: gender !== undefined ? gender : undefined,
+      birthday: birthday !== undefined ? birthday : undefined,
+      zalo: zalo !== undefined ? zalo : undefined,
+      bankName: bankName !== undefined ? bankName : undefined,
+      bankAccountNumber: bankAccountNumber !== undefined ? bankAccountNumber : undefined,
+      bankBranch: bankBranch !== undefined ? bankBranch : undefined,
+      creditLimit: creditLimit !== undefined ? creditLimit : undefined,
       loyaltyTier: loyaltyTier !== undefined ? loyaltyTier : undefined,
+      loyaltyPoints: loyaltyPoints !== undefined ? loyaltyPoints : undefined,
+      lifetimePoints: lifetimePoints !== undefined ? lifetimePoints : undefined,
+      status: status !== undefined ? status : undefined,
+      notes: notes !== undefined ? notes : undefined,
     });
 
     if (!customer) {

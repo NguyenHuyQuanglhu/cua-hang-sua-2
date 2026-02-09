@@ -49,9 +49,11 @@ router.get('/active', async (req: AuthRequest, res: Response) => {
     const userId = req.user!.id;
     
     const shift = await queryOne(
-      `SELECT * FROM Shifts 
-       WHERE store_id = @storeId AND user_id = @userId AND status = 'open'
-       ORDER BY start_time DESC`,
+      `SELECT s.*, u.hourly_rate, u.max_shift_hours
+       FROM Shifts s
+       LEFT JOIN Users u ON s.user_id = u.Id
+       WHERE s.store_id = @storeId AND s.user_id = @userId AND s.status = 'open'
+       ORDER BY s.start_time DESC`,
       { storeId, userId }
     );
 
@@ -86,6 +88,13 @@ router.get('/active', async (req: AuthRequest, res: Response) => {
     const totalRevenue = salesResult?.totalRevenue || 0;
     const salesCount = salesResult?.salesCount || 0;
     const cashPayments = paymentsResult?.total || 0;
+    
+    // Calculate hours worked
+    const startTime = new Date(shift.start_time).getTime();
+    const now = Date.now();
+    const hoursWorked = (now - startTime) / (1000 * 60 * 60);
+    const maxShiftHours = shift.max_shift_hours || 8.0;
+    const isOvertime = hoursWorked >= maxShiftHours;
 
     res.json({
       id: shift.id,
@@ -103,6 +112,10 @@ router.get('/active', async (req: AuthRequest, res: Response) => {
       cashDifference: shift.cash_difference,
       totalRevenue: totalRevenue, // Real-time calculation
       salesCount: salesCount, // Real-time calculation
+      hourlyRate: shift.hourly_rate || 20000, // Lương theo giờ
+      maxShiftHours: maxShiftHours, // Giới hạn giờ làm việc
+      hoursWorked: hoursWorked, // Số giờ đã làm
+      isOvertime: isOvertime, // Đã vượt giờ quy định
     });
   } catch (error) {
     console.error('Get active shift error:', error);

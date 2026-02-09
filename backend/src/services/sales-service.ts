@@ -4,6 +4,7 @@ import { inventoryService, InsufficientStockError } from './inventory-service';
 import { Sale, SalesItem } from '../repositories/sales-repository';
 import { UnitConversionLog } from '../repositories/unit-conversion-log-repository';
 import { loyaltyPointsService } from './loyalty-points-service';
+import { cashTransactionRepository } from '../repositories/cash-transaction-repository';
 
 /**
  * Input for creating a sale item
@@ -98,11 +99,21 @@ export class SalesService {
       // Check inventory availability for all items first
       for (const item of saleData.items) {
         const unitId = item.unitId || await this.getDefaultUnitId(item.productId, storeId);
+        
+        console.log('[SalesService] Checking stock:', {
+          productId: item.productId,
+          storeId,
+          unitId,
+          requestedQty: item.quantity
+        });
+        
         const available = await inventoryService.checkAvailableQuantity(
           item.productId,
           storeId,
           unitId
         );
+
+        console.log('[SalesService] Available stock:', available);
 
         if (available < item.quantity) {
           const product = await queryOne<{ name: string }>(
@@ -134,7 +145,12 @@ export class SalesService {
       // Calculate remaining debt
       const customerPayment = saleData.customerPayment || 0;
       const previousDebt = saleData.previousDebt || 0;
-      const remainingDebt = previousDebt + finalAmount - customerPayment;
+      
+      // Debt change from THIS transaction only
+      const debtChangeFromThisTransaction = finalAmount - customerPayment;
+      
+      // Total remaining debt (old debt + new debt - payment)
+      const remainingDebt = previousDebt + debtChangeFromThisTransaction;
 
       // Generate invoice number
       const invoiceNumber = await this.generateInvoiceNumber(storeId);
@@ -228,18 +244,24 @@ export class SalesService {
       }
 
       // Update customer debt if applicable
-      if (saleData.customerId && remainingDebt !== 0) {
-        await query(
-          `UPDATE Customers 
-           SET debt = @remainingDebt, updated_at = @updatedAt
-           WHERE id = @customerId AND store_id = @storeId`,
-          {
-            customerId: saleData.customerId,
-            storeId,
-            remainingDebt,
-            updatedAt: now,
-          }
-        );
+      if (saleData.customerId) {
+        // Only update if there's a debt change from this transaction
+        if (debtChangeFromThisTransaction !== 0 || customerPayment > 0) {
+          await query(
+            `UPDATE Customers 
+             SET total_debt = ISNULL(total_debt, 0) + @debtChange, 
+                 total_paid = ISNULL(total_paid, 0) + @paidAmount,
+                 updated_at = @updatedAt
+             WHERE id = @customerId AND store_id = @storeId`,
+            {
+              customerId: saleData.customerId,
+              storeId,
+              debtChange: debtChangeFromThisTransaction, // ← Changed: only the change from THIS transaction
+              paidAmount: customerPayment,
+              updatedAt: now,
+            }
+          );
+        }
       }
 
       // Earn loyalty points for the customer (if applicable)
@@ -261,6 +283,28 @@ export class SalesService {
         } catch (earnError) {
           // Log but don't fail the sale if loyalty points fails
           console.error('[SalesService] Failed to earn loyalty points:', earnError);
+        }
+      }
+
+      // Create cash transaction for the payment received
+      if (customerPayment > 0) {
+        try {
+          await cashTransactionRepository.create(
+            {
+              storeId,
+              type: 'thu',
+              transactionDate: now.toISOString(),
+              amount: customerPayment,
+              reason: `Thu tiền bán hàng - ${invoiceNumber}`,
+              category: 'Bán hàng',
+              relatedInvoiceId: saleId,
+            },
+            storeId
+          );
+          console.log(`[SalesService] Created cash transaction for sale ${invoiceNumber}: ${customerPayment}`);
+        } catch (cashError) {
+          // Log but don't fail the sale if cash transaction fails
+          console.error('[SalesService] Failed to create cash transaction:', cashError);
         }
       }
 
@@ -322,18 +366,26 @@ export class SalesService {
       );
 
       // Restore customer debt if applicable
-      if (sale.customer_id && sale.remaining_debt !== 0) {
-        await query(
-          `UPDATE Customers 
-           SET debt = debt - @debtChange, updated_at = @updatedAt
-           WHERE id = @customerId AND store_id = @storeId`,
-          {
-            customerId: sale.customer_id,
-            storeId,
-            debtChange: sale.remaining_debt,
-            updatedAt: new Date(),
-          }
-        );
+      if (sale.customer_id) {
+        // Calculate the debt change from this cancelled transaction
+        const debtChangeFromCancelledTransaction = sale.final_amount - (sale.customer_payment || 0);
+        
+        if (debtChangeFromCancelledTransaction !== 0 || sale.customer_payment > 0) {
+          await query(
+            `UPDATE Customers 
+             SET total_debt = ISNULL(total_debt, 0) - @debtChange,
+                 total_paid = ISNULL(total_paid, 0) - @paidAmount,
+                 updated_at = @updatedAt
+             WHERE id = @customerId AND store_id = @storeId`,
+            {
+              customerId: sale.customer_id,
+              storeId,
+              debtChange: debtChangeFromCancelledTransaction,
+              paidAmount: sale.customer_payment || 0,
+              updatedAt: new Date(),
+            }
+          );
+        }
       }
     });
   }

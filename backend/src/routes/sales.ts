@@ -345,10 +345,22 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     const storeId = req.storeId!;
     const { status, customerPayment, remainingDebt } = req.body;
 
+    console.log('[Sales PUT] Update request:', {
+      id,
+      storeId,
+      status,
+      customerPayment,
+      remainingDebt,
+    });
+
     // Use SP Repository for status update if only status is being updated
     if (status && !customerPayment && !remainingDebt) {
+      console.log('[Sales PUT] Using SP for status update');
       const updated = await salesSPRepository.updateStatus(id, storeId, status);
+      console.log('[Sales PUT] SP result:', updated);
+      
       if (!updated) {
+        console.error('[Sales PUT] Sale not found:', { id, storeId });
         res.status(404).json({ error: 'Sale not found' });
         return;
       }
@@ -357,6 +369,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     }
 
     // For other updates, use inline query (SP doesn't support partial updates)
+    console.log('[Sales PUT] Using inline query for update');
     await query(
       `UPDATE Sales SET 
         status = COALESCE(@status, status),

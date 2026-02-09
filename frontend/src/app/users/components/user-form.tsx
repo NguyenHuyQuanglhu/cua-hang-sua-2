@@ -78,6 +78,8 @@ const userInfoSchemaBase = z.object({
   displayName: z.string().optional(),
   role: z.enum(['owner', 'company_manager', 'store_manager', 'salesperson']),
   storeIds: z.array(z.string()).optional(),
+  hourlyRate: z.number().min(0, 'Lương theo giờ phải >= 0').optional(),
+  maxShiftHours: z.number().min(1, 'Giới hạn giờ phải >= 1').max(24, 'Giới hạn giờ phải <= 24').optional(),
 });
 
 const newUserInfoSchema = userInfoSchemaBase.extend({
@@ -425,21 +427,21 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-4xl max-h-[90vh]">
-        <DialogHeader>
+      <DialogContent className="sm:max-w-4xl max-h-[90vh] flex flex-col">
+        <DialogHeader className="shrink-0">
           <DialogTitle>{user ? 'Chỉnh sửa người dùng' : 'Thêm người dùng mới'}</DialogTitle>
           <DialogDescription>
             {user ? 'Cập nhật chi tiết cho người dùng này.' : 'Tạo tài khoản mới, gán vai trò và phân quyền chi tiết.'}
           </DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 overflow-y-auto pr-6 max-h-[calc(80vh-100px)]">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 overflow-y-auto pr-2 flex-1 min-h-0">
           <Form {...infoForm}>
-            <form onSubmit={infoForm.handleSubmit(onInfoSubmit)} className="space-y-4">
-              <Card>
-                <CardHeader>
+            <form onSubmit={infoForm.handleSubmit(onInfoSubmit)} className="space-y-4 h-full flex flex-col">
+              <Card className="flex-1 flex flex-col min-h-0">
+                <CardHeader className="shrink-0">
                   <CardTitle>Thông tin tài khoản</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-4">
+                <CardContent className="space-y-4 overflow-y-auto flex-1 min-h-0">
                   <FormField
                     control={infoForm.control}
                     name="email"
@@ -475,6 +477,51 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
                         <FormControl>
                           <Input placeholder="John Doe" {...field} value={field.value || ''} />
                         </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={infoForm.control}
+                    name="hourlyRate"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Lương theo giờ (VNĐ)</FormLabel>
+                        <FormControl>
+                          <Input 
+                            type="number" 
+                            placeholder="20000" 
+                            {...field} 
+                            value={field.value || ''} 
+                            onChange={(e) => field.onChange(e.target.value ? Number(e.target.value) : undefined)}
+                          />
+                        </FormControl>
+                        <p className="text-xs text-muted-foreground">
+                          Lương nhân viên nhận được mỗi giờ làm việc
+                        </p>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={infoForm.control}
+                    name="maxShiftHours"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Giới hạn giờ làm việc</FormLabel>
+                        <FormControl>
+                          <Input 
+                            type="number" 
+                            placeholder="8" 
+                            step="0.5"
+                            {...field} 
+                            value={field.value || ''} 
+                            onChange={(e) => field.onChange(e.target.value ? Number(e.target.value) : undefined)}
+                          />
+                        </FormControl>
+                        <p className="text-xs text-muted-foreground">
+                          Số giờ tối đa nhân viên có thể làm việc trong một ca (mặc định: 8 giờ)
+                        </p>
                         <FormMessage />
                       </FormItem>
                     )}
@@ -573,7 +620,7 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
                     </div>
                   )}
                 </CardContent>
-                <div className="p-6 pt-0">
+                <div className="p-6 pt-0 shrink-0">
                   <Button type="submit" className="w-full" disabled={infoForm.formState.isSubmitting}>
                     {infoForm.formState.isSubmitting ? 'Đang lưu...' : (isEditMode ? 'Lưu thay đổi thông tin' : 'Tạo người dùng')}
                   </Button>
@@ -585,14 +632,16 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
           {isEditMode && (
             <Form {...permissionsForm}>
               <form onSubmit={permissionsForm.handleSubmit(onPermissionsSubmit)} className="flex flex-col h-full">
-                <Card className="flex flex-col flex-grow">
-                  <CardHeader>
-                    <div className="flex justify-between items-center">
+                <Card className="flex flex-col flex-1 min-h-0">
+                  <CardHeader className="shrink-0">
+                    <div className="space-y-3">
                       <CardTitle>Phân quyền chi tiết</CardTitle>
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2">
                         <Popover open={copyUserPopoverOpen} onOpenChange={setCopyUserPopoverOpen}>
                           <PopoverTrigger asChild>
-                            <Button type="button" variant="outline" size="sm"><Copy className="h-4 w-4 mr-2" />Sao chép</Button>
+                            <Button type="button" variant="outline" size="sm" className="text-xs">
+                              <Copy className="h-3 w-3 mr-1" />Sao chép
+                            </Button>
                           </PopoverTrigger>
                           <PopoverContent className="w-[300px] p-0">
                             <Command>
@@ -610,20 +659,20 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
                             </Command>
                           </PopoverContent>
                         </Popover>
-                        <Button size="sm" variant="outline" type="button" onClick={handleClearAllPermissions}>
-                          <X className="h-4 w-4 mr-2" />
+                        <Button size="sm" variant="outline" type="button" onClick={handleClearAllPermissions} className="text-xs">
+                          <X className="h-3 w-3 mr-1" />
                           Bỏ chọn tất cả
                         </Button>
                         {role && (
-                          <Button size="sm" variant="outline" type="button" onClick={handleApplyDefaultPermissions}>
-                            <RefreshCw className="h-4 w-4 mr-2" />
+                          <Button size="sm" variant="outline" type="button" onClick={handleApplyDefaultPermissions} className="text-xs">
+                            <RefreshCw className="h-3 w-3 mr-1" />
                             Mặc định
                           </Button>
                         )}
                       </div>
                     </div>
                   </CardHeader>
-                  <CardContent className="space-y-2 flex-grow overflow-y-auto">
+                  <CardContent className="space-y-2 flex-1 overflow-y-auto min-h-0">
                     <Accordion type="multiple" className="w-full" defaultValue={permissionGroups.map(g => g.groupName)}>
                       {permissionGroups.map(group => {
                         // Only owner and admin can see/edit system administration permissions
@@ -686,7 +735,7 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
                       })}
                     </Accordion>
                   </CardContent>
-                  <div className="p-6 pt-4 mt-auto">
+                  <div className="p-6 pt-4 shrink-0">
                     <Button type="submit" className="w-full" disabled={permissionsForm.formState.isSubmitting}>
                       {permissionsForm.formState.isSubmitting ? 'Đang lưu...' : 'Lưu phân quyền'}
                     </Button>

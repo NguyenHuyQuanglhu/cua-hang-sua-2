@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Check, Store, Zap, Crown } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { apiClient } from '@/lib/api-client';
+import { PaymentDialog } from './components/payment-dialog';
 
 interface SubscriptionPlan {
   id: string;
@@ -22,11 +23,11 @@ const plans: SubscriptionPlan[] = [
   {
     id: 'basic',
     name: 'Gói Cơ Bản',
-    maxStores: 3,
-    price: 0,
+    maxStores: 1,
+    price: 199000,
     icon: <Store className="h-6 w-6" />,
     features: [
-      'Tối đa 3 cửa hàng',
+      '1 cửa hàng',
       'Quản lý sản phẩm không giới hạn',
       'Quản lý bán hàng cơ bản',
       'Báo cáo doanh thu',
@@ -37,12 +38,12 @@ const plans: SubscriptionPlan[] = [
   {
     id: 'pro',
     name: 'Gói Chuyên Nghiệp',
-    maxStores: 10,
-    price: 500000,
+    maxStores: 5,
+    price: 499000,
     icon: <Zap className="h-6 w-6" />,
     popular: true,
     features: [
-      'Tối đa 10 cửa hàng',
+      'Tối đa 5 cửa hàng',
       'Tất cả tính năng Gói Cơ Bản',
       'Báo cáo nâng cao (lợi nhuận, công nợ)',
       'Phân tích xu hướng bán hàng',
@@ -55,7 +56,7 @@ const plans: SubscriptionPlan[] = [
     id: 'enterprise',
     name: 'Gói Doanh Nghiệp',
     maxStores: 999,
-    price: 2000000,
+    price: 1999000,
     icon: <Crown className="h-6 w-6" />,
     features: [
       'Không giới hạn cửa hàng',
@@ -75,9 +76,18 @@ export default function SubscriptionPage() {
   const [currentPlan, setCurrentPlan] = useState<{
     maxStores: number;
     currentStores: number;
+    planId: string;
+    startDate: string | null;
+    endDate: string | null;
+    daysRemaining: number | null;
+    isExpired: boolean;
+    autoRenewal: boolean;
+    status: string;
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [upgrading, setUpgrading] = useState<string | null>(null);
+  const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
+  const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlan | null>(null);
 
   useEffect(() => {
     fetchCurrentPlan();
@@ -85,39 +95,144 @@ export default function SubscriptionPage() {
 
   const fetchCurrentPlan = async () => {
     try {
+      console.log('[Fetch Current Plan] Starting...');
       const response = await apiClient.request<{
         maxStores: number;
         currentStores: number;
+        planId: string;
+        startDate: string | null;
+        endDate: string | null;
+        daysRemaining: number | null;
+        isExpired: boolean;
+        autoRenewal: boolean;
+        status: string;
       }>('/subscription/current');
+      console.log('[Fetch Current Plan] Response:', response);
       setCurrentPlan(response);
     } catch (error) {
-      console.error('Error fetching subscription:', error);
+      console.error('[Fetch Current Plan] Error:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleUpgrade = async (planId: string, maxStores: number) => {
-    setUpgrading(planId);
+  const handleToggleAutoRenewal = async () => {
+    if (!currentPlan) {
+      console.error('[Toggle Auto-Renewal] No current plan');
+      return;
+    }
+    
     try {
-      await apiClient.request('/subscription/upgrade', { 
+      const newValue = !currentPlan.autoRenewal;
+      console.log('[Toggle Auto-Renewal] Starting...');
+      console.log('[Toggle Auto-Renewal] Current value:', currentPlan.autoRenewal);
+      console.log('[Toggle Auto-Renewal] New value:', newValue);
+      console.log('[Toggle Auto-Renewal] Request body:', { autoRenewal: newValue });
+      
+      // Check if we have a token
+      const token = apiClient.getToken();
+      console.log('[Toggle Auto-Renewal] Has token:', !!token);
+      
+      const response = await apiClient.request('/subscription/toggle-auto-renewal', {
         method: 'POST',
-        body: { 
-          planId,
-          maxStores 
-        }
+        body: { autoRenewal: newValue }
+      });
+      
+      console.log('[Toggle Auto-Renewal] Response received:', response);
+      
+      toast({
+        title: newValue ? 'Đã bật tự động gia hạn' : 'Đã tắt tự động gia hạn',
+        description: newValue 
+          ? 'Gói dịch vụ sẽ tự động gia hạn khi hết hạn'
+          : 'Gói dịch vụ sẽ không tự động gia hạn',
+      });
+      
+      console.log('[Toggle Auto-Renewal] Refreshing plan data...');
+      await fetchCurrentPlan();
+      console.log('[Toggle Auto-Renewal] Complete!');
+    } catch (error: any) {
+      console.error('[Toggle Auto-Renewal] Error caught:', error);
+      console.error('[Toggle Auto-Renewal] Error message:', error.message);
+      console.error('[Toggle Auto-Renewal] Error status:', error.status);
+      console.error('[Toggle Auto-Renewal] Full error object:', JSON.stringify(error, null, 2));
+      
+      toast({
+        title: 'Lỗi',
+        description: error.message || 'Không thể thay đổi cài đặt',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleCancelSubscription = async () => {
+    if (!currentPlan || currentPlan.planId === 'basic') return;
+    
+    if (!confirm('Bạn có chắc muốn hủy gói dịch vụ? Gói sẽ hết hạn vào ngày đã thanh toán và không tự động gia hạn.')) {
+      return;
+    }
+    
+    try {
+      await apiClient.request('/subscription/cancel', {
+        method: 'POST',
       });
       
       toast({
-        title: 'Nâng cấp thành công!',
-        description: `Bạn đã nâng cấp lên ${plans.find(p => p.id === planId)?.name}`,
+        title: 'Đã hủy gói dịch vụ',
+        description: 'Gói dịch vụ sẽ hết hạn vào ngày đã thanh toán',
       });
       
       await fetchCurrentPlan();
     } catch (error: any) {
       toast({
-        title: 'Lỗi nâng cấp',
-        description: error.message || 'Không thể nâng cấp gói. Vui lòng thử lại.',
+        title: 'Lỗi',
+        description: error.message || 'Không thể hủy gói dịch vụ',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleUpgrade = async (planId: string, maxStores: number) => {
+    const plan = plans.find(p => p.id === planId);
+    if (!plan) return;
+    
+    // Open payment dialog
+    setSelectedPlan(plan);
+    setPaymentDialogOpen(true);
+  };
+
+  const handlePaymentConfirm = async (paymentMethod: string) => {
+    if (!selectedPlan) return;
+    
+    setUpgrading(selectedPlan.id);
+    try {
+      // Call upgrade API with payment method
+      const response = await apiClient.request<{ paymentUrl?: string }>('/subscription/upgrade', { 
+        method: 'POST',
+        body: { 
+          planId: selectedPlan.id,
+          maxStores: selectedPlan.maxStores,
+          paymentMethod,
+        }
+      });
+      
+      // If payment gateway returns URL, redirect to it
+      if (response.paymentUrl) {
+        window.location.href = response.paymentUrl;
+        return;
+      }
+      
+      // Otherwise show success message
+      toast({
+        title: 'Nâng cấp thành công!',
+        description: `Bạn đã nâng cấp lên ${selectedPlan.name}`,
+      });
+      
+      setPaymentDialogOpen(false);
+      await fetchCurrentPlan();
+    } catch (error: any) {
+      toast({
+        title: 'Lỗi thanh toán',
+        description: error.message || 'Không thể xử lý thanh toán. Vui lòng thử lại.',
         variant: 'destructive',
       });
     } finally {
@@ -135,6 +250,15 @@ export default function SubscriptionPage() {
 
   return (
     <div className="container mx-auto p-6">
+      <PaymentDialog
+        isOpen={paymentDialogOpen}
+        onOpenChange={setPaymentDialogOpen}
+        planName={selectedPlan?.name || ''}
+        planPrice={selectedPlan?.price || 0}
+        maxStores={selectedPlan?.maxStores || 0}
+        onConfirm={handlePaymentConfirm}
+      />
+      
       <div className="mb-8">
         <h1 className="text-3xl font-bold mb-2">Quản Lý Gói Dịch Vụ</h1>
         <p className="text-muted-foreground">
@@ -143,54 +267,152 @@ export default function SubscriptionPage() {
       </div>
 
       {currentPlan && (
-        <Card className="mb-8 border-primary bg-primary/5">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Store className="h-5 w-5" />
-              Gói Hiện Tại
-            </CardTitle>
-            <CardDescription>
-              Bạn đang sử dụng <strong>{currentPlan.currentStores}</strong> / <strong>{currentPlan.maxStores}</strong> cửa hàng
-              {currentPlan.currentStores >= currentPlan.maxStores && (
-                <span className="text-destructive ml-2">
-                  (Đã đạt giới hạn - Vui lòng nâng cấp để tạo thêm cửa hàng)
-                </span>
-              )}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-4">
-              <div className="flex-1">
-                <div className="h-3 bg-secondary rounded-full overflow-hidden">
-                  <div
-                    className={`h-full transition-all ${
-                      currentPlan.currentStores >= currentPlan.maxStores
-                        ? 'bg-destructive'
-                        : 'bg-primary'
-                    }`}
-                    style={{
-                      width: `${Math.min((currentPlan.currentStores / currentPlan.maxStores) * 100, 100)}%`,
-                    }}
-                  />
+        <>
+          <Card className="mb-8 border-primary bg-primary/5">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Store className="h-5 w-5" />
+                Gói Hiện Tại
+              </CardTitle>
+              <CardDescription>
+                Bạn đang sử dụng <strong>{currentPlan.currentStores}</strong> / <strong>{currentPlan.maxStores}</strong> cửa hàng
+                {currentPlan.currentStores >= currentPlan.maxStores && (
+                  <span className="text-destructive ml-2">
+                    (Đã đạt giới hạn - Vui lòng nâng cấp để tạo thêm cửa hàng)
+                  </span>
+                )}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-4">
+                <div className="flex-1">
+                  <div className="h-3 bg-secondary rounded-full overflow-hidden">
+                    <div
+                      className={`h-full transition-all ${
+                        currentPlan.currentStores >= currentPlan.maxStores
+                          ? 'bg-destructive'
+                          : 'bg-primary'
+                      }`}
+                      style={{
+                        width: `${Math.min((currentPlan.currentStores / currentPlan.maxStores) * 100, 100)}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="text-sm font-medium">
+                  {currentPlan.currentStores} / {currentPlan.maxStores}
                 </div>
               </div>
-              <div className="text-sm font-medium">
-                {currentPlan.currentStores} / {currentPlan.maxStores}
-              </div>
-            </div>
-            {currentPlan.maxStores - currentPlan.currentStores > 0 && (
-              <p className="text-sm text-muted-foreground mt-3">
-                Bạn còn có thể tạo thêm <strong>{currentPlan.maxStores - currentPlan.currentStores}</strong> cửa hàng nữa
-              </p>
-            )}
-          </CardContent>
-        </Card>
+              {currentPlan.maxStores - currentPlan.currentStores > 0 && (
+                <p className="text-sm text-muted-foreground mt-3">
+                  Bạn còn có thể tạo thêm <strong>{currentPlan.maxStores - currentPlan.currentStores}</strong> cửa hàng nữa
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Subscription Status Card */}
+          {currentPlan.endDate && (
+            <Card className={`mb-8 ${currentPlan.isExpired ? 'border-destructive' : currentPlan.daysRemaining && currentPlan.daysRemaining <= 7 ? 'border-yellow-500' : ''}`}>
+              <CardHeader>
+                <CardTitle className="flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    {currentPlan.isExpired ? '⚠️' : currentPlan.daysRemaining && currentPlan.daysRemaining <= 7 ? '⏰' : '✅'} 
+                    Trạng thái gói dịch vụ
+                  </span>
+                  <Badge variant={currentPlan.status === 'active' ? 'default' : currentPlan.status === 'expired' ? 'destructive' : 'secondary'}>
+                    {currentPlan.status === 'active' ? 'Đang hoạt động' : currentPlan.status === 'expired' ? 'Hết hạn' : 'Đã hủy'}
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <div className="text-sm text-muted-foreground mb-1">Ngày bắt đầu</div>
+                    <div className="font-semibold">
+                      {currentPlan.startDate ? new Date(currentPlan.startDate).toLocaleDateString('vi-VN') : 'N/A'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-sm text-muted-foreground mb-1">Ngày hết hạn</div>
+                    <div className="font-semibold">
+                      {new Date(currentPlan.endDate).toLocaleDateString('vi-VN')}
+                    </div>
+                  </div>
+                </div>
+
+                {currentPlan.daysRemaining !== null && (
+                  <div className={`p-3 rounded-lg ${
+                    currentPlan.isExpired 
+                      ? 'bg-destructive/10 text-destructive' 
+                      : currentPlan.daysRemaining <= 7 
+                        ? 'bg-yellow-50 text-yellow-800'
+                        : 'bg-green-50 text-green-800'
+                  }`}>
+                    <div className="font-semibold">
+                      {currentPlan.isExpired 
+                        ? `Đã hết hạn ${Math.abs(currentPlan.daysRemaining)} ngày trước`
+                        : `Còn ${currentPlan.daysRemaining} ngày`
+                      }
+                    </div>
+                    {currentPlan.isExpired && (
+                      <div className="text-sm mt-1">
+                        Vui lòng gia hạn để tiếp tục sử dụng dịch vụ
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                  <div>
+                    <div className="font-semibold">Tự động gia hạn</div>
+                    <div className="text-sm text-muted-foreground">
+                      {currentPlan.autoRenewal 
+                        ? 'Gói sẽ tự động gia hạn khi hết hạn'
+                        : 'Gói sẽ không tự động gia hạn'
+                      }
+                    </div>
+                  </div>
+                  <Button
+                    variant={currentPlan.autoRenewal ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={handleToggleAutoRenewal}
+                    disabled={currentPlan.status === 'cancelled'}
+                  >
+                    {currentPlan.autoRenewal ? 'Đang bật' : 'Đã tắt'}
+                  </Button>
+                </div>
+
+                {currentPlan.planId !== 'basic' && currentPlan.status === 'active' && (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="w-full"
+                    onClick={handleCancelSubscription}
+                  >
+                    Hủy gói dịch vụ
+                  </Button>
+                )}
+                
+                {currentPlan.planId === 'basic' && (
+                  <div className="text-sm text-muted-foreground text-center p-2 bg-muted/50 rounded">
+                    💡 Gói Cơ Bản không thể hủy. Vui lòng nâng cấp hoặc liên hệ hỗ trợ.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </>
       )}
 
       <div className="grid md:grid-cols-3 gap-6">
         {plans.map((plan) => {
-          const isCurrentPlan = currentPlan?.maxStores === plan.maxStores;
-          const canUpgrade = currentPlan && currentPlan.maxStores < plan.maxStores;
+          const isCurrentPlan = currentPlan?.planId === plan.id;
+          const canUpgrade = currentPlan && (
+            currentPlan.maxStores < plan.maxStores || 
+            currentPlan.isExpired ||
+            currentPlan.status === 'cancelled'
+          );
 
           return (
             <Card
@@ -262,7 +484,19 @@ export default function SubscriptionPage() {
         <ul className="space-y-2 text-sm text-muted-foreground">
           <li className="flex items-start gap-2">
             <span className="text-primary">•</span>
-            <span>Giá trên là giá theo tháng, thanh toán hàng tháng (chưa bao gồm VAT)</span>
+            <span>Giá trên là giá theo tháng, thanh toán hàng tháng (đã bao gồm VAT 10%)</span>
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="text-primary">•</span>
+            <span><strong>Gói Cơ Bản (199.000đ/tháng)</strong>: Dành cho 1 cửa hàng, phù hợp cho cửa hàng nhỏ mới bắt đầu</span>
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="text-primary">•</span>
+            <span><strong>Gói Chuyên Nghiệp (499.000đ/tháng)</strong>: Dành cho tối đa 5 cửa hàng, phù hợp cho chuỗi cửa hàng vừa và nhỏ</span>
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="text-primary">•</span>
+            <span><strong>Gói Doanh Nghiệp (1.999.000đ/tháng)</strong>: Không giới hạn cửa hàng, phù hợp cho doanh nghiệp lớn</span>
           </li>
           <li className="flex items-start gap-2">
             <span className="text-primary">•</span>
@@ -271,6 +505,10 @@ export default function SubscriptionPage() {
           <li className="flex items-start gap-2">
             <span className="text-primary">•</span>
             <span>Dữ liệu của bạn sẽ được bảo toàn 100% khi thay đổi gói</span>
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="text-primary">•</span>
+            <span>Gói dịch vụ tự động gia hạn hàng tháng. Bạn có thể tắt tự động gia hạn bất kỳ lúc nào</span>
           </li>
           <li className="flex items-start gap-2">
             <span className="text-primary">•</span>

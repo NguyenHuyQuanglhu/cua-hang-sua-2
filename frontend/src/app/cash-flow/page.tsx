@@ -230,14 +230,14 @@ export default function CashFlowPage() {
     const result = await generateCashTransactionsExcel(sortedTransactions);
     if (result.success && result.data) {
         const link = document.createElement("a");
-        link.href = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${result.data}`;
-        link.download = "so_quy.xlsx";
+        link.href = `data:text/csv;charset=utf-8;base64,${result.data}`;
+        link.download = "so_quy.csv";
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
         toast({ title: "Thành công", description: "Đã xuất file sổ quỹ." });
     } else {
-        toast({ variant: "destructive", title: "Lỗi", description: result.error });
+        toast({ variant: "destructive", title: "Lỗi", description: result.error || "Không thể xuất file" });
     }
   }
 
