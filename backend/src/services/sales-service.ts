@@ -165,7 +165,7 @@ export class SalesService {
           status, total_amount, vat_amount, final_amount, discount, discount_type, 
           discount_value, tier_discount_percentage, tier_discount_amount, 
           points_used, points_discount, customer_payment, previous_debt, 
-          remaining_debt, created_by, created_at, updated_at)
+          remaining_debt, CreatedBy, created_at, updated_at)
          VALUES (@id, @storeId, @invoiceNumber, @customerId, @shiftId, @transactionDate,
                  @status, @totalAmount, @vatAmount, @finalAmount, @discount, @discountType,
                  @discountValue, @tierDiscountPercentage, @tierDiscountAmount,

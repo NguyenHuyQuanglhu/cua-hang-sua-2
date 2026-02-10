@@ -76,7 +76,7 @@ interface SaleRecord {
   customer_payment: number | null;
   previous_debt: number | null;
   remaining_debt: number | null;
-  created_by: string | null;
+  CreatedBy: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -127,6 +127,7 @@ export class SalesRepository extends BaseRepository<Sale> {
       customerPayment: r.customer_payment ?? undefined,
       previousDebt: r.previous_debt ?? undefined,
       remainingDebt: r.remaining_debt ?? undefined,
+      createdBy: r.CreatedBy || undefined,
       createdAt: r.created_at
         ? r.created_at instanceof Date
           ? r.created_at.toISOString()
