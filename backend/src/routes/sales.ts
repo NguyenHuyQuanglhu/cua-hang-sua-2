@@ -1,5 +1,5 @@
 import { Router, Response } from 'express';
-import { query } from '../db';
+import { query, queryOne } from '../db';
 import { authenticate, storeContext, AuthRequest } from '../middleware/auth';
 import { salesService, InventoryInsufficientStockError } from '../services';
 import { salesSPRepository } from '../repositories/sales-sp-repository';
@@ -9,6 +9,36 @@ const router = Router();
 
 router.use(authenticate);
 router.use(storeContext);
+
+// Helper function to generate invoice number
+async function generateInvoiceNumber(storeId: string): Promise<string> {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = (today.getMonth() + 1).toString().padStart(2, '0');
+  const day = today.getDate().toString().padStart(2, '0');
+  const datePrefix = `PN${year}${month}${day}`;
+
+  const result = await queryOne<{ invoice_number: string }>(
+    `SELECT TOP 1 invoice_number 
+     FROM Sales 
+     WHERE store_id = @storeId AND invoice_number LIKE @prefix + '%' 
+     ORDER BY invoice_number DESC`,
+    { storeId, prefix: datePrefix }
+  );
+
+  let nextSequence = 1;
+  if (result) {
+    const lastSequence = parseInt(
+      result.invoice_number.substring(datePrefix.length),
+      10
+    );
+    if (!isNaN(lastSequence)) {
+      nextSequence = lastSequence + 1;
+    }
+  }
+
+  return `${datePrefix}${nextSequence.toString().padStart(4, '0')}`;
+}
 
 // GET /api/sales
 router.get('/', async (req: AuthRequest, res: Response) => {
@@ -261,11 +291,75 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       pointsUsed, pointsDiscount, status
     } = req.body;
 
-    console.log('[POST /api/sales] Creating sale:', { storeId, customerId, shiftId, itemsCount: items?.length, totalAmount, finalAmount });
+    console.log('[POST /api/sales] Creating sale:', { storeId, customerId, shiftId, itemsCount: items?.length, totalAmount, finalAmount, previousDebt });
 
-    // Validate items
-    if (!items || items.length === 0) {
+    // Allow empty items if this is a debt payment only (previousDebt > 0 and totalAmount = 0)
+    const isDebtPaymentOnly = previousDebt > 0 && totalAmount === 0 && (!items || items.length === 0);
+    
+    // Validate items (unless it's debt payment only)
+    if (!isDebtPaymentOnly && (!items || items.length === 0)) {
       res.status(400).json({ error: 'Đơn hàng phải có ít nhất một sản phẩm' });
+      return;
+    }
+
+    // If debt payment only, create a simple sale record without inventory management
+    if (isDebtPaymentOnly) {
+      console.log('[POST /api/sales] Creating debt payment only sale');
+      
+      const saleId = crypto.randomUUID();
+      const invoiceNumber = await generateInvoiceNumber(storeId);
+      
+      await query(
+        `INSERT INTO Sales (
+          id, store_id, customer_id, shift_id, invoice_number, transaction_date,
+          total_amount, discount, discount_type, discount_value, vat_amount, final_amount,
+          customer_payment, previous_debt, remaining_debt, payment_method, status, created_at, updated_at
+        ) VALUES (
+          @id, @storeId, @customerId, @shiftId, @invoiceNumber, GETDATE(),
+          @totalAmount, @discount, @discountType, @discountValue, @vatAmount, @finalAmount,
+          @customerPayment, @previousDebt, @remainingDebt, @paymentMethod, @status, GETDATE(), GETDATE()
+        )`,
+        {
+          id: saleId,
+          storeId,
+          customerId: customerId || null,
+          shiftId: shiftId || null,
+          invoiceNumber,
+          totalAmount: 0,
+          discount: 0,
+          discountType: 'amount',
+          discountValue: 0,
+          vatAmount: 0,
+          finalAmount: 0,
+          customerPayment: customerPayment || 0,
+          previousDebt: previousDebt || 0,
+          remainingDebt: 0, // Debt is paid
+          paymentMethod: req.body.paymentMethod || 'cash',
+          status: status || 'printed',
+        }
+      );
+
+      // Update customer debt
+      if (customerId && previousDebt > 0) {
+        await query(
+          `UPDATE Customers 
+           SET total_debt = ISNULL(total_debt, 0) - @previousDebt,
+               total_paid = ISNULL(total_paid, 0) + @previousDebt,
+               updated_at = GETDATE()
+           WHERE id = @customerId AND store_id = @storeId`,
+          { customerId, previousDebt, storeId }
+        );
+      }
+
+      console.log('[POST /api/sales] Debt payment sale created:', saleId, invoiceNumber);
+      
+      res.status(201).json({
+        id: saleId,
+        invoiceNumber,
+        status: status || 'printed',
+        finalAmount: 0,
+        conversions: [],
+      });
       return;
     }
 

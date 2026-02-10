@@ -1,0 +1,1 @@
+{"version":3,"file":"cache-interface.js","sourceRoot":"","sources":["../../../src/services/cache/cache-interface.ts"],"names":[],"mappings":";AAAA;;;;;;;GAOG;;;AA2FH;;GAEG;AACU,QAAA,oBAAoB,GAAgB;IAC/C,KAAK,EAAE,CAAC,GAAG,EAAE,GAAG,IAAI,EAAE,YAAY;IAClC,OAAO,EAAE,KAAK;IACd,iBAAiB,EAAE,EAAE,GAAG,IAAI,EAAE,WAAW;IACzC,SAAS,EAAE,EAAE;CACd,CAAC"}

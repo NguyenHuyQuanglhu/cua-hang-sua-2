@@ -52,7 +52,7 @@ router.get('/active', async (req: AuthRequest, res: Response) => {
       `SELECT s.*, u.hourly_rate, u.max_shift_hours
        FROM Shifts s
        LEFT JOIN Users u ON s.user_id = u.Id
-       WHERE s.store_id = @storeId AND s.user_id = @userId AND s.status = 'open'
+       WHERE s.store_id = @storeId AND s.user_id = @userId AND s.status = 'active'
        ORDER BY s.start_time DESC`,
       { storeId, userId }
     );
@@ -131,9 +131,9 @@ router.post('/start', async (req: AuthRequest, res: Response) => {
     const userName = req.user!.displayName || req.user!.email;
     const { startingCash } = req.body;
 
-    // Check if there's already an open shift
+    // Check if there's already an active shift
     const existingShift = await queryOne(
-      `SELECT id FROM Shifts WHERE store_id = @storeId AND user_id = @userId AND status = 'open'`,
+      `SELECT id FROM Shifts WHERE store_id = @storeId AND user_id = @userId AND status = 'active'`,
       { storeId, userId }
     );
 
@@ -148,7 +148,7 @@ router.post('/start', async (req: AuthRequest, res: Response) => {
     const result = await query(
       `INSERT INTO Shifts (id, store_id, user_id, user_name, status, start_time, starting_cash, created_at, updated_at)
        OUTPUT INSERTED.*
-       VALUES (NEWID(), @storeId, @userId, @userName, 'open', @startTime, @startingCash, @createdAt, @updatedAt)`,
+       VALUES (NEWID(), @storeId, @userId, @userName, 'active', @startTime, @startingCash, @createdAt, @updatedAt)`,
       { storeId, userId, userName, startTime: now, startingCash, createdAt: now, updatedAt: now }
     );
 

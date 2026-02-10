@@ -77,10 +77,12 @@ const FormattedNumberInput = ({
 
 export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps) {
   const [isCloseShiftDialogOpen, setIsCloseShiftDialogOpen] = useState(false)
+  const [isOvertimeDialogOpen, setIsOvertimeDialogOpen] = useState(false)
   const [isClosing, setIsClosing] = useState(false)
   const [additionalCash, setAdditionalCash] = useState(0)
   const [elapsedTime, setElapsedTime] = useState('')
   const [hoursWorked, setHoursWorked] = useState(0)
+  const [hasAskedOvertime, setHasAskedOvertime] = useState(false)
   const { toast } = useToast()
   const router = useRouter()
   
@@ -109,6 +111,24 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
         // Calculate hours worked (with decimal for partial hours)
         const totalHours = diff / (1000 * 60 * 60)
         setHoursWorked(totalHours)
+
+        // Hỏi tăng ca khi đủ 8 tiếng (chỉ hỏi 1 lần)
+        if (totalHours >= 8 && totalHours < 8.02 && !hasAskedOvertime) {
+          setHasAskedOvertime(true)
+          setIsOvertimeDialogOpen(true)
+        }
+
+        // Tự động đóng ca khi đủ 12 tiếng
+        if (totalHours >= 12 && totalHours < 12.02) {
+          toast({
+            title: 'Đã đủ 12 tiếng',
+            description: 'Ca làm việc đã đạt giới hạn tối đa. Hệ thống sẽ tự động đóng ca.',
+            variant: 'destructive'
+          })
+          setTimeout(() => {
+            setIsCloseShiftDialogOpen(true)
+          }, 2000)
+        }
       } catch (error) {
         console.error('Error calculating elapsed time:', error)
         setElapsedTime('00:00:00')
@@ -120,7 +140,7 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
     const interval = setInterval(updateElapsedTime, 1000)
     
     return () => clearInterval(interval)
-  }, [activeShift?.startTime])
+  }, [activeShift?.startTime, hasAskedOvertime, toast])
   
   // Tính lương theo giờ
   const hourlyRate = activeShift.hourlyRate || 20000; // Mặc định 20k/giờ
@@ -131,29 +151,59 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
 
   const handleCloseShift = async () => {
     setIsClosing(true)
-    const result = await closeShift(activeShift.id, { endingCash: calculatedEndingCash })
-    if (result.success) {
-      toast({
-        title: 'Đã đóng ca',
-        description: 'Ca làm việc của bạn đã được đóng thành công.',
-      })
-      setIsCloseShiftDialogOpen(false)
-      
-      // Call the callback if provided
-      if (onShiftClosed) {
-        onShiftClosed()
+    try {
+      const result = await closeShift(activeShift.id, { endingCash: calculatedEndingCash })
+      if (result.success) {
+        toast({
+          title: 'Đã đóng ca',
+          description: 'Ca làm việc của bạn đã được đóng thành công.',
+        })
+        setIsCloseShiftDialogOpen(false)
+        
+        // Call the callback if provided
+        if (onShiftClosed) {
+          onShiftClosed()
+        } else {
+          // Default behavior: redirect to login
+          router.push('/login')
+        }
       } else {
-        // Default behavior: redirect to login
-        router.push('/login')
+        toast({
+          variant: 'destructive',
+          title: 'Lỗi đóng ca',
+          description: result.error || 'Không thể đóng ca làm việc',
+        })
       }
-    } else {
+    } catch (error) {
+      console.error('Error closing shift:', error)
       toast({
         variant: 'destructive',
         title: 'Lỗi đóng ca',
-        description: result.error,
+        description: error instanceof Error ? error.message : 'Đã xảy ra lỗi khi đóng ca',
+      })
+    } finally {
+      setIsClosing(false)
+    }
+  }
+
+  const handleOvertimeResponse = (acceptOvertime: boolean) => {
+    setIsOvertimeDialogOpen(false)
+    if (!acceptOvertime) {
+      // Không tăng ca - tự động đóng ca
+      toast({
+        title: 'Kết thúc ca làm việc',
+        description: 'Bạn đã từ chối tăng ca. Vui lòng đóng ca.',
+      })
+      setTimeout(() => {
+        setIsCloseShiftDialogOpen(true)
+      }, 1000)
+    } else {
+      // Chấp nhận tăng ca
+      toast({
+        title: 'Tăng ca được chấp nhận',
+        description: 'Bạn có thể làm việc thêm đến 12 tiếng.',
       })
     }
-    setIsClosing(false)
   }
 
   return (
@@ -307,6 +357,46 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
               disabled={isClosing}
             >
               {isClosing ? 'Đang đóng...' : 'Xác nhận Đóng ca'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog hỏi tăng ca */}
+      <Dialog open={isOvertimeDialogOpen} onOpenChange={setIsOvertimeDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>⏰ Đã đủ 8 tiếng làm việc</DialogTitle>
+            <DialogDescription>
+              Bạn đã làm việc đủ 8 tiếng. Bạn có muốn tăng ca thêm không?
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="p-4 bg-blue-50 dark:bg-blue-950/20 rounded-lg">
+              <p className="text-sm text-blue-700 dark:text-blue-400">
+                ✅ <strong>Chấp nhận tăng ca:</strong> Bạn có thể làm việc thêm đến 12 tiếng
+              </p>
+              <p className="text-sm text-blue-700 dark:text-blue-400 mt-2">
+                ❌ <strong>Không tăng ca:</strong> Hệ thống sẽ yêu cầu bạn đóng ca ngay
+              </p>
+            </div>
+            <div className="p-3 bg-green-50 dark:bg-green-950/20 rounded">
+              <p className="text-sm font-semibold text-green-700 dark:text-green-400">
+                💰 Lương hiện tại: {formatCurrency(calculatedSalary)}
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => handleOvertimeResponse(false)}
+            >
+              Không, đóng ca ngay
+            </Button>
+            <Button
+              onClick={() => handleOvertimeResponse(true)}
+            >
+              Có, tôi muốn tăng ca
             </Button>
           </DialogFooter>
         </DialogContent>

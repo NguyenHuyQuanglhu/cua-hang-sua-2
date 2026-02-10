@@ -745,13 +745,20 @@ export default function POSPage() {
 
   // Form Submission - Create sale via SQL Server API
   const handleCreateSale = async () => {
-    if (cart.length === 0) {
+    // Allow payment if either has items OR paying debt
+    if (cart.length === 0 && !includeDebtPayment) {
       toast({
         variant: 'destructive',
         title: 'Đơn hàng trống',
-        description: 'Vui lòng thêm sản phẩm vào đơn hàng.',
+        description: 'Vui lòng thêm sản phẩm vào đơn hàng hoặc chọn thanh toán nợ.',
       })
       return
+    }
+
+    // If only paying debt (no items), process debt payment directly
+    if (cart.length === 0 && includeDebtPayment && previousDebt > 0) {
+      await processDebtPaymentOnly();
+      return;
     }
 
     // Check credit limit
@@ -772,6 +779,9 @@ export default function POSPage() {
   const handlePaymentMethodSelected = (method: PaymentMethod) => {
     setSelectedPaymentMethod(method);
     
+    // Check if this is debt-only payment
+    const isDebtOnly = cart.length === 0 && includeDebtPayment;
+    
     if (method === 'qr') {
       // Show QR payment dialog
       setShowQRPaymentDialog(true);
@@ -779,13 +789,124 @@ export default function POSPage() {
       // Show payment gateway dialog (VNPay, MoMo, ZaloPay, Installment)
       setShowPaymentGatewayDialog(true);
     } else if (method === 'cash') {
-      // Process cash payment directly
-      processSale('cash');
+      // Process payment directly
+      if (isDebtOnly) {
+        processDebtPaymentOnly('cash');
+      } else {
+        processSale('cash');
+      }
     } else {
-      // For card and transfer, process directly for now
-      processSale(method);
+      // For card and transfer, process directly
+      if (isDebtOnly) {
+        processDebtPaymentOnly(method);
+      } else {
+        processSale(method);
+      }
     }
   }
+
+  // Process debt payment only (no sale items) - Create a sale record for tracking
+  const processDebtPaymentOnly = async (paymentMethod: PaymentMethod = 'cash') => {
+    if (!selectedCustomerId || selectedCustomerId === WALK_IN_CUSTOMER_ID) {
+      toast({
+        variant: 'destructive',
+        title: 'Lỗi',
+        description: 'Vui lòng chọn khách hàng để thanh toán nợ.',
+      });
+      return;
+    }
+
+    if (previousDebt <= 0) {
+      toast({
+        variant: 'destructive',
+        title: 'Lỗi',
+        description: 'Khách hàng không có nợ cần thanh toán.',
+      });
+      return;
+    }
+
+    if (customerPayment < previousDebt) {
+      toast({
+        variant: 'destructive',
+        title: 'Số tiền không đủ',
+        description: `Vui lòng nhập số tiền ít nhất ${formatCurrency(previousDebt)}`,
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      // Create a sale record with no items (debt payment only)
+      const saleData: Partial<Sale> & { isChangeReturned?: boolean; items?: any[] } = {
+        customerId: selectedCustomerId,
+        shiftId: activeShift?.id,
+        transactionDate: new Date().toISOString(),
+        totalAmount: 0, // No products
+        discount: 0,
+        discountType: 'amount',
+        discountValue: 0,
+        vatAmount: 0,
+        finalAmount: 0, // No products
+        customerPayment: customerPayment,
+        previousDebt: previousDebt, // The debt being paid
+        remainingDebt: 0, // After payment, debt should be 0
+        paymentMethod: paymentMethod,
+        status: 'printed', // Mark as printed since no invoice needed
+        isChangeReturned: customerPayment > previousDebt ? true : false,
+        items: [], // Empty items array
+      };
+
+      const result = await upsertSaleTransaction(saleData as Record<string, unknown>);
+
+      if (result.success && result.saleData) {
+        const invoiceNumber = result.saleData.invoiceNumber as string;
+        console.log('[POS] Debt payment sale created:', invoiceNumber);
+        
+        toast({
+          title: '💰 Thanh toán nợ thành công!',
+          description: (
+            <div className="space-y-1">
+              <p>Mã giao dịch: <strong>{invoiceNumber}</strong></p>
+              <p>Đã thanh toán: <strong>{formatCurrency(previousDebt)}</strong></p>
+              <p className="text-xs text-muted-foreground">
+                Phương thức: {paymentMethod === 'cash' ? 'Tiền mặt' : 
+                             paymentMethod === 'card' ? 'Thẻ' : 
+                             paymentMethod === 'transfer' ? 'Chuyển khoản' :
+                             paymentMethod === 'qr' ? 'QR Code' : 
+                             paymentMethod === 'gateway' ? 'Cổng thanh toán' : 'Khác'}
+              </p>
+              {customerPayment > previousDebt && (
+                <p className="text-xs text-green-600">
+                  Tiền thối lại: {formatCurrency(customerPayment - previousDebt)}
+                </p>
+              )}
+            </div>
+          ),
+        });
+
+        // Reset state
+        setCustomerPayment(0);
+        setIncludeDebtPayment(false);
+        setSelectedCustomerId(WALK_IN_CUSTOMER_ID);
+        setSelectedPaymentMethod(null);
+
+        // Refresh customer data to update debt
+        await fetchCustomers();
+      } else {
+        throw new Error(result.error || 'Không thể tạo giao dịch thanh toán nợ');
+      }
+    } catch (error) {
+      console.error('[POS] Error recording debt payment:', error);
+      toast({
+        variant: 'destructive',
+        title: 'Lỗi thanh toán',
+        description: error instanceof Error ? error.message : 'Không thể ghi nhận thanh toán nợ. Vui lòng thử lại.',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const processSale = async (paymentMethod: PaymentMethod = 'cash') => {
 
@@ -842,6 +963,36 @@ export default function POSPage() {
       
       setLastSaleId(saleId);
 
+      // Nếu có thanh toán nợ cũ, tạo payment record
+      if (includeDebtPayment && previousDebt > 0 && selectedCustomerId && selectedCustomerId !== WALK_IN_CUSTOMER_ID) {
+        try {
+          const paymentData = {
+            customerId: selectedCustomerId,
+            amount: previousDebt,
+            paymentDate: new Date().toISOString(),
+            paymentMethod: paymentMethod,
+            notes: `Thanh toán nợ cũ cùng đơn hàng ${invoiceNumber}`,
+          };
+
+          const paymentResult = await apiClient.createPayment(paymentData);
+          
+          if (paymentResult) {
+            console.log('[POS] Debt payment recorded successfully:', paymentResult);
+            toast({
+              title: '💰 Đã ghi nhận thanh toán nợ',
+              description: `Thanh toán ${formatCurrency(previousDebt)} cho nợ cũ`,
+            });
+          }
+        } catch (error) {
+          console.error('[POS] Error recording debt payment:', error);
+          toast({
+            variant: 'destructive',
+            title: 'Cảnh báo',
+            description: 'Đơn hàng đã tạo nhưng không ghi nhận được thanh toán nợ. Vui lòng kiểm tra lại.',
+          });
+        }
+      }
+
       // Save sale data for invoice dialog
       const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
       setLastSaleData({
@@ -870,6 +1021,11 @@ export default function POSPage() {
                            paymentMethod === 'qr' ? 'QR Code' : 
                            paymentMethod === 'gateway' ? 'Cổng thanh toán' : 'Khác'}
             </p>
+            {includeDebtPayment && previousDebt > 0 && (
+              <p className="text-xs text-green-600 font-semibold">
+                ✓ Đã thanh toán nợ cũ: {formatCurrency(previousDebt)}
+              </p>
+            )}
           </div>
         ),
         action: (
@@ -1616,11 +1772,11 @@ export default function POSPage() {
                 <Button
                     className="w-full h-14 text-lg"
                     onClick={handleCreateSale}
-                    disabled={isSubmitting || cart.length === 0 || isLocked || exceedsCreditLimit}
+                    disabled={isSubmitting || (cart.length === 0 && !includeDebtPayment) || isLocked || exceedsCreditLimit}
                 >
                     {selectedPaymentMethod === 'qr' && <QrCode className="mr-2 h-5 w-5" />}
                     {selectedPaymentMethod === 'cash' && <Banknote className="mr-2 h-5 w-5" />}
-                    {exceedsCreditLimit ? 'Vượt hạn mức' : !selectedPaymentMethod ? 'Thanh toán' : ''}
+                    {exceedsCreditLimit ? 'Vượt hạn mức' : !selectedPaymentMethod ? (includeDebtPayment && cart.length === 0 ? 'Thanh toán nợ' : 'Thanh toán') : ''}
                     {!exceedsCreditLimit && selectedPaymentMethod === 'qr' && 'QR Code'}
                     {!exceedsCreditLimit && selectedPaymentMethod === 'cash' && 'Tiền mặt'}
                     {!exceedsCreditLimit && selectedPaymentMethod === 'card' && 'Thẻ'}
