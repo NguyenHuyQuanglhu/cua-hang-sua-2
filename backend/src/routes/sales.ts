@@ -292,6 +292,7 @@ router.get('/:id/items', async (req: AuthRequest, res: Response) => {
 router.post('/', async (req: AuthRequest, res: Response) => {
   try {
     const storeId = req.storeId!;
+    const userId = req.user!.id;
     const { 
       customerId, shiftId, items, totalAmount, vatAmount, finalAmount,
       discount, discountType, discountValue, customerPayment,
@@ -299,7 +300,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       pointsUsed, pointsDiscount, status
     } = req.body;
 
-    console.log('[POST /api/sales] Creating sale:', { storeId, customerId, shiftId, itemsCount: items?.length, totalAmount, finalAmount, previousDebt });
+    console.log('[POST /api/sales] Creating sale:', { storeId, userId, customerId, shiftId, itemsCount: items?.length, totalAmount, finalAmount, previousDebt });
 
     // Allow empty items if this is a debt payment only (previousDebt > 0 and totalAmount = 0)
     const isDebtPaymentOnly = previousDebt > 0 && totalAmount === 0 && (!items || items.length === 0);
@@ -321,7 +322,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
         `INSERT INTO Sales (
           id, store_id, customer_id, shift_id, invoice_number, transaction_date,
           total_amount, discount, discount_type, discount_value, vat_amount, final_amount,
-          customer_payment, previous_debt, remaining_debt, payment_method, status, created_by, created_at, updated_at
+          customer_payment, previous_debt, remaining_debt, payment_method, status, CreatedBy, created_at, updated_at
         ) VALUES (
           @id, @storeId, @customerId, @shiftId, @invoiceNumber, GETDATE(),
           @totalAmount, @discount, @discountType, @discountValue, @vatAmount, @finalAmount,

@@ -28,7 +28,7 @@ CREATE PROCEDURE sp_Sales_Create
     @previousDebt DECIMAL(18,2) = 0,
     @remainingDebt DECIMAL(18,2) = 0,
     @status NVARCHAR(20) = 'pending',
-    @createdBy NVARCHAR(36) = NULL
+    @createdBy UNIQUEIDENTIFIER = NULL
 AS
 BEGIN
     SET NOCOUNT ON;
