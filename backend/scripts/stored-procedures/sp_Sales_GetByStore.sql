@@ -61,6 +61,7 @@ BEGIN
         s.CustomerPayment AS customerPayment,
         s.PreviousDebt AS previousDebt,
         s.RemainingDebt AS remainingDebt,
+        s.CreatedBy AS createdBy,
         s.CreatedAt AS createdAt,
         s.UpdatedAt AS updatedAt,
         (SELECT COUNT(*) FROM SalesItems si WHERE si.SalesTransactionId = s.Id) AS itemCount

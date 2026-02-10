@@ -88,7 +88,8 @@ export class SalesService {
    */
   async createSale(
     saleData: CreateSaleInput,
-    storeId: string
+    storeId: string,
+    userId?: string
   ): Promise<CreateSaleResult> {
     return withTransaction(async (transaction) => {
       // Validate items
@@ -164,12 +165,12 @@ export class SalesService {
           status, total_amount, vat_amount, final_amount, discount, discount_type, 
           discount_value, tier_discount_percentage, tier_discount_amount, 
           points_used, points_discount, customer_payment, previous_debt, 
-          remaining_debt, created_at, updated_at)
+          remaining_debt, created_by, created_at, updated_at)
          VALUES (@id, @storeId, @invoiceNumber, @customerId, @shiftId, @transactionDate,
                  @status, @totalAmount, @vatAmount, @finalAmount, @discount, @discountType,
                  @discountValue, @tierDiscountPercentage, @tierDiscountAmount,
                  @pointsUsed, @pointsDiscount, @customerPayment, @previousDebt,
-                 @remainingDebt, @createdAt, @updatedAt)`,
+                 @remainingDebt, @createdBy, @createdAt, @updatedAt)`,
         {
           id: saleId,
           storeId,
@@ -191,6 +192,7 @@ export class SalesService {
           customerPayment,
           previousDebt,
           remainingDebt,
+          createdBy: userId || null,
           createdAt: now,
           updatedAt: now,
         }

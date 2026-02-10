@@ -36,6 +36,7 @@ export interface Sale {
   customerPayment?: number;
   previousDebt?: number;
   remainingDebt?: number;
+  createdBy?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -75,6 +76,7 @@ interface SaleRecord {
   customer_payment: number | null;
   previous_debt: number | null;
   remaining_debt: number | null;
+  created_by: string | null;
   created_at: Date;
   updated_at: Date;
 }

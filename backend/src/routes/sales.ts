@@ -44,6 +44,8 @@ async function generateInvoiceNumber(storeId: string): Promise<string> {
 router.get('/', async (req: AuthRequest, res: Response) => {
   try {
     const storeId = req.storeId!;
+    const userId = req.user!.id;
+    const userRole = req.user!.role;
     const { page = '1', pageSize = '20', search, status, customerId, dateFrom, dateTo } = req.query;
     
     const pageNum = parseInt(page as string);
@@ -58,6 +60,12 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     };
 
     let sales = await salesSPRepository.getByStore(storeId, filters);
+
+    // Filter by employee: only show sales created by current user
+    // Exception: owner and company_manager can see all sales
+    if (userRole !== 'owner' && userRole !== 'company_manager') {
+      sales = sales.filter(s => s.createdBy === userId);
+    }
 
     // Apply search filter (client-side since SP doesn't support it)
     if (search) {
@@ -313,11 +321,11 @@ router.post('/', async (req: AuthRequest, res: Response) => {
         `INSERT INTO Sales (
           id, store_id, customer_id, shift_id, invoice_number, transaction_date,
           total_amount, discount, discount_type, discount_value, vat_amount, final_amount,
-          customer_payment, previous_debt, remaining_debt, payment_method, status, created_at, updated_at
+          customer_payment, previous_debt, remaining_debt, payment_method, status, created_by, created_at, updated_at
         ) VALUES (
           @id, @storeId, @customerId, @shiftId, @invoiceNumber, GETDATE(),
           @totalAmount, @discount, @discountType, @discountValue, @vatAmount, @finalAmount,
-          @customerPayment, @previousDebt, @remainingDebt, @paymentMethod, @status, GETDATE(), GETDATE()
+          @customerPayment, @previousDebt, @remainingDebt, @paymentMethod, @status, @createdBy, GETDATE(), GETDATE()
         )`,
         {
           id: saleId,
@@ -336,6 +344,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
           remainingDebt: 0, // Debt is paid
           paymentMethod: req.body.paymentMethod || 'cash',
           status: status || 'printed',
+          createdBy: userId,
         }
       );
 
@@ -389,7 +398,8 @@ router.post('/', async (req: AuthRequest, res: Response) => {
         previousDebt,
         vatAmount,
       },
-      storeId
+      storeId,
+      userId
     );
 
     console.log('[POST /api/sales] Sale created:', result.sale.id, result.sale.invoiceNumber);

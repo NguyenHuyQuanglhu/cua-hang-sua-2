@@ -33,6 +33,7 @@ interface SaleSPRecord {
   customerPayment: number | null;
   previousDebt: number | null;
   remainingDebt: number | null;
+  createdBy: string | null;
   createdAt: Date;
   updatedAt: Date;
   // Joined fields from SP
@@ -163,6 +164,7 @@ export class SalesSPRepository extends SPBaseRepository<Sale> {
       customerPayment: record.customerPayment ?? undefined,
       previousDebt: record.previousDebt ?? undefined,
       remainingDebt: record.remainingDebt ?? undefined,
+      createdBy: record.createdBy || undefined,
       createdAt: record.createdAt
         ? record.createdAt instanceof Date
           ? record.createdAt.toISOString()

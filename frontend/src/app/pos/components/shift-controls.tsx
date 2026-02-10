@@ -78,13 +78,48 @@ const FormattedNumberInput = ({
 export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps) {
   const [isCloseShiftDialogOpen, setIsCloseShiftDialogOpen] = useState(false)
   const [isOvertimeDialogOpen, setIsOvertimeDialogOpen] = useState(false)
+  const [isCancelOvertimeDialogOpen, setIsCancelOvertimeDialogOpen] = useState(false)
   const [isClosing, setIsClosing] = useState(false)
   const [additionalCash, setAdditionalCash] = useState(0)
   const [elapsedTime, setElapsedTime] = useState('')
   const [hoursWorked, setHoursWorked] = useState(0)
   const [hasAskedOvertime, setHasAskedOvertime] = useState(false)
+  const [isOnOvertime, setIsOnOvertime] = useState(false) // Đang trong trạng thái tăng ca
+  const [overtimeCountdown, setOvertimeCountdown] = useState(180) // 180 giây = 3 phút
+  const [cancelReason, setCancelReason] = useState('') // Lý do hủy tăng ca
+  const [isSubmittingCancelRequest, setIsSubmittingCancelRequest] = useState(false)
   const { toast } = useToast()
   const router = useRouter()
+  
+  // Countdown cho dialog tăng ca - tự động đóng ca sau 3 phút nếu không trả lời
+  useEffect(() => {
+    if (!isOvertimeDialogOpen) {
+      setOvertimeCountdown(180) // Reset về 180 giây (3 phút)
+      return
+    }
+
+    const countdownInterval = setInterval(() => {
+      setOvertimeCountdown((prev) => {
+        if (prev <= 1) {
+          // Hết thời gian - tự động đóng ca
+          clearInterval(countdownInterval)
+          setIsOvertimeDialogOpen(false)
+          toast({
+            title: 'Hết thời gian trả lời',
+            description: 'Bạn không trả lời trong 3 phút. Hệ thống sẽ tự động đóng ca.',
+            variant: 'destructive'
+          })
+          setTimeout(() => {
+            setIsCloseShiftDialogOpen(true)
+          }, 1000)
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+
+    return () => clearInterval(countdownInterval)
+  }, [isOvertimeDialogOpen, toast])
   
   // Calculate elapsed time and hours worked from shift start
   useEffect(() => {
@@ -112,10 +147,15 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
         const totalHours = diff / (1000 * 60 * 60)
         setHoursWorked(totalHours)
 
-        // Hỏi tăng ca khi đủ 8 tiếng (chỉ hỏi 1 lần)
-        if (totalHours >= 8 && totalHours < 8.02 && !hasAskedOvertime) {
+        // Hỏi tăng ca khi còn 5 phút nữa là đủ 8 tiếng (7h55p)
+        // 7h55p = 7.9167 giờ, chỉ hỏi 1 lần
+        if (totalHours >= 7.9167 && totalHours < 7.93 && !hasAskedOvertime) {
           setHasAskedOvertime(true)
           setIsOvertimeDialogOpen(true)
+          toast({
+            title: '⏰ Sắp hết giờ làm việc',
+            description: 'Còn 5 phút nữa là đủ 8 tiếng. Vui lòng quyết định có tăng ca không.',
+          })
         }
 
         // Tự động đóng ca khi đủ 12 tiếng
@@ -199,10 +239,62 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
       }, 1000)
     } else {
       // Chấp nhận tăng ca
+      setIsOnOvertime(true)
       toast({
         title: 'Tăng ca được chấp nhận',
-        description: 'Bạn có thể làm việc thêm đến 12 tiếng.',
+        description: 'Bạn có thể làm việc thêm đến 12 tiếng. Có thể hủy tăng ca bất cứ lúc nào.',
       })
+    }
+  }
+
+  const handleCancelOvertime = async () => {
+    if (!cancelReason.trim()) {
+      toast({
+        title: 'Thiếu thông tin',
+        description: 'Vui lòng nhập lý do hủy tăng ca',
+        variant: 'destructive'
+      })
+      return
+    }
+
+    setIsSubmittingCancelRequest(true)
+    try {
+      // TODO: Gửi yêu cầu hủy tăng ca đến backend
+      // API sẽ tạo notification cho quản lý
+      const response = await fetch('/api/shifts/cancel-overtime-request', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'x-store-id': localStorage.getItem('currentStoreId') || '',
+        },
+        body: JSON.stringify({
+          shiftId: activeShift.id,
+          reason: cancelReason,
+          currentHours: hoursWorked,
+          employeeName: activeShift.userName,
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error('Không thể gửi yêu cầu')
+      }
+
+      setIsCancelOvertimeDialogOpen(false)
+      setCancelReason('')
+      toast({
+        title: '✅ Đã gửi yêu cầu',
+        description: 'Yêu cầu hủy tăng ca đã được gửi đến quản lý. Vui lòng chờ phê duyệt.',
+      })
+    } catch (error) {
+      console.error('Error submitting cancel request:', error)
+      toast({
+        title: 'Lỗi',
+        description: 'Không thể gửi yêu cầu hủy tăng ca. Vui lòng thử lại.',
+        variant: 'destructive'
+      })
+    } finally {
+      setIsSubmittingCancelRequest(false)
     }
   }
 
@@ -216,11 +308,26 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
         <div className="flex items-center gap-2">
           <Clock className="h-4 w-4" />
           <span>Thời gian ca: {elapsedTime}</span>
+          {isOnOvertime && (
+            <span className="ml-1 px-2 py-0.5 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 text-xs font-semibold rounded">
+              TĂNG CA
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <CircleDollarSign className="h-4 w-4" />
           <span>Tiền đầu ca: {formatCurrency(activeShift.startingCash)}</span>
         </div>
+        {isOnOvertime && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="border-orange-300 text-orange-700 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-400 dark:hover:bg-orange-900/20"
+            onClick={() => setIsCancelOvertimeDialogOpen(true)}
+          >
+            Yêu cầu hủy tăng ca
+          </Button>
+        )}
         <Button
           size="sm"
           variant="destructive"
@@ -362,27 +469,41 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
         </DialogContent>
       </Dialog>
 
-      {/* Dialog hỏi tăng ca */}
+      {/* Dialog hỏi tăng ca với countdown 3 phút */}
       <Dialog open={isOvertimeDialogOpen} onOpenChange={setIsOvertimeDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>⏰ Đã đủ 8 tiếng làm việc</DialogTitle>
+            <DialogTitle>⏰ Sắp hết giờ làm việc (còn 5 phút)</DialogTitle>
             <DialogDescription>
-              Bạn đã làm việc đủ 8 tiếng. Bạn có muốn tăng ca thêm không?
+              Bạn sắp làm đủ 8 tiếng. Bạn có muốn tăng ca thêm không?
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
+            <div className="p-4 bg-red-50 dark:bg-red-950/20 rounded-lg border-2 border-red-200 dark:border-red-800">
+              <p className="text-center text-3xl font-bold text-red-600 dark:text-red-400">
+                ⏱️ {Math.floor(overtimeCountdown / 60)}:{(overtimeCountdown % 60).toString().padStart(2, '0')}
+              </p>
+              <p className="text-center text-sm text-red-600 dark:text-red-400 mt-1">
+                Hệ thống sẽ tự động đóng ca nếu bạn không trả lời trong 3 phút
+              </p>
+            </div>
             <div className="p-4 bg-blue-50 dark:bg-blue-950/20 rounded-lg">
               <p className="text-sm text-blue-700 dark:text-blue-400">
                 ✅ <strong>Chấp nhận tăng ca:</strong> Bạn có thể làm việc thêm đến 12 tiếng
               </p>
               <p className="text-sm text-blue-700 dark:text-blue-400 mt-2">
-                ❌ <strong>Không tăng ca:</strong> Hệ thống sẽ yêu cầu bạn đóng ca ngay
+                ❌ <strong>Không tăng ca:</strong> Hệ thống sẽ yêu cầu bạn đóng ca khi đủ 8 tiếng
+              </p>
+              <p className="text-sm text-orange-600 dark:text-orange-400 mt-2">
+                ℹ️ <strong>Lưu ý:</strong> Nếu chấp nhận, bạn có thể hủy tăng ca bất cứ lúc nào
               </p>
             </div>
             <div className="p-3 bg-green-50 dark:bg-green-950/20 rounded">
               <p className="text-sm font-semibold text-green-700 dark:text-green-400">
                 💰 Lương hiện tại: {formatCurrency(calculatedSalary)}
+              </p>
+              <p className="text-xs text-green-600 dark:text-green-500 mt-1">
+                (Nếu làm đủ 8 tiếng: {formatCurrency(Math.round(8 * hourlyRate))})
               </p>
             </div>
           </div>
@@ -391,12 +512,88 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
               variant="outline"
               onClick={() => handleOvertimeResponse(false)}
             >
-              Không, đóng ca ngay
+              Không, đóng ca khi đủ 8 tiếng
             </Button>
             <Button
               onClick={() => handleOvertimeResponse(true)}
             >
               Có, tôi muốn tăng ca
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog yêu cầu hủy tăng ca */}
+      <Dialog open={isCancelOvertimeDialogOpen} onOpenChange={(open) => {
+        setIsCancelOvertimeDialogOpen(open)
+        if (!open) setCancelReason('') // Reset reason when closing
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>📝 Yêu cầu hủy tăng ca</DialogTitle>
+            <DialogDescription>
+              Vui lòng nhập lý do để gửi yêu cầu hủy tăng ca đến quản lý phê duyệt.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="p-4 bg-blue-50 dark:bg-blue-950/20 rounded-lg border border-blue-200 dark:border-blue-800">
+              <p className="text-sm text-blue-800 dark:text-blue-400">
+                ℹ️ <strong>Lưu ý:</strong> Yêu cầu của bạn sẽ được gửi đến quản lý để xem xét và phê duyệt.
+              </p>
+            </div>
+            
+            <div className="space-y-2">
+              <Label htmlFor="cancelReason">Lý do hủy tăng ca <span className="text-red-500">*</span></Label>
+              <textarea
+                id="cancelReason"
+                className="w-full min-h-[100px] p-3 border rounded-md resize-none focus:outline-none focus:ring-2 focus:ring-primary"
+                placeholder="Ví dụ: Có việc gia đình đột xuất cần giải quyết gấp..."
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+                maxLength={500}
+              />
+              <p className="text-xs text-muted-foreground text-right">
+                {cancelReason.length}/500 ký tự
+              </p>
+            </div>
+
+            <div className="p-4 bg-yellow-50 dark:bg-yellow-950/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
+              <p className="text-sm text-yellow-800 dark:text-yellow-400 font-semibold mb-2">
+                📋 Một số lý do thường gặp:
+              </p>
+              <ul className="text-sm text-yellow-700 dark:text-yellow-500 ml-4 list-disc space-y-1">
+                <li>Có việc gia đình đột xuất</li>
+                <li>Sức khỏe không cho phép tiếp tục</li>
+                <li>Có công việc cá nhân quan trọng</li>
+                <li>Lý do khác (vui lòng ghi rõ)</li>
+              </ul>
+            </div>
+
+            <div className="p-3 bg-green-50 dark:bg-green-950/20 rounded">
+              <p className="text-sm font-semibold text-green-700 dark:text-green-400">
+                💰 Lương hiện tại: {formatCurrency(calculatedSalary)}
+              </p>
+              <p className="text-xs text-green-600 dark:text-green-500 mt-1">
+                Thời gian làm việc: {elapsedTime}
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsCancelOvertimeDialogOpen(false)
+                setCancelReason('')
+              }}
+              disabled={isSubmittingCancelRequest}
+            >
+              Hủy bỏ
+            </Button>
+            <Button
+              onClick={handleCancelOvertime}
+              disabled={isSubmittingCancelRequest || !cancelReason.trim()}
+            >
+              {isSubmittingCancelRequest ? 'Đang gửi...' : 'Gửi yêu cầu đến quản lý'}
             </Button>
           </DialogFooter>
         </DialogContent>

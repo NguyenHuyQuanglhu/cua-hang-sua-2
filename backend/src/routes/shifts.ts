@@ -255,4 +255,91 @@ router.post('/:id/close', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// POST /api/shifts/cancel-overtime-request
+router.post('/cancel-overtime-request', async (req: AuthRequest, res: Response) => {
+  try {
+    const storeId = req.storeId!;
+    const userId = req.user!.id;
+    const { shiftId, reason, currentHours, employeeName } = req.body;
+
+    if (!shiftId || !reason) {
+      res.status(400).json({ error: 'Missing required fields' });
+      return;
+    }
+
+    // Verify shift belongs to user
+    const shift = await queryOne<{ id: string; user_id: string; status: string }>(
+      'SELECT id, user_id, status FROM Shifts WHERE id = @shiftId AND store_id = @storeId',
+      { shiftId, storeId }
+    );
+
+    if (!shift) {
+      res.status(404).json({ error: 'Shift not found' });
+      return;
+    }
+
+    if (shift.user_id !== userId) {
+      res.status(403).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    if (shift.status !== 'active') {
+      res.status(400).json({ error: 'Shift is not active' });
+      return;
+    }
+
+    // Create notification for managers
+    // Get all managers (owner, company_manager, store_manager) in this store
+    const managers = await query(
+      `SELECT u.id, u.email, u.display_name 
+       FROM Users u
+       WHERE u.role IN ('owner', 'company_manager', 'store_manager')
+       AND u.status = 'active'`,
+      {}
+    );
+
+    // Create notification for each manager
+    const notificationId = crypto.randomUUID();
+    const notificationMessage = `${employeeName} yêu cầu hủy tăng ca. Lý do: ${reason}. Thời gian làm việc hiện tại: ${currentHours.toFixed(1)} giờ.`;
+    
+    for (const manager of managers as Array<{ id: string; email: string; display_name: string }>) {
+      await query(
+        `INSERT INTO Notifications (id, user_id, type, title, message, related_id, created_at, is_read)
+         VALUES (@id, @userId, @type, @title, @message, @relatedId, GETDATE(), 0)`,
+        {
+          id: crypto.randomUUID(),
+          userId: manager.id,
+          type: 'overtime_cancel_request',
+          title: 'Yêu cầu hủy tăng ca',
+          message: notificationMessage,
+          relatedId: shiftId,
+        }
+      );
+    }
+
+    // Log the request
+    await query(
+      `INSERT INTO AuditLogs (id, store_id, user_id, action, entity_type, entity_id, details, created_at)
+       VALUES (@id, @storeId, @userId, @action, @entityType, @entityId, @details, GETDATE())`,
+      {
+        id: crypto.randomUUID(),
+        storeId,
+        userId,
+        action: 'overtime_cancel_request',
+        entityType: 'shift',
+        entityId: shiftId,
+        details: JSON.stringify({ reason, currentHours }),
+      }
+    );
+
+    res.json({ 
+      success: true,
+      message: 'Yêu cầu hủy tăng ca đã được gửi đến quản lý'
+    });
+  } catch (error) {
+    console.error('Cancel overtime request error:', error);
+    res.status(500).json({ error: 'Failed to submit cancel overtime request' });
+  }
+});
+
 export default router;

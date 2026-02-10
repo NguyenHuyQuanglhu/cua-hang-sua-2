@@ -27,7 +27,8 @@ CREATE PROCEDURE sp_Sales_Create
     @customerPayment DECIMAL(18,2) = 0,
     @previousDebt DECIMAL(18,2) = 0,
     @remainingDebt DECIMAL(18,2) = 0,
-    @status NVARCHAR(20) = 'pending'
+    @status NVARCHAR(20) = 'pending',
+    @createdBy NVARCHAR(36) = NULL
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -57,6 +58,7 @@ BEGIN
             CustomerPayment,
             PreviousDebt,
             RemainingDebt,
+            CreatedBy,
             CreatedAt,
             UpdatedAt
         )
@@ -81,6 +83,7 @@ BEGIN
             @customerPayment,
             @previousDebt,
             @remainingDebt,
+            @createdBy,
             GETDATE(),
             GETDATE()
         );
@@ -110,6 +113,7 @@ BEGIN
             s.CustomerPayment AS customerPayment,
             s.PreviousDebt AS previousDebt,
             s.RemainingDebt AS remainingDebt,
+            s.CreatedBy AS createdBy,
             s.CreatedAt AS createdAt,
             s.UpdatedAt AS updatedAt
         FROM Sales s
