@@ -34,6 +34,7 @@ import uploadRoutes from './routes/upload';
 import bulkImportRoutes from './routes/bulk-import';
 import refundsRoutes from './routes/refunds';
 import notificationsRoutes from './routes/notifications';
+import inAppNotificationsRoutes from './routes/in-app-notifications';
 import paymentGatewayRoutes from './routes/payment-gateway';
 import shippingRoutes from './routes/shipping';
 import mpcOptimizerRoutes from './routes/mpc-optimizer';
@@ -45,6 +46,7 @@ import debtReminderRoutes from './routes/debt-reminder';
 
 // Import auto-close shift service
 import { autoCloseShiftService } from './services/auto-close-shift.service';
+import { notificationGeneratorService } from './services/notification-generator.service';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -112,6 +114,7 @@ app.use('/api/upload', uploadRoutes);
 app.use('/api/bulk', bulkImportRoutes);
 app.use('/api/refunds', refundsRoutes);
 app.use('/api/notifications', notificationsRoutes);
+app.use('/api/in-app-notifications', inAppNotificationsRoutes);
 app.use('/api/payment-gateway', paymentGatewayRoutes);
 app.use('/api/shipping', shippingRoutes);
 app.use('/api/mpc', mpcOptimizerRoutes);
@@ -144,18 +147,23 @@ app.listen(PORT, () => {
   
   // Khởi động service tự động đóng ca
   autoCloseShiftService.start();
+  
+  // Khởi động service tạo thông báo tự động
+  notificationGeneratorService.start();
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM signal received: closing HTTP server');
   autoCloseShiftService.stop();
+  notificationGeneratorService.stop();
   process.exit(0);
 });
 
 process.on('SIGINT', () => {
   console.log('SIGINT signal received: closing HTTP server');
   autoCloseShiftService.stop();
+  notificationGeneratorService.stop();
   process.exit(0);
 });
 

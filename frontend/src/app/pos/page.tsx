@@ -272,6 +272,7 @@ export default function POSPage() {
   // Invoice print dialog state
   const [showInvoiceDialog, setShowInvoiceDialog] = useState(false);
   const [lastSaleData, setLastSaleData] = useState<{
+    saleId: string;
     invoiceNumber: string;
     transactionDate: Date;
     items: CartItem[];
@@ -996,6 +997,7 @@ export default function POSPage() {
       // Save sale data for invoice dialog
       const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
       setLastSaleData({
+        saleId: result.saleData.id as string,
         invoiceNumber,
         transactionDate: new Date(),
         items: [...cart],
@@ -1795,6 +1797,7 @@ export default function POSPage() {
     {/* Invoice Print Dialog */}
     {lastSaleData && (
       <InvoicePrintDialog
+        saleId={lastSaleData.saleId}
         open={showInvoiceDialog}
         onClose={() => setShowInvoiceDialog(false)}
         invoiceNumber={lastSaleData.invoiceNumber}

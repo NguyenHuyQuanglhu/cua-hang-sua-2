@@ -161,6 +161,11 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     const { supplierId, importDate, notes, items } = req.body;
 
     // Validate required fields
+    if (!supplierId) {
+      res.status(400).json({ error: 'Supplier is required', code: 'VALIDATION_ERROR' });
+      return;
+    }
+
     if (!importDate) {
       res.status(400).json({ error: 'Import date is required', code: 'VALIDATION_ERROR' });
       return;

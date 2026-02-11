@@ -130,3 +130,99 @@ router.post(
 );
 
 export default router;
+
+
+// ===== CUSTOMERS IMPORT/EXPORT =====
+
+// Download customer import template
+router.get('/customers/template', authenticate, async (req: Request, res: Response) => {
+  try {
+    const buffer = bulkImportService.generateCustomerImportTemplate();
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename=customer-import-template.xlsx'
+    );
+    res.send(buffer);
+  } catch (error) {
+    console.error('Error generating customer template:', error);
+    res.status(500).json({ error: 'Failed to generate template' });
+  }
+});
+
+// Export customers to Excel
+router.get(
+  '/customers/export',
+  authenticate,
+  storeContext,
+  async (req: Request, res: Response) => {
+    try {
+      const storeId = (req as any).storeId;
+
+      if (!storeId) {
+        return res.status(400).json({ error: 'Store context required' });
+      }
+
+      const buffer = await bulkImportService.exportCustomers(storeId);
+
+      const filename = `customers-export-${new Date().toISOString().slice(0, 10)}.xlsx`;
+
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      );
+      res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+      res.send(buffer);
+    } catch (error) {
+      console.error('Error exporting customers:', error);
+      res.status(500).json({ error: 'Failed to export customers' });
+    }
+  }
+);
+
+// Import customers from Excel
+router.post(
+  '/customers/import',
+  authenticate,
+  storeContext,
+  upload.single('file'),
+  async (req: Request, res: Response) => {
+    try {
+      const storeId = (req as any).storeId;
+
+      if (!storeId) {
+        return res.status(400).json({ error: 'Store context required' });
+      }
+
+      const file = req.file;
+      if (!file) {
+        return res.status(400).json({ error: 'No file uploaded' });
+      }
+
+      // Parse Excel file
+      const customers = bulkImportService.parseCustomersExcel(file.buffer);
+
+      if (customers.length === 0) {
+        return res.status(400).json({ error: 'No valid customers found in file' });
+      }
+
+      // Import customers
+      const result = await bulkImportService.importCustomers(customers, storeId);
+
+      res.json({
+        success: result.success,
+        message: `Imported ${result.imported} of ${result.totalRows} customers`,
+        ...result,
+      });
+    } catch (error) {
+      console.error('Error importing customers:', error);
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Failed to import customers',
+      });
+    }
+  }
+);

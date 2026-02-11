@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import * as React from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -44,28 +45,32 @@ interface PaymentFormProps {
   customer?: CustomerDebtInfo;
 }
 
-const FormattedNumberInput = ({ value, onChange, ...props }: { value: number; onChange: (value: number) => void; [key: string]: any }) => {
-  const [displayValue, setDisplayValue] = useState(value?.toLocaleString('en-US') || '');
+const FormattedNumberInput = React.forwardRef<HTMLInputElement, { value: number; onChange: (value: number) => void; [key: string]: any }>(
+  ({ value, onChange, ...props }, ref) => {
+    const [displayValue, setDisplayValue] = useState(value?.toLocaleString('en-US') || '');
 
-  useEffect(() => {
-    setDisplayValue(value?.toLocaleString('en-US') || '0');
-  }, [value]);
+    useEffect(() => {
+      setDisplayValue(value?.toLocaleString('en-US') || '0');
+    }, [value]);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const rawValue = e.target.value.replace(/,/g, '');
-    const numberValue = parseInt(rawValue, 10);
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const rawValue = e.target.value.replace(/,/g, '');
+      const numberValue = parseInt(rawValue, 10);
 
-    if (!isNaN(numberValue)) {
-      setDisplayValue(numberValue.toLocaleString('en-US'));
-      onChange(numberValue);
-    } else if (rawValue === '') {
-      setDisplayValue('');
-      onChange(0);
-    }
-  };
+      if (!isNaN(numberValue)) {
+        setDisplayValue(numberValue.toLocaleString('en-US'));
+        onChange(numberValue);
+      } else if (rawValue === '') {
+        setDisplayValue('');
+        onChange(0);
+      }
+    };
 
-  return <Input type="text" value={displayValue} onChange={handleChange} {...props} />;
-};
+    return <Input ref={ref} type="text" value={displayValue} onChange={handleChange} {...props} />;
+  }
+);
+
+FormattedNumberInput.displayName = 'FormattedNumberInput';
 
 
 export function PaymentForm({ isOpen, onOpenChange, customer }: PaymentFormProps) {

@@ -59,7 +59,7 @@ const purchaseOrderItemSchema = z.object({
 });
 
 const purchaseOrderSchema = z.object({
-  supplierId: z.string().optional(),
+  supplierId: z.string().min(1, "Vui lòng chọn nhà cung cấp."),
   importDate: z.string().min(1, "Ngày nhập là bắt buộc."),
   items: z.array(purchaseOrderItemSchema).min(1, "Đơn nhập phải có ít nhất một sản phẩm."),
   notes: z.string().optional(),
@@ -307,7 +307,7 @@ export function PurchaseOrderForm({ products, suppliers, units, allSalesItems, p
     }
   };
   
-  const addProductToOrder = (productId: string) => {
+  const addProductToOrder = async (productId: string) => {
     const product = productsMap.get(productId);
     if (product) {
       console.log('Adding product:', product.name, 'Unit ID:', product.unitId);
@@ -325,6 +325,44 @@ export function PurchaseOrderForm({ products, suppliers, units, allSalesItems, p
       const productUnitId = product.unitId || '';
       console.log('Selected unit ID:', productUnitId);
       
+      // Get last purchase cost from selected supplier
+      let lastCost = 0;
+      const selectedSupplierId = form.getValues('supplierId');
+      
+      if (selectedSupplierId) {
+        try {
+          const token = localStorage.getItem('auth_token');
+          const storeId = localStorage.getItem('store_id');
+          const headers: Record<string, string> = {};
+          if (token) headers['Authorization'] = `Bearer ${token}`;
+          if (storeId) headers['X-Store-Id'] = storeId;
+
+          // Fetch last purchase from this supplier for this product
+          const response = await fetch(`/api/purchases?supplierId=${selectedSupplierId}&pageSize=100`, {
+            headers,
+          });
+
+          if (response.ok) {
+            const result = await response.json();
+            const purchases = result.data || [];
+            
+            // Find the most recent purchase with this product
+            for (const purchase of purchases) {
+              if (purchase.items && Array.isArray(purchase.items)) {
+                const item = purchase.items.find((i: any) => i.productId === productId);
+                if (item && item.cost) {
+                  lastCost = item.cost;
+                  console.log(`Found last cost for ${product.name} from supplier: ${lastCost}`);
+                  break;
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Error fetching last cost:', error);
+        }
+      }
+      
       // Get the current length before prepend
       const currentLength = 0; // Will be at index 0 after prepend
       
@@ -332,7 +370,7 @@ export function PurchaseOrderForm({ products, suppliers, units, allSalesItems, p
         productId: product.id, 
         productName: product.name,
         quantity: 1, 
-        cost: 0,
+        cost: lastCost, // Use last cost from supplier
         unitId: productUnitId
       });
       

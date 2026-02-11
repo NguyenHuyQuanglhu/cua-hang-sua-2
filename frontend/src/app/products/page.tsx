@@ -75,6 +75,7 @@ import { Input } from "@/components/ui/input"
 import { getProducts, getProduct, updateProductStatus, deleteProduct, generateProductTemplate } from "./actions"
 import { getCategories } from "@/app/categories/actions"
 import { getUnits } from "@/app/units/actions"
+import { getSuppliers } from "@/app/suppliers/actions"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
 import { ImportProducts } from "./components/import-products"
@@ -139,6 +140,7 @@ export default function ProductsPage() {
   const [products, setProducts] = useState<ProductWithStock[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [units, setUnits] = useState<Unit[]>([]);
+  const [suppliers, setSuppliers] = useState<Array<{ id: string; name: string }>>([]);
   const [isLoading, setIsLoading] = useState(true);
   
   const { toast } = useToast();
@@ -191,9 +193,10 @@ export default function ProductsPage() {
   useEffect(() => {
     const fetchCategoriesAndUnits = async () => {
       try {
-        const [categoriesResult, unitsResult] = await Promise.all([
+        const [categoriesResult, unitsResult, suppliersResult] = await Promise.all([
           getCategories(),
           getUnits(),
+          getSuppliers(),
         ]);
         
         if (categoriesResult.success && categoriesResult.categories) {
@@ -203,8 +206,12 @@ export default function ProductsPage() {
         if (unitsResult.success && unitsResult.units) {
           setUnits(unitsResult.units);
         }
+
+        if (suppliersResult.success && suppliersResult.suppliers) {
+          setSuppliers(suppliersResult.suppliers.map((s: any) => ({ id: s.id, name: s.name })));
+        }
       } catch (error) {
-        console.error('Error fetching categories/units:', error);
+        console.error('Error fetching categories/units/suppliers:', error);
       }
     };
     
@@ -837,6 +844,7 @@ export default function ProductsPage() {
           costPrice: p.averageCost 
         }))}
         units={units}
+        suppliers={suppliers}
         preselectedProductId={selectedProductForQuickPurchase}
         onSuccess={() => {
           // Refresh products list after successful purchase

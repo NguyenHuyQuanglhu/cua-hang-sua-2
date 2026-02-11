@@ -16,6 +16,7 @@ interface CartItem {
 }
 
 interface InvoicePrintDialogProps {
+  saleId: string
   open: boolean
   onClose: () => void
   invoiceNumber: string
@@ -32,6 +33,7 @@ interface InvoicePrintDialogProps {
 }
 
 export function InvoicePrintDialog({
+  saleId,
   open,
   onClose,
   invoiceNumber,
@@ -48,7 +50,7 @@ export function InvoicePrintDialog({
 }: InvoicePrintDialogProps) {
   const printRef = useRef<HTMLDivElement>(null)
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     const printContent = printRef.current
     if (!printContent) return
 
@@ -111,6 +113,14 @@ export function InvoicePrintDialog({
       </html>
     `)
     printWindow.document.close()
+    
+    // Update sale status to 'printed' after opening print dialog
+    try {
+      const { updateSaleStatus } = await import('@/app/sales/actions')
+      await updateSaleStatus(saleId, 'printed')
+    } catch (error) {
+      console.error('Failed to update sale status:', error)
+    }
   }
 
   const change = customerPayment - finalAmount

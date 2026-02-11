@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useCallback } from "react"
 import Link from "next/link"
-import { Search, ArrowUp, ArrowDown, File, FileText } from "lucide-react"
+import { Search, ArrowUp, ArrowDown, File, FileText, Mail, MessageSquare, DollarSign } from "lucide-react"
 import * as xlsx from 'xlsx';
 import { exportToPDF, formatCurrencyForExport } from "@/lib/export-utils"
 import { apiClient } from "@/lib/api-client"
@@ -28,12 +28,14 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useStore } from "@/contexts/store-context"
 import { formatCurrency } from "@/lib/utils"
-import { PaymentForm } from "./components/payment-form"
+import { DebtReminderDialog } from "./components/debt-reminder-dialog"
+import { RefundDialog } from "./components/refund-dialog"
 
 export type CustomerDebtInfo = {
   customerId: string;
   customerName: string;
   customerPhone?: string;
+  customerEmail?: string;
   totalSales: number;
   totalPayments: number;
   finalDebt: number;
@@ -83,8 +85,15 @@ export default function DebtReportPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>('totalDebt');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
-  const [isPaymentFormOpen, setIsPaymentFormOpen] = useState(false);
-  const [selectedCustomerForPayment, setSelectedCustomerForPayment] = useState<CustomerDebtInfo | undefined>(undefined);
+  const [isReminderDialogOpen, setIsReminderDialogOpen] = useState(false);
+  const [selectedCustomerForReminder, setSelectedCustomerForReminder] = useState<CustomerDebtInfo | undefined>(undefined);
+  const [isRefundDialogOpen, setIsRefundDialogOpen] = useState(false);
+  const [selectedCustomerForRefund, setSelectedCustomerForRefund] = useState<{
+    customerId: string;
+    customerName: string;
+    customerPhone?: string;
+    excessAmount: number;
+  } | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(true);
   const [reportData, setReportData] = useState<DebtReportResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -160,16 +169,31 @@ export default function DebtReportPage() {
     }
   };
 
-  const handleOpenPaymentForm = (customer: any) => {
-    setSelectedCustomerForPayment({
+  const handleOpenReminderDialog = (customer: any) => {
+    setSelectedCustomerForReminder({
       customerId: customer.id,
       customerName: customer.name,
       customerPhone: customer.phone,
+      customerEmail: customer.email,
       totalSales: customer.totalSales || 0,
       totalPayments: customer.totalPayments || 0,
       finalDebt: customer.totalDebt || 0,
     });
-    setIsPaymentFormOpen(true);
+    setIsReminderDialogOpen(true);
+  }
+
+  const handleOpenRefundDialog = (customer: any) => {
+    setSelectedCustomerForRefund({
+      customerId: customer.id,
+      customerName: customer.name,
+      customerPhone: customer.phone,
+      excessAmount: Math.abs(customer.totalDebt || 0), // Chuyển số âm thành số dương
+    });
+    setIsRefundDialogOpen(true);
+  }
+
+  const handleRefundSuccess = () => {
+    fetchReport(); // Reload data after refund
   }
 
   const SortableHeader = ({ sortKey: key, children, className }: { sortKey: SortKey; children: React.ReactNode; className?: string }) => (
@@ -269,11 +293,19 @@ export default function DebtReportPage() {
 
   return (
     <>
-      {selectedCustomerForPayment && (
-        <PaymentForm
-          isOpen={isPaymentFormOpen}
-          onOpenChange={setIsPaymentFormOpen}
-          customer={selectedCustomerForPayment}
+      {selectedCustomerForReminder && (
+        <DebtReminderDialog
+          isOpen={isReminderDialogOpen}
+          onOpenChange={setIsReminderDialogOpen}
+          customer={selectedCustomerForReminder}
+        />
+      )}
+      {selectedCustomerForRefund && (
+        <RefundDialog
+          isOpen={isRefundDialogOpen}
+          onOpenChange={setIsRefundDialogOpen}
+          customer={selectedCustomerForRefund}
+          onSuccess={handleRefundSuccess}
         />
       )}
       <Card>
@@ -340,13 +372,20 @@ export default function DebtReportPage() {
                   <TableCell>{formatPhoneNumber(data.phone)}</TableCell>
                   <TableCell className="text-right">{formatCurrency(data.totalSales || 0)}</TableCell>
                   <TableCell className="text-right">{formatCurrency(data.totalPayments || 0)}</TableCell>
-                  <TableCell className={`text-right font-semibold ${(data.totalDebt || 0) > 0 ? 'text-destructive' : ''}`}>
+                  <TableCell className={`text-right font-semibold ${(data.totalDebt || 0) > 0 ? 'text-destructive' : (data.totalDebt || 0) < 0 ? 'text-primary' : ''}`}>
                     {formatCurrency(data.totalDebt || 0)}
                   </TableCell>
                   <TableCell className="text-right">
                     {(data.totalDebt || 0) > 0 && (
-                      <Button variant="outline" size="sm" onClick={() => handleOpenPaymentForm(data)}>
-                        Thanh toán
+                      <Button variant="outline" size="sm" onClick={() => handleOpenReminderDialog(data)}>
+                        <Mail className="mr-2 h-4 w-4" />
+                        Nhắc nợ
+                      </Button>
+                    )}
+                    {(data.totalDebt || 0) < 0 && (
+                      <Button variant="default" size="sm" onClick={() => handleOpenRefundDialog(data)}>
+                        <DollarSign className="mr-2 h-4 w-4" />
+                        Hoàn tiền
                       </Button>
                     )}
                   </TableCell>

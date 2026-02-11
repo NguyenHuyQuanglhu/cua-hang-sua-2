@@ -88,7 +88,14 @@ router.get('/sales', async (req: AuthRequest, res: Response) => {
 
     const response: any = {
       success: true,
-      summary,
+      summary: {
+        totalOrders: totalSales,
+        totalRevenue,
+        totalVat,
+        totalDiscount,
+        netRevenue: totalRevenue
+      },
+      dailySummary: summary,
       totals: {
         totalSales,
         totalRevenue,
@@ -138,25 +145,6 @@ router.get('/inventory', async (req: AuthRequest, res: Response) => {
         p.cost_price as averageCost,
         0 as lowStockThreshold,
         
-        -- Calculate opening stock (current stock + sales - purchases in period)
-        ISNULL(p.stock_quantity, 0) + 
-        ISNULL((SELECT SUM(si.quantity) 
-                FROM SalesItems si 
-                JOIN Sales s ON si.sales_transaction_id = s.id 
-                WHERE si.product_id = p.id 
-                  AND s.store_id = @storeId
-                  AND (@dateFrom IS NULL OR s.transaction_date >= @dateFrom)
-                  AND (@dateTo IS NULL OR s.transaction_date <= DATEADD(day, 1, @dateTo))
-               ), 0) -
-        ISNULL((SELECT SUM(poi.quantity) 
-                FROM PurchaseOrderItems poi 
-                JOIN PurchaseOrders po ON poi.purchase_order_id = po.id 
-                WHERE poi.product_id = p.id 
-                  AND po.store_id = @storeId
-                  AND (@dateFrom IS NULL OR po.import_date >= @dateFrom)
-                  AND (@dateTo IS NULL OR po.import_date <= DATEADD(day, 1, @dateTo))
-               ), 0) as openingStock,
-        
         -- Import stock (purchases in period)
         ISNULL((SELECT SUM(poi.quantity) 
                 FROM PurchaseOrderItems poi 
@@ -177,7 +165,27 @@ router.get('/inventory', async (req: AuthRequest, res: Response) => {
                   AND (@dateTo IS NULL OR s.transaction_date <= DATEADD(day, 1, @dateTo))
                ), 0) as exportStock,
         
-        -- Check if low stock (always 0 since we don't have threshold column)
+        -- Calculate opening stock: closingStock + exportStock - importStock
+        -- This gives us the stock at the beginning of the period
+        ISNULL(p.stock_quantity, 0) + 
+        ISNULL((SELECT SUM(si.quantity) 
+                FROM SalesItems si 
+                JOIN Sales s ON si.sales_transaction_id = s.id 
+                WHERE si.product_id = p.id 
+                  AND s.store_id = @storeId
+                  AND (@dateFrom IS NULL OR s.transaction_date >= @dateFrom)
+                  AND (@dateTo IS NULL OR s.transaction_date <= DATEADD(day, 1, @dateTo))
+               ), 0) -
+        ISNULL((SELECT SUM(poi.quantity) 
+                FROM PurchaseOrderItems poi 
+                JOIN PurchaseOrders po ON poi.purchase_order_id = po.id 
+                WHERE poi.product_id = p.id 
+                  AND po.store_id = @storeId
+                  AND (@dateFrom IS NULL OR po.import_date >= @dateFrom)
+                  AND (@dateTo IS NULL OR po.import_date <= DATEADD(day, 1, @dateTo))
+               ), 0) as openingStock,
+        
+        -- Check if low stock (always 0 since column doesn't exist yet)
         0 as isLowStock
         
        FROM Products p
@@ -256,7 +264,7 @@ router.get('/debt', async (req: AuthRequest, res: Response) => {
 
     let havingClause = '';
     if (hasDebtOnly === 'true') {
-      havingClause = 'HAVING ISNULL(SUM(s.final_amount), 0) - ISNULL(SUM(s.customer_payment), 0) > 0';
+      havingClause = 'AND (ISNULL(sales.totalSales, 0) - ISNULL(sales.customerPayment, 0) - ISNULL(payments.totalPayments, 0)) > 0';
     }
 
     const result = await query(
@@ -265,14 +273,28 @@ router.get('/debt', async (req: AuthRequest, res: Response) => {
         c.full_name as name, 
         c.phone, 
         c.email,
-        ISNULL(SUM(s.final_amount), 0) as totalSales,
-        ISNULL(SUM(s.customer_payment), 0) as totalPayments,
-        ISNULL(SUM(s.final_amount), 0) - ISNULL(SUM(s.customer_payment), 0) as totalDebt,
-        COUNT(s.id) as transactionCount
+        ISNULL(sales.totalSales, 0) as totalSales,
+        ISNULL(sales.customerPayment, 0) + ISNULL(payments.totalPayments, 0) as totalPayments,
+        ISNULL(sales.totalSales, 0) - ISNULL(sales.customerPayment, 0) - ISNULL(payments.totalPayments, 0) as totalDebt,
+        ISNULL(sales.transactionCount, 0) as transactionCount
        FROM Customers c
-       LEFT JOIN Sales s ON c.id = s.customer_id AND s.store_id = @storeId
+       LEFT JOIN (
+         SELECT customer_id, 
+                SUM(final_amount) as totalSales,
+                SUM(customer_payment) as customerPayment,
+                COUNT(id) as transactionCount
+         FROM Sales 
+         WHERE store_id = @storeId
+         GROUP BY customer_id
+       ) sales ON c.id = sales.customer_id
+       LEFT JOIN (
+         SELECT customer_id, 
+                SUM(amount) as totalPayments
+         FROM Payments 
+         WHERE store_id = @storeId
+         GROUP BY customer_id
+       ) payments ON c.id = payments.customer_id
        WHERE c.store_id = @storeId
-       GROUP BY c.id, c.full_name, c.phone, c.email
        ${havingClause}
        ORDER BY totalDebt DESC`,
       { storeId }
@@ -400,6 +422,13 @@ router.get('/profit', async (req: AuthRequest, res: Response) => {
     res.json({ 
       data, 
       total: data.length,
+      summary: {
+        totalQuantity,
+        totalRevenue,
+        totalCost,
+        totalProfit,
+        profitMargin,
+      },
       totals: {
         totalQuantity,
         totalRevenue,
@@ -420,22 +449,30 @@ router.get('/sold-products', async (req: AuthRequest, res: Response) => {
     const storeId = req.storeId!;
     const { from, to } = req.query;
 
+    console.log('[Sold Products] Request:', { storeId, from, to });
+
     const result = await query(
       `SELECT 
-        p.id, p.name, p.sku as barcode,
-        c.name as categoryName,
-        ISNULL(SUM(si.quantity), 0) as totalSold,
-        ISNULL(SUM(si.subtotal), 0) as totalRevenue
+        p.Id as id, 
+        p.Name as name, 
+        p.SKU as barcode,
+        c.Name as categoryName,
+        ISNULL(SUM(si.Quantity), 0) as totalSold,
+        ISNULL(SUM(si.Subtotal), 0) as totalRevenue
        FROM Products p
-       LEFT JOIN SaleItems si ON p.id = si.productId
-       LEFT JOIN Sales s ON si.saleId = s.id
-       LEFT JOIN Categories c ON p.category_id = c.id
-       WHERE p.store_id = @storeId
-         AND (s.id IS NULL OR (s.transaction_date >= @from AND s.transaction_date <= @to))
-       GROUP BY p.id, p.name, p.sku, c.name
-       ORDER BY totalSold DESC`,
+       LEFT JOIN SaleItems si ON p.Id = si.ProductId
+       LEFT JOIN Sales s ON si.SaleId = s.Id AND s.Status IN ('pending', 'printed')
+       LEFT JOIN Categories c ON p.CategoryId = c.Id
+       WHERE p.StoreId = @storeId
+         AND (s.Id IS NULL OR (s.TransactionDate >= @from AND s.TransactionDate <= DATEADD(day, 1, @to)))
+       GROUP BY p.Id, p.Name, p.SKU, c.Name
+       HAVING SUM(si.Quantity) > 0
+       ORDER BY totalRevenue DESC`,
       { storeId, from, to }
     );
+
+    console.log('[Sold Products] Result count:', result.length);
+    console.log('[Sold Products] Sample:', result[0]);
 
     res.json(result);
   } catch (error) {
@@ -445,3 +482,185 @@ router.get('/sold-products', async (req: AuthRequest, res: Response) => {
 });
 
 export default router;
+
+
+// GET /api/reports/sales-trends - Sales trends analysis
+router.get('/sales-trends', async (req: AuthRequest, res: Response) => {
+  try {
+    const storeId = req.storeId!;
+    const { dateFrom, dateTo, groupBy = 'day' } = req.query;
+
+    let groupByClause = 'CAST(s.transaction_date AS DATE)';
+    let selectClause = 'CAST(s.transaction_date AS DATE) as date';
+    
+    if (groupBy === 'week') {
+      groupByClause = 'DATEPART(YEAR, s.transaction_date), DATEPART(WEEK, s.transaction_date)';
+      selectClause = 'DATEPART(YEAR, s.transaction_date) as year, DATEPART(WEEK, s.transaction_date) as week';
+    } else if (groupBy === 'month') {
+      groupByClause = 'DATEPART(YEAR, s.transaction_date), DATEPART(MONTH, s.transaction_date)';
+      selectClause = 'DATEPART(YEAR, s.transaction_date) as year, DATEPART(MONTH, s.transaction_date) as month';
+    }
+
+    const result = await query(
+      `SELECT 
+        ${selectClause},
+        COUNT(s.id) as transactionCount,
+        SUM(s.total_amount) as totalSales,
+        SUM(s.final_amount) as totalRevenue,
+        SUM(s.discount + ISNULL(s.tier_discount_amount, 0) + ISNULL(s.points_discount, 0)) as totalDiscounts,
+        AVG(s.final_amount) as averageTransactionValue,
+        COUNT(DISTINCT s.customer_id) as uniqueCustomers
+       FROM Sales s
+       WHERE s.store_id = @storeId
+         AND s.status IN ('pending', 'printed')
+         AND (@dateFrom IS NULL OR s.transaction_date >= @dateFrom)
+         AND (@dateTo IS NULL OR s.transaction_date <= DATEADD(day, 1, @dateTo))
+       GROUP BY ${groupByClause}
+       ORDER BY ${groupByClause}`,
+      { storeId, dateFrom: dateFrom || null, dateTo: dateTo || null }
+    );
+
+    res.json({
+      success: true,
+      data: result,
+      groupBy
+    });
+  } catch (error) {
+    console.error('Get sales trends error:', error);
+    res.status(500).json({ success: false, error: 'Failed to get sales trends' });
+  }
+});
+
+// GET /api/reports/product-performance - Product performance analysis
+router.get('/product-performance', async (req: AuthRequest, res: Response) => {
+  try {
+    const storeId = req.storeId!;
+    const { dateFrom, dateTo, limit = 50 } = req.query;
+
+    const result = await query(
+      `SELECT TOP ${limit}
+        p.id as productId,
+        p.name as productName,
+        p.sku,
+        c.name as categoryName,
+        p.cost_price as costPrice,
+        p.selling_price as sellingPrice,
+        COUNT(DISTINCT si.sale_id) as timesSold,
+        SUM(si.quantity) as totalQuantitySold,
+        SUM(si.subtotal) as totalRevenue,
+        SUM(si.quantity * p.cost_price) as totalCost,
+        SUM(si.subtotal - (si.quantity * p.cost_price)) as totalProfit,
+        AVG(si.price) as averageSellingPrice,
+        CASE 
+          WHEN SUM(si.subtotal) > 0 THEN
+            ((SUM(si.subtotal - (si.quantity * p.cost_price)) / SUM(si.subtotal)) * 100)
+          ELSE 0
+        END as profitMarginPercentage,
+        p.stock_quantity as currentStock,
+        p.low_stock_threshold as lowStockThreshold,
+        MAX(s.transaction_date) as lastSaleDate
+       FROM Products p
+       LEFT JOIN Categories c ON p.CategoryId = c.id
+       LEFT JOIN SaleItems si ON p.id = si.product_id
+       LEFT JOIN Sales s ON si.sale_id = s.id 
+         AND s.status IN ('pending', 'printed')
+         AND (@dateFrom IS NULL OR s.transaction_date >= @dateFrom)
+         AND (@dateTo IS NULL OR s.transaction_date <= DATEADD(day, 1, @dateTo))
+       WHERE p.store_id = @storeId
+         AND p.status = 'active'
+       GROUP BY 
+         p.id, p.name, p.sku, c.name, 
+         p.cost_price, p.selling_price, p.stock_quantity, p.low_stock_threshold
+       ORDER BY totalRevenue DESC`,
+      { storeId, dateFrom: dateFrom || null, dateTo: dateTo || null }
+    );
+
+    res.json({
+      success: true,
+      data: result.map((item: any) => ({
+        productId: item.productId,
+        productName: item.productName,
+        sku: item.sku,
+        categoryName: item.categoryName,
+        costPrice: Number(item.costPrice) || 0,
+        sellingPrice: Number(item.sellingPrice) || 0,
+        timesSold: Number(item.timesSold) || 0,
+        totalQuantitySold: Number(item.totalQuantitySold) || 0,
+        totalRevenue: Number(item.totalRevenue) || 0,
+        totalCost: Number(item.totalCost) || 0,
+        totalProfit: Number(item.totalProfit) || 0,
+        averageSellingPrice: Number(item.averageSellingPrice) || 0,
+        profitMarginPercentage: Number(item.profitMarginPercentage) || 0,
+        currentStock: Number(item.currentStock) || 0,
+        lowStockThreshold: Number(item.lowStockThreshold) || 0,
+        lastSaleDate: item.lastSaleDate
+      }))
+    });
+  } catch (error) {
+    console.error('Get product performance error:', error);
+    res.status(500).json({ success: false, error: 'Failed to get product performance' });
+  }
+});
+
+// GET /api/reports/customer-analytics - Customer analytics
+router.get('/customer-analytics', async (req: AuthRequest, res: Response) => {
+  try {
+    const storeId = req.storeId!;
+    const { dateFrom, dateTo, limit = 50 } = req.query;
+
+    const result = await query(
+      `SELECT TOP ${limit}
+        c.id as customerId,
+        c.full_name as fullName,
+        c.phone,
+        c.email,
+        c.customer_type as customerType,
+        c.loyalty_tier as loyaltyTier,
+        c.total_debt as totalDebt,
+        c.total_paid as totalPaid,
+        COUNT(s.id) as totalPurchases,
+        SUM(s.final_amount) as totalSpent,
+        AVG(s.final_amount) as averageOrderValue,
+        MAX(s.transaction_date) as lastPurchaseDate,
+        MIN(s.transaction_date) as firstPurchaseDate,
+        DATEDIFF(DAY, MAX(s.transaction_date), GETDATE()) as daysSinceLastPurchase,
+        SUM(s.final_amount) - c.total_debt as customerLifetimeValue
+       FROM Customers c
+       LEFT JOIN Sales s ON c.id = s.customer_id 
+         AND s.status IN ('pending', 'printed')
+         AND (@dateFrom IS NULL OR s.transaction_date >= @dateFrom)
+         AND (@dateTo IS NULL OR s.transaction_date <= DATEADD(day, 1, @dateTo))
+       WHERE c.store_id = @storeId
+         AND c.status = 'active'
+       GROUP BY 
+         c.id, c.full_name, c.phone, c.email,
+         c.customer_type, c.loyalty_tier, c.total_debt, c.total_paid
+       ORDER BY totalSpent DESC`,
+      { storeId, dateFrom: dateFrom || null, dateTo: dateTo || null }
+    );
+
+    res.json({
+      success: true,
+      data: result.map((item: any) => ({
+        customerId: item.customerId,
+        fullName: item.fullName,
+        phone: item.phone,
+        email: item.email,
+        customerType: item.customerType,
+        loyaltyTier: item.loyaltyTier,
+        totalDebt: Number(item.totalDebt) || 0,
+        totalPaid: Number(item.totalPaid) || 0,
+        totalPurchases: Number(item.totalPurchases) || 0,
+        totalSpent: Number(item.totalSpent) || 0,
+        averageOrderValue: Number(item.averageOrderValue) || 0,
+        lastPurchaseDate: item.lastPurchaseDate,
+        firstPurchaseDate: item.firstPurchaseDate,
+        daysSinceLastPurchase: Number(item.daysSinceLastPurchase) || 0,
+        customerLifetimeValue: Number(item.customerLifetimeValue) || 0
+      }))
+    });
+  } catch (error) {
+    console.error('Get customer analytics error:', error);
+    res.status(500).json({ success: false, error: 'Failed to get customer analytics' });
+  }
+});

@@ -36,8 +36,18 @@ interface SaleInvoiceProps {
 export function SaleInvoice({ sale, items, customer, productsMap, unitsMap, settings, autoPrint = false }: SaleInvoiceProps) {
   const invoiceRef = useRef<HTMLDivElement>(null);
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     window.print();
+    
+    // Update status to 'printed' after printing
+    if (sale.status !== 'printed') {
+      try {
+        const { updateSaleStatus } = await import('../../actions');
+        await updateSaleStatus(sale.id, 'printed');
+      } catch (error) {
+        console.error('Failed to update sale status:', error);
+      }
+    }
   };
 
   useEffect(() => {

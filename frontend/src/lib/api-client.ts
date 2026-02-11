@@ -981,6 +981,110 @@ class ApiClient {
       body: data,
     });
   }
+
+  // Notifications
+  async getNotifications(params?: {
+    page?: number;
+    pageSize?: number;
+    unreadOnly?: boolean;
+    type?: string;
+  }) {
+    const queryParams = new URLSearchParams();
+    if (params?.page) queryParams.append('page', params.page.toString());
+    if (params?.pageSize) queryParams.append('pageSize', params.pageSize.toString());
+    if (params?.unreadOnly) queryParams.append('unreadOnly', 'true');
+    if (params?.type) queryParams.append('type', params.type);
+
+    return this.request<{
+      success: boolean;
+      data: Array<{
+        id: string;
+        storeId: string;
+        userId: string | null;
+        type: string;
+        title: string;
+        message: string;
+        data: any;
+        isRead: boolean;
+        priority: string;
+        actionUrl: string | null;
+        createdAt: string;
+        readAt: string | null;
+        expiresAt: string | null;
+      }>;
+      total: number;
+      page: number;
+      pageSize: number;
+      totalPages: number;
+    }>(`/in-app-notifications?${queryParams.toString()}`);
+  }
+
+  async getUnreadNotificationCount() {
+    return this.request<{
+      success: boolean;
+      count: number;
+    }>('/in-app-notifications/unread-count');
+  }
+
+  async markNotificationAsRead(id: string) {
+    return this.request<{ success: boolean }>(`/in-app-notifications/${id}/read`, {
+      method: 'PUT',
+    });
+  }
+
+  async markAllNotificationsAsRead() {
+    return this.request<{ success: boolean }>('/in-app-notifications/read-all', {
+      method: 'PUT',
+    });
+  }
+
+  async deleteNotification(id: string) {
+    return this.request<{ success: boolean }>(`/in-app-notifications/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // Refund
+  async createRefund(data: {
+    customerId: string;
+    amount: number;
+    paymentMethod: string;
+    notes?: string;
+  }) {
+    return this.request<{
+      success: boolean;
+      refund: any;
+      message: string;
+    }>('/payments/refund', {
+      method: 'POST',
+      body: data,
+    });
+  }
+
+  // ==================== Advanced Reports ====================
+  async getSalesTrendsReport(params: { dateFrom?: string; dateTo?: string; groupBy?: 'day' | 'week' | 'month' }) {
+    const searchParams = new URLSearchParams();
+    if (params.dateFrom) searchParams.set('dateFrom', params.dateFrom);
+    if (params.dateTo) searchParams.set('dateTo', params.dateTo);
+    if (params.groupBy) searchParams.set('groupBy', params.groupBy);
+    return this.request(`/reports/sales-trends?${searchParams.toString()}`);
+  }
+
+  async getProductPerformanceReport(params: { dateFrom?: string; dateTo?: string; limit?: number }) {
+    const searchParams = new URLSearchParams();
+    if (params.dateFrom) searchParams.set('dateFrom', params.dateFrom);
+    if (params.dateTo) searchParams.set('dateTo', params.dateTo);
+    if (params.limit) searchParams.set('limit', String(params.limit));
+    return this.request(`/reports/product-performance?${searchParams.toString()}`);
+  }
+
+  async getCustomerAnalyticsReport(params: { dateFrom?: string; dateTo?: string; limit?: number }) {
+    const searchParams = new URLSearchParams();
+    if (params.dateFrom) searchParams.set('dateFrom', params.dateFrom);
+    if (params.dateTo) searchParams.set('dateTo', params.dateTo);
+    if (params.limit) searchParams.set('limit', String(params.limit));
+    return this.request(`/reports/customer-analytics?${searchParams.toString()}`);
+  }
 }
 
 export const apiClient = new ApiClient();
