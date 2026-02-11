@@ -823,6 +823,81 @@ router.delete('/:id/stores/:storeId', requireModulePermission('users', 'edit'), 
   }
 });
 
+/**
+ * PUT /api/users/:id/shift-hours - Update max shift hours for user
+ * Allows managers to configure maximum working hours per shift for employees
+ */
+router.put('/:id/shift-hours', requireModulePermission('users', 'edit'), async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { maxShiftHours } = req.body;
+    const currentUser = req.user!;
+    const currentUserRole = currentUser.role as UserRole;
+    const currentStoreId = req.headers['x-store-id'] as string;
+
+    if (maxShiftHours === undefined || maxShiftHours === null) {
+      res.status(400).json({ error: 'maxShiftHours là bắt buộc' });
+      return;
+    }
+
+    if (typeof maxShiftHours !== 'number' || maxShiftHours <= 0 || maxShiftHours > 24) {
+      res.status(400).json({ error: 'maxShiftHours phải là số từ 0.1 đến 24' });
+      return;
+    }
+
+    // Get target user
+    const user = await queryOne<{ id: string; role: string; email: string; max_shift_hours: number | null }>(
+      'SELECT id, role, email, max_shift_hours FROM Users WHERE id = @id',
+      { id }
+    );
+
+    if (!user) {
+      res.status(404).json({ error: 'Không tìm thấy người dùng' });
+      return;
+    }
+
+    // Check role hierarchy
+    if (!canManageRole(currentUserRole, user.role as UserRole)) {
+      res.status(403).json({ error: 'Bạn không có quyền cấu hình người dùng này', errorCode: 'PERM001' });
+      return;
+    }
+
+    const oldMaxShiftHours = user.max_shift_hours;
+
+    // Update max shift hours
+    await query(
+      'UPDATE Users SET max_shift_hours = @maxShiftHours, updated_at = GETDATE() WHERE id = @id',
+      { id, maxShiftHours }
+    );
+
+    // Audit log
+    try {
+      await auditLogRepository.create({
+        storeId: currentStoreId || 'system',
+        userId: currentUser.id,
+        action: 'UPDATE',
+        entityType: 'User',
+        entityId: id,
+        oldValues: { maxShiftHours: oldMaxShiftHours },
+        newValues: { maxShiftHours },
+        ipAddress: (req.ip as string) || undefined,
+        userAgent: req.headers['user-agent'],
+      });
+    } catch (auditError) {
+      console.error('Audit log error (non-blocking):', auditError);
+    }
+
+    res.json({ 
+      success: true, 
+      message: `Đã cập nhật thời gian làm việc tối đa cho ${user.email}: ${maxShiftHours} giờ`,
+      maxShiftHours 
+    });
+  } catch (error) {
+    console.error('Update max shift hours error:', error);
+    res.status(500).json({ error: 'Không thể cập nhật thời gian làm việc' });
+  }
+});
+
 export default router;
 
 

@@ -1143,7 +1143,12 @@ export default function POSPage() {
   }
 
   if (!activeShift) {
-    return <StartShiftDialog userId={user!.id} userName={user!.displayName || user!.email} onShiftStarted={handleShiftStarted} />;
+    return <StartShiftDialog 
+      userId={user!.id} 
+      userName={user!.displayName || user!.email} 
+      userRole={user!.role}
+      onShiftStarted={handleShiftStarted} 
+    />;
   }
 
   // Lock POS if no active shift OR if worked more than 12 hours (critical overtime)

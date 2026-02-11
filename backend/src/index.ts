@@ -43,6 +43,9 @@ import printingRoutes from './routes/printing';
 import devicesRoutes from './routes/devices';
 import debtReminderRoutes from './routes/debt-reminder';
 
+// Import auto-close shift service
+import { autoCloseShiftService } from './services/auto-close-shift.service';
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -138,6 +141,22 @@ app.use((req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Backend server running on http://localhost:${PORT}`);
+  
+  // Khởi động service tự động đóng ca
+  autoCloseShiftService.start();
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM signal received: closing HTTP server');
+  autoCloseShiftService.stop();
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT signal received: closing HTTP server');
+  autoCloseShiftService.stop();
+  process.exit(0);
 });
 
 export default app;
