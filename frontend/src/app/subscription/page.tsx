@@ -19,7 +19,7 @@ interface SubscriptionPlan {
   popular?: boolean;
 }
 
-const plans: SubscriptionPlan[] = [
+  const plans: SubscriptionPlan[] = [
   {
     id: 'basic',
     name: 'Gói Cơ Bản',
@@ -86,6 +86,7 @@ export default function SubscriptionPage() {
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [upgrading, setUpgrading] = useState<string | null>(null);
+  const [togglingAutoRenewal, setTogglingAutoRenewal] = useState(false);
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlan | null>(null);
 
@@ -95,7 +96,6 @@ export default function SubscriptionPage() {
 
   const fetchCurrentPlan = async () => {
     try {
-      console.log('[Fetch Current Plan] Starting...');
       const response = await apiClient.request<{
         maxStores: number;
         currentStores: number;
@@ -107,10 +107,10 @@ export default function SubscriptionPage() {
         autoRenewal: boolean;
         status: string;
       }>('/subscription/current');
-      console.log('[Fetch Current Plan] Response:', response);
+      console.log('[Subscription] Current plan data:', response);
       setCurrentPlan(response);
     } catch (error) {
-      console.error('[Fetch Current Plan] Error:', error);
+      console.error('Fetch current plan error:', error);
     } finally {
       setLoading(false);
     }
@@ -118,27 +118,49 @@ export default function SubscriptionPage() {
 
   const handleToggleAutoRenewal = async () => {
     if (!currentPlan) {
-      console.error('[Toggle Auto-Renewal] No current plan');
+      toast({
+        title: 'Lỗi',
+        description: 'Không tìm thấy thông tin gói dịch vụ',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // Check if basic plan (support both 'basic' and null/undefined)
+    const isBasicPlan = !currentPlan.planId || currentPlan.planId === 'basic';
+    
+    if (isBasicPlan) {
+      toast({
+        title: 'Không khả dụng',
+        description: 'Tính năng tự động gia hạn chỉ dành cho gói Standard và Premium',
+        variant: 'destructive',
+      });
       return;
     }
     
+    if (currentPlan.status === 'cancelled') {
+      toast({
+        title: 'Không thể thay đổi',
+        description: 'Gói dịch vụ đã bị hủy. Vui lòng nâng cấp gói mới.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    
+    setTogglingAutoRenewal(true);
+    
     try {
       const newValue = !currentPlan.autoRenewal;
-      console.log('[Toggle Auto-Renewal] Starting...');
-      console.log('[Toggle Auto-Renewal] Current value:', currentPlan.autoRenewal);
-      console.log('[Toggle Auto-Renewal] New value:', newValue);
-      console.log('[Toggle Auto-Renewal] Request body:', { autoRenewal: newValue });
       
-      // Check if we have a token
-      const token = apiClient.getToken();
-      console.log('[Toggle Auto-Renewal] Has token:', !!token);
+      console.log('[Auto-Renewal] Current plan:', currentPlan.planId);
+      console.log('[Auto-Renewal] Toggling to:', newValue);
       
       const response = await apiClient.request('/subscription/toggle-auto-renewal', {
         method: 'POST',
         body: { autoRenewal: newValue }
       });
       
-      console.log('[Toggle Auto-Renewal] Response received:', response);
+      console.log('[Auto-Renewal] Response:', response);
       
       toast({
         title: newValue ? 'Đã bật tự động gia hạn' : 'Đã tắt tự động gia hạn',
@@ -147,20 +169,18 @@ export default function SubscriptionPage() {
           : 'Gói dịch vụ sẽ không tự động gia hạn',
       });
       
-      console.log('[Toggle Auto-Renewal] Refreshing plan data...');
+      // Refresh plan data
       await fetchCurrentPlan();
-      console.log('[Toggle Auto-Renewal] Complete!');
     } catch (error: any) {
-      console.error('[Toggle Auto-Renewal] Error caught:', error);
-      console.error('[Toggle Auto-Renewal] Error message:', error.message);
-      console.error('[Toggle Auto-Renewal] Error status:', error.status);
-      console.error('[Toggle Auto-Renewal] Full error object:', JSON.stringify(error, null, 2));
+      console.error('Toggle auto-renewal error:', error);
       
       toast({
         title: 'Lỗi',
-        description: error.message || 'Không thể thay đổi cài đặt',
+        description: error.message || 'Không thể thay đổi cài đặt tự động gia hạn',
         variant: 'destructive',
       });
+    } finally {
+      setTogglingAutoRenewal(false);
     }
   };
 
@@ -363,25 +383,75 @@ export default function SubscriptionPage() {
                   </div>
                 )}
 
-                <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
-                  <div>
-                    <div className="font-semibold">Tự động gia hạn</div>
-                    <div className="text-sm text-muted-foreground">
-                      {currentPlan.autoRenewal 
-                        ? 'Gói sẽ tự động gia hạn khi hết hạn'
-                        : 'Gói sẽ không tự động gia hạn'
-                      }
+                {/* Show upgrade message for basic plan ONLY */}
+                {(!currentPlan.planId || currentPlan.planId === 'basic') && (
+                  <div className="p-4 bg-gradient-to-r from-yellow-50 to-orange-50 rounded-lg border-2 border-yellow-400">
+                    <div className="flex items-start gap-3">
+                      <span className="text-3xl">🔒</span>
+                      <div className="flex-1">
+                        <div className="font-bold text-lg mb-2 text-yellow-900">Tính năng Tự động gia hạn</div>
+                        <div className="text-sm text-yellow-800 mb-3">
+                          Tính năng này chỉ khả dụng cho <span className="font-semibold">Gói Chuyên Nghiệp</span> và <span className="font-semibold">Gói Doanh Nghiệp</span>.
+                        </div>
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              const proCard = document.getElementById('plan-pro');
+                              proCard?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            }}
+                            className="bg-yellow-600 hover:bg-yellow-700"
+                          >
+                            <Zap className="h-4 w-4 mr-1" />
+                            Xem gói Chuyên Nghiệp
+                          </Button>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                  <Button
-                    variant={currentPlan.autoRenewal ? 'default' : 'outline'}
-                    size="sm"
-                    onClick={handleToggleAutoRenewal}
-                    disabled={currentPlan.status === 'cancelled'}
-                  >
-                    {currentPlan.autoRenewal ? 'Đang bật' : 'Đã tắt'}
-                  </Button>
-                </div>
+                )}
+
+                {/* Show auto-renewal toggle for ALL non-basic plans */}
+                {currentPlan.planId && currentPlan.planId !== 'basic' && (
+                  <div className="flex items-center justify-between p-4 bg-muted/50 rounded-lg border">
+                    <div className="flex-1">
+                      <div className="font-semibold mb-1">Tự động gia hạn</div>
+                      <div className="text-sm text-muted-foreground">
+                        {currentPlan.autoRenewal 
+                          ? 'Gói sẽ tự động gia hạn khi hết hạn'
+                          : 'Bấm nút bên phải để bật tự động gia hạn'
+                        }
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleToggleAutoRenewal}
+                      disabled={currentPlan.status === 'cancelled' || togglingAutoRenewal}
+                      className={`min-w-[140px] h-11 px-6 rounded-md font-semibold text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 ${
+                        currentPlan.autoRenewal 
+                          ? 'bg-primary text-primary-foreground hover:bg-primary/90' 
+                          : 'border border-input bg-background hover:bg-accent hover:text-accent-foreground'
+                      }`}
+                    >
+                      {togglingAutoRenewal ? (
+                        <>
+                          <span className="animate-spin mr-2">⏳</span>
+                          Đang xử lý...
+                        </>
+                      ) : currentPlan.autoRenewal ? (
+                        <>
+                          <span className="mr-2">✓</span>
+                          Đang bật
+                        </>
+                      ) : (
+                        <>
+                          <span className="mr-2">○</span>
+                          Bật ngay
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
 
                 {currentPlan.planId !== 'basic' && currentPlan.status === 'active' && (
                   <Button
@@ -408,15 +478,25 @@ export default function SubscriptionPage() {
       <div className="grid md:grid-cols-3 gap-6">
         {plans.map((plan) => {
           const isCurrentPlan = currentPlan?.planId === plan.id;
+          
+          // Determine if user can upgrade to this plan
+          // Can upgrade if:
+          // 1. Plan has more stores than current plan (higher tier)
+          // 2. Current plan is expired
+          // 3. Current plan is cancelled
           const canUpgrade = currentPlan && (
             currentPlan.maxStores < plan.maxStores || 
             currentPlan.isExpired ||
             currentPlan.status === 'cancelled'
           );
+          
+          // Check if this is a lower tier plan (should hide upgrade button)
+          const isLowerTier = currentPlan && currentPlan.maxStores > plan.maxStores;
 
           return (
             <Card
               key={plan.id}
+              id={`plan-${plan.id}`}
               className={`relative ${
                 plan.popular ? 'border-primary shadow-lg' : ''
               } ${isCurrentPlan ? 'border-green-500' : ''}`}
@@ -457,22 +537,32 @@ export default function SubscriptionPage() {
                   ))}
                 </ul>
 
-                <Button
-                  className="w-full"
-                  variant={plan.popular ? 'default' : 'outline'}
-                  disabled={isCurrentPlan || !canUpgrade || upgrading !== null}
-                  onClick={() => handleUpgrade(plan.id, plan.maxStores)}
-                >
-                  {upgrading === plan.id ? (
-                    'Đang xử lý...'
-                  ) : isCurrentPlan ? (
-                    'Gói hiện tại'
-                  ) : canUpgrade ? (
-                    'Nâng cấp ngay'
-                  ) : (
-                    'Không khả dụng'
-                  )}
-                </Button>
+                {/* Only show button if not a lower tier plan */}
+                {!isLowerTier && (
+                  <Button
+                    className="w-full"
+                    variant={plan.popular ? 'default' : 'outline'}
+                    disabled={isCurrentPlan || !canUpgrade || upgrading !== null}
+                    onClick={() => handleUpgrade(plan.id, plan.maxStores)}
+                  >
+                    {upgrading === plan.id ? (
+                      'Đang xử lý...'
+                    ) : isCurrentPlan ? (
+                      'Gói hiện tại'
+                    ) : canUpgrade ? (
+                      'Nâng cấp ngay'
+                    ) : (
+                      'Không khả dụng'
+                    )}
+                  </Button>
+                )}
+                
+                {/* Show message for lower tier plans */}
+                {isLowerTier && !isCurrentPlan && (
+                  <div className="text-sm text-muted-foreground text-center p-3 bg-muted/50 rounded">
+                    Bạn đang sử dụng gói cao hơn
+                  </div>
+                )}
               </CardContent>
             </Card>
           );

@@ -199,20 +199,28 @@ router.post('/toggle-auto-renewal', async (req: AuthRequest, res: Response) => {
     const userId = req.user?.id;
     const { autoRenewal } = req.body;
 
+    console.log('[Toggle Auto-Renewal] Request received:', { userId, autoRenewal, body: req.body });
+
     if (!userId) {
+      console.log('[Toggle Auto-Renewal] Unauthorized - no userId');
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
 
     if (typeof autoRenewal !== 'boolean') {
+      console.log('[Toggle Auto-Renewal] Invalid autoRenewal type:', typeof autoRenewal);
       res.status(400).json({ error: 'autoRenewal must be a boolean' });
       return;
     }
+
+    console.log('[Toggle Auto-Renewal] Updating user:', { userId, autoRenewal: autoRenewal ? 1 : 0 });
 
     await query(
       `UPDATE Users SET auto_renewal = @autoRenewal, updated_at = GETDATE() WHERE id = @userId`,
       { userId, autoRenewal: autoRenewal ? 1 : 0 }
     );
+
+    console.log('[Toggle Auto-Renewal] Update successful');
 
     // Log the change
     await query(
@@ -227,13 +235,15 @@ router.post('/toggle-auto-renewal', async (req: AuthRequest, res: Response) => {
       }
     );
 
+    console.log('[Toggle Auto-Renewal] Audit log created');
+
     res.json({
       success: true,
       autoRenewal,
       message: autoRenewal ? 'Đã bật tự động gia hạn' : 'Đã tắt tự động gia hạn',
     });
   } catch (error) {
-    console.error('Toggle auto-renewal error:', error);
+    console.error('[Toggle Auto-Renewal] Error:', error);
     res.status(500).json({ error: 'Failed to toggle auto-renewal' });
   }
 });
