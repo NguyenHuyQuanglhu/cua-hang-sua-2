@@ -14,7 +14,7 @@ console.log('[Payments] Route loaded successfully');
 router.get('/', async (req: AuthRequest, res: Response) => {
   try {
     const storeId = req.storeId!;
-    
+
     const payments = await query(
       `SELECT p.*, c.full_name as customer_name
        FROM Payments p
@@ -65,13 +65,13 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       `INSERT INTO Payments (id, store_id, customer_id, amount, payment_date, payment_method, notes, created_at)
        OUTPUT INSERTED.*
        VALUES (NEWID(), @storeId, @customerId, @amount, @paymentDate, @paymentMethod, @notes, GETDATE())`,
-      { 
-        storeId, 
-        customerId, 
-        amount, 
-        paymentDate: paymentDateValue, 
+      {
+        storeId,
+        customerId,
+        amount,
+        paymentDate: paymentDateValue,
         paymentMethod: paymentMethod || 'cash',
-        notes 
+        notes
       }
     );
 
@@ -99,7 +99,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
           amount: amount,
           reason: cashFlowDescription,
           category: 'Thu tiền khách hàng',
-          relatedInvoiceId: payment.id,
+          relatedInvoiceId: String(payment.id),
           createdBy: userId,
         },
         storeId
@@ -124,7 +124,7 @@ router.post('/refund', async (req: AuthRequest, res: Response) => {
   console.log('[Refund] URL:', req.url);
   console.log('[Refund] Headers:', req.headers);
   console.log('[Refund] Body:', req.body);
-  
+
   try {
     console.log('[Refund] Starting refund process...');
     const storeId = req.storeId!;
@@ -142,27 +142,30 @@ router.post('/refund', async (req: AuthRequest, res: Response) => {
     console.log('[Refund] Getting customer info...');
     let customerResult;
     try {
-      // Try with 'name' and 'totalDebt' first
       customerResult = await query(
-        `SELECT name, totalDebt FROM Customers WHERE id = @customerId AND store_id = @storeId`,
+        `SELECT 
+          c.full_name as name,
+          ISNULL(sales.totalSales, 0) - ISNULL(sales.customerPayment, 0) - ISNULL(payments.totalPayments, 0) as totalDebt
+         FROM Customers c
+         LEFT JOIN (
+           SELECT customer_id, 
+                  SUM(final_amount) as totalSales,
+                  SUM(customer_payment) as customerPayment
+           FROM Sales 
+           WHERE store_id = @storeId
+           GROUP BY customer_id
+         ) sales ON c.id = sales.customer_id
+         LEFT JOIN (
+           SELECT customer_id, SUM(amount) as totalPayments
+           FROM Payments 
+           WHERE store_id = @storeId
+           GROUP BY customer_id
+         ) payments ON c.id = payments.customer_id
+         WHERE c.id = @customerId AND c.store_id = @storeId`,
         { customerId, storeId }
       );
     } catch (error1) {
-      console.log('[Refund] First query failed, trying with full_name and total_debt...');
-      try {
-        // Try with 'full_name' and 'total_debt'
-        customerResult = await query(
-          `SELECT full_name as name, total_debt as totalDebt FROM Customers WHERE id = @customerId AND store_id = @storeId`,
-          { customerId, storeId }
-        );
-      } catch (error2) {
-        console.log('[Refund] Second query failed, trying basic query...');
-        // Try basic query to see what columns exist
-        customerResult = await query(
-          `SELECT * FROM Customers WHERE id = @customerId AND store_id = @storeId`,
-          { customerId, storeId }
-        );
-      }
+      console.log('[Refund] Query failed:', error1);
     }
 
     console.log('[Refund] Customer query result:', customerResult);
@@ -172,27 +175,34 @@ router.post('/refund', async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ error: 'Customer not found' });
     }
 
-    const customer = customerResult[0];
+    const customer = customerResult[0] as Record<string, any>;
     const customerName = customer.name || customer.full_name || 'Unknown Customer';
-    const currentDebt = customer.totalDebt || customer.total_debt || 0;
+    const currentDebt: number = Number(customer.totalDebt || customer.total_debt || 0);
 
     console.log('[Refund] Customer info:', { customerName, currentDebt });
 
     // Check if customer has excess payment (negative debt)
     if (currentDebt >= 0) {
       console.log('[Refund] Customer does not have excess payment');
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Customer does not have excess payment to refund',
-        currentDebt 
+        currentDebt
       });
     }
 
-    const maxRefundAmount = Math.abs(currentDebt);
-    if (amount > maxRefundAmount) {
-      console.log('[Refund] Amount exceeds max refund');
-      return res.status(400).json({ 
+    const refundAmount = Number(amount);
+    if (isNaN(refundAmount) || refundAmount <= 0) {
+      console.log('[Refund] Invalid numeric amount:', amount);
+      return res.status(400).json({ error: 'Amount must be a positive number' });
+    }
+
+    const maxRefundAmount = Math.abs(Number(currentDebt));
+    // Use an epsilon for floating point comparison (e.g., 584068836.0001 > 584068836)
+    if (refundAmount - maxRefundAmount > 1) { // allow 1 VND difference max
+      console.log('[Refund] Amount exceeds max refund:', refundAmount, '>', maxRefundAmount);
+      return res.status(400).json({
         error: `Refund amount cannot exceed ${maxRefundAmount}`,
-        maxRefundAmount 
+        maxRefundAmount
       });
     }
 
@@ -203,9 +213,9 @@ router.post('/refund', async (req: AuthRequest, res: Response) => {
       `INSERT INTO Payments (id, store_id, customer_id, payment_date, amount, payment_method, notes, created_at)
        OUTPUT INSERTED.id
        VALUES (NEWID(), @storeId, @customerId, GETDATE(), -@amount, @paymentMethod, @notes, GETDATE())`,
-      { 
-        storeId, 
-        customerId, 
+      {
+        storeId,
+        customerId,
         amount, // Store as negative to represent refund
         paymentMethod: paymentMethod || 'cash',
         notes: notes || `Hoàn tiền cho khách hàng ${customerName}`
@@ -214,31 +224,29 @@ router.post('/refund', async (req: AuthRequest, res: Response) => {
 
     console.log('[Refund] Created refund payment record:', refundId);
 
-    // Update customer debt (increase debt by refund amount since we're giving money back)
+    // Update customer debt (decrease total_paid by refund amount since we're giving money back)
     const newDebt = currentDebt + amount;
     await query(
       `UPDATE Customers 
-       SET total_debt = @newDebt,
-           total_paid = total_paid - @amount,
+       SET total_paid = ISNULL(total_paid, 0) - @amount,
            updated_at = GETDATE()
        WHERE id = @customerId AND store_id = @storeId`,
-      { customerId, storeId, newDebt, amount }
+      { customerId, storeId, amount }
     );
 
     console.log('[Refund] Updated customer debt from', currentDebt, 'to', newDebt);
 
     // Create cash flow record (money out)
     try {
-      const { createCashTransaction } = await import('../services/cash-flow-service');
-      await createCashTransaction(
+      await cashTransactionRepository.create(
         {
-          transactionDate: new Date(),
+          storeId,
+          transactionDate: new Date().toISOString(),
           amount: -amount, // Negative for money out
-          type: 'expense',
-          paymentMethod: paymentMethod || 'cash',
-          reason: notes || `Hoàn tiền cho khách hàng ${customerName}`,
+          type: 'chi', // changed from 'expense' to 'chi' (vietnamese for expense based on 'thu' earlier)
+          reason: notes || `Hoàn tiền cho khách hàng ${customerName} qua ${paymentMethod || 'cash'}`,
           category: 'Hoàn tiền khách hàng',
-          relatedInvoiceId: refundId[0]?.id,
+          relatedInvoiceId: refundId[0] ? String(refundId[0].id) : undefined,
           createdBy: userId,
         },
         storeId
@@ -248,8 +256,8 @@ router.post('/refund', async (req: AuthRequest, res: Response) => {
       console.error('[Refund] Failed to create cash flow record:', cashError);
     }
 
-    res.status(201).json({ 
-      success: true, 
+    res.status(201).json({
+      success: true,
       message: `Đã hoàn ${amount.toLocaleString()}đ cho khách hàng ${customerName}`,
       refund: {
         amount,
@@ -261,7 +269,7 @@ router.post('/refund', async (req: AuthRequest, res: Response) => {
 
   } catch (error) {
     console.error('[Refund] Error:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to process refund',
       details: error instanceof Error ? error.message : 'Unknown error'
     });

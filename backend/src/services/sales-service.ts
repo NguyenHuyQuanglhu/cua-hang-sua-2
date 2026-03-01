@@ -100,14 +100,14 @@ export class SalesService {
       // Check inventory availability for all items first
       for (const item of saleData.items) {
         const unitId = item.unitId || await this.getDefaultUnitId(item.productId, storeId);
-        
+
         console.log('[SalesService] Checking stock:', {
           productId: item.productId,
           storeId,
           unitId,
           requestedQty: item.quantity
         });
-        
+
         const available = await inventoryService.checkAvailableQuantity(
           item.productId,
           storeId,
@@ -146,12 +146,12 @@ export class SalesService {
       // Calculate remaining debt
       const customerPayment = saleData.customerPayment || 0;
       const previousDebt = saleData.previousDebt || 0;
-      
-      // Debt change from THIS transaction only
-      const debtChangeFromThisTransaction = finalAmount - customerPayment;
-      
-      // Total remaining debt (old debt + new debt - payment)
-      const remainingDebt = previousDebt + debtChangeFromThisTransaction;
+
+      // Total sales value from THIS transaction
+      const salesValueFromThisTransaction = finalAmount;
+
+      // Total remaining debt (old debt + new sales value - payment)
+      const remainingDebt = previousDebt + salesValueFromThisTransaction - customerPayment;
 
       // Generate invoice number
       const invoiceNumber = await this.generateInvoiceNumber(storeId);
@@ -247,8 +247,8 @@ export class SalesService {
 
       // Update customer debt if applicable
       if (saleData.customerId) {
-        // Only update if there's a debt change from this transaction
-        if (debtChangeFromThisTransaction !== 0 || customerPayment > 0) {
+        // Only update if there's a sale or payment
+        if (salesValueFromThisTransaction !== 0 || customerPayment > 0) {
           await query(
             `UPDATE Customers 
              SET total_debt = ISNULL(total_debt, 0) + @debtChange, 
@@ -258,7 +258,7 @@ export class SalesService {
             {
               customerId: saleData.customerId,
               storeId,
-              debtChange: debtChangeFromThisTransaction, // ← Changed: only the change from THIS transaction
+              debtChange: salesValueFromThisTransaction, // total_debt is total historical sales value
               paidAmount: customerPayment,
               updatedAt: now,
             }
@@ -371,7 +371,7 @@ export class SalesService {
       if (sale.customer_id) {
         // Calculate the debt change from this cancelled transaction
         const debtChangeFromCancelledTransaction = sale.final_amount - (sale.customer_payment || 0);
-        
+
         if (debtChangeFromCancelledTransaction !== 0 || sale.customer_payment > 0) {
           await query(
             `UPDATE Customers 

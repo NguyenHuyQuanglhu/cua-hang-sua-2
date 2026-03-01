@@ -27,6 +27,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useStore } from "@/contexts/store-context"
+import { apiClient } from "@/lib/api-client"
 import { Product, PurchaseOrder, Unit } from "@/lib/types"
 import { formatCurrency, cn } from "@/lib/utils"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -71,27 +72,18 @@ export default function PurchaseReportPage() {
     const fetchData = async () => {
       try {
         setProductsLoading(true);
-        const productsRes = await fetch('/api/products');
-        if (productsRes.ok) {
-          const data = await productsRes.json();
-          setProducts(data.data || []);
-        }
+        const productsData = await apiClient.getProducts();
+        setProducts((productsData as any).data || productsData || []);
         setProductsLoading(false);
 
         setPurchasesLoading(true);
-        const purchasesRes = await fetch('/api/purchases');
-        if (purchasesRes.ok) {
-          const data = await purchasesRes.json();
-          setPurchases(data.data || []);
-        }
+        const purchasesData = await apiClient.getPurchases();
+        setPurchases((purchasesData as any).data || purchasesData || []);
         setPurchasesLoading(false);
 
         setUnitsLoading(true);
-        const unitsRes = await fetch('/api/units');
-        if (unitsRes.ok) {
-          const data = await unitsRes.json();
-          setUnits(data.data || []);
-        }
+        const unitsData = await apiClient.getUnits();
+        setUnits((unitsData as any).data || unitsData || []);
         setUnitsLoading(false);
       } catch (error) {
         console.error('Error fetching purchase report data:', error);
@@ -110,12 +102,12 @@ export default function PurchaseReportPage() {
   const getUnitInfo = useMemo(() => (unitId: string) => {
     const unit = unitsMap.get(unitId);
     if (!unit) return { baseUnit: undefined, conversionFactor: 1, name: '' };
-    
+
     if (unit.baseUnitId && unit.conversionFactor) {
       const baseUnit = unitsMap.get(unit.baseUnitId);
       return { baseUnit, conversionFactor: unit.conversionFactor, name: unit.name };
     }
-    
+
     return { baseUnit: unit, conversionFactor: 1, name: unit.name };
   }, [unitsMap]);
 
@@ -126,10 +118,10 @@ export default function PurchaseReportPage() {
     const reportItems: PurchaseReportItem[] = [];
 
     const filteredPurchases = purchases.filter(purchase => {
-        if (!dateRange || !dateRange.from) return true;
-        const importDate = new Date(purchase.importDate);
-        const toDate = dateRange.to || dateRange.from;
-        return importDate >= dateRange.from && importDate <= toDate;
+      if (!dateRange || !dateRange.from) return true;
+      const importDate = new Date(purchase.importDate);
+      const toDate = dateRange.to || dateRange.from;
+      return importDate >= dateRange.from && importDate <= toDate;
     });
 
     filteredPurchases.forEach(purchase => {
@@ -140,7 +132,7 @@ export default function PurchaseReportPage() {
         const importUnitInfo = getUnitInfo(item.unitId);
         const baseUnitForCost = importUnitInfo.baseUnit || unitsMap.get(item.unitId);
         const lineTotal = item.quantity * importUnitInfo.conversionFactor * item.cost;
-        
+
         reportItems.push({
           purchaseOrderId: purchase.id,
           orderNumber: purchase.orderNumber,
@@ -160,9 +152,9 @@ export default function PurchaseReportPage() {
   }, [purchases, productsMap, unitsMap, dateRange, getUnitInfo]);
 
   const filteredReportData = useMemo(() => {
-    return purchaseReportData.filter(data => 
-        data.productName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        data.orderNumber.toLowerCase().includes(searchTerm.toLowerCase())
+    return purchaseReportData.filter(data =>
+      data.productName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      data.orderNumber.toLowerCase().includes(searchTerm.toLowerCase())
     );
   }, [purchaseReportData, searchTerm]);
 
@@ -172,7 +164,7 @@ export default function PurchaseReportPage() {
       sortableItems.sort((a, b) => {
         const valA = a[sortKey];
         const valB = b[sortKey];
-        
+
         if (typeof valA === 'string' && typeof valB === 'string') {
           return sortDirection === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
         }
@@ -239,32 +231,32 @@ export default function PurchaseReportPage() {
       'Giá nhập': data.cost,
       'Thành tiền': data.lineTotal,
     }));
-    
+
     const totalAmount = sortedReportData.reduce((sum, item) => sum + item.lineTotal, 0);
     const totalRowData = {
-        'Tên sản phẩm': 'Tổng cộng',
-        'Thành tiền': totalAmount,
+      'Tên sản phẩm': 'Tổng cộng',
+      'Thành tiền': totalAmount,
     };
 
     const worksheet = xlsx.utils.json_to_sheet([...dataToExport, totalRowData]);
     const workbook = xlsx.utils.book_new();
     xlsx.utils.book_append_sheet(workbook, worksheet, "BaoCaoNhapHang");
 
-    worksheet['!cols'] = [ {wch: 5}, {wch: 20}, {wch: 15}, {wch: 40}, {wch: 10}, {wch: 10}, {wch: 15}, {wch: 20} ];
+    worksheet['!cols'] = [{ wch: 5 }, { wch: 20 }, { wch: 15 }, { wch: 40 }, { wch: 10 }, { wch: 10 }, { wch: 15 }, { wch: 20 }];
 
     const numberFormat = '#,##0';
     dataToExport.forEach((_, index) => {
-       const rowIndex = index + 2;
-       ['G', 'H'].forEach(col => {
-           const cell = worksheet[`${col}${rowIndex}`];
-           if(cell) cell.z = numberFormat;
-       });
-   });
+      const rowIndex = index + 2;
+      ['G', 'H'].forEach(col => {
+        const cell = worksheet[`${col}${rowIndex}`];
+        if (cell) cell.z = numberFormat;
+      });
+    });
 
-   const totalRowIndex = dataToExport.length + 2;
-   worksheet[`H${totalRowIndex}`].z = numberFormat;
-   worksheet[`H${totalRowIndex}`].s = { font: { bold: true } };
-   worksheet[`D${totalRowIndex}`].s = { font: { bold: true } };
+    const totalRowIndex = dataToExport.length + 2;
+    worksheet[`H${totalRowIndex}`].z = numberFormat;
+    worksheet[`H${totalRowIndex}`].s = { font: { bold: true } };
+    worksheet[`D${totalRowIndex}`].s = { font: { bold: true } };
 
     xlsx.writeFile(workbook, "bao_cao_chi_tiet_nhap_hang.xlsx");
   };
@@ -280,38 +272,38 @@ export default function PurchaseReportPage() {
           Danh sách chi tiết các sản phẩm đã nhập trong khoảng thời gian đã chọn.
         </CardDescription>
         <div className="flex flex-wrap items-center gap-4 pt-4">
-           <Popover>
-              <PopoverTrigger asChild>
-                <Button id="date" variant={"outline"} className={cn("w-[300px] justify-start text-left font-normal", !dateRange && "text-muted-foreground")}>
-                  <CalendarIcon className="mr-2 h-4 w-4" />
-                  {dateRange?.from ? (dateRange.to ? (<>{format(dateRange.from, "dd/MM/yyyy")} - {format(dateRange.to, "dd/MM/yyyy")}</>) : format(dateRange.from, "dd/MM/yyyy")) : (<span>Tất cả thời gian</span>)}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
-                 <Calendar initialFocus mode="range" defaultMonth={dateRange?.from} selected={dateRange} onSelect={setDateRange} numberOfMonths={2} />
-                 <div className="p-2 border-t grid grid-cols-3 gap-1">
-                      <Button variant="ghost" size="sm" onClick={() => setDatePreset('this_week')}>Tuần này</Button>
-                      <Button variant="ghost" size="sm" onClick={() => setDatePreset('this_month')}>Tháng này</Button>
-                      <Button variant="ghost" size="sm" onClick={() => setDatePreset('this_quarter')}>Quý này</Button>
-                      <Button variant="ghost" size="sm" onClick={() => setDatePreset('this_year')}>Năm nay</Button>
-                      <Button variant="ghost" size="sm" onClick={() => setDatePreset('all')}>Tất cả</Button>
-                  </div>
-              </PopoverContent>
-            </Popover>
-            <div className="relative ml-auto">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                type="search"
-                placeholder="Tìm sản phẩm, mã phiếu..."
-                className="w-full rounded-lg bg-background pl-8 md:w-80"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-            <Button onClick={handleExportExcel} variant="outline">
-              <File className="mr-2 h-4 w-4" />
-              Xuất Excel
-            </Button>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button id="date" variant={"outline"} className={cn("w-[300px] justify-start text-left font-normal", !dateRange && "text-muted-foreground")}>
+                <CalendarIcon className="mr-2 h-4 w-4" />
+                {dateRange?.from ? (dateRange.to ? (<>{format(dateRange.from, "dd/MM/yyyy")} - {format(dateRange.to, "dd/MM/yyyy")}</>) : format(dateRange.from, "dd/MM/yyyy")) : (<span>Tất cả thời gian</span>)}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="start">
+              <Calendar initialFocus mode="range" defaultMonth={dateRange?.from} selected={dateRange} onSelect={setDateRange} numberOfMonths={2} />
+              <div className="p-2 border-t grid grid-cols-3 gap-1">
+                <Button variant="ghost" size="sm" onClick={() => setDatePreset('this_week')}>Tuần này</Button>
+                <Button variant="ghost" size="sm" onClick={() => setDatePreset('this_month')}>Tháng này</Button>
+                <Button variant="ghost" size="sm" onClick={() => setDatePreset('this_quarter')}>Quý này</Button>
+                <Button variant="ghost" size="sm" onClick={() => setDatePreset('this_year')}>Năm nay</Button>
+                <Button variant="ghost" size="sm" onClick={() => setDatePreset('all')}>Tất cả</Button>
+              </div>
+            </PopoverContent>
+          </Popover>
+          <div className="relative ml-auto">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              type="search"
+              placeholder="Tìm sản phẩm, mã phiếu..."
+              className="w-full rounded-lg bg-background pl-8 md:w-80"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+          <Button onClick={handleExportExcel} variant="outline">
+            <File className="mr-2 h-4 w-4" />
+            Xuất Excel
+          </Button>
         </div>
       </CardHeader>
       <CardContent>
@@ -334,9 +326,9 @@ export default function PurchaseReportPage() {
               <TableRow key={`${data.purchaseOrderId}-${data.productId}-${index}`}>
                 <TableCell>{index + 1}</TableCell>
                 <TableCell>
-                    <Link href={`/purchases/${data.purchaseOrderId}`} className="hover:underline font-medium">
-                        {data.orderNumber}
-                    </Link>
+                  <Link href={`/purchases/${data.purchaseOrderId}`} className="hover:underline font-medium">
+                    {data.orderNumber}
+                  </Link>
                 </TableCell>
                 <TableCell>{format(new Date(data.importDate), 'dd/MM/yyyy')}</TableCell>
                 <TableCell className="font-medium">{data.productName}</TableCell>
@@ -360,11 +352,11 @@ export default function PurchaseReportPage() {
           </ShadcnTableFooter>
         </Table>
       </CardContent>
-       <CardFooter>
-            <div className="text-xs text-muted-foreground">
-              Hiển thị <strong>{sortedReportData.length}</strong> dòng chi tiết.
-            </div>
-          </CardFooter>
+      <CardFooter>
+        <div className="text-xs text-muted-foreground">
+          Hiển thị <strong>{sortedReportData.length}</strong> dòng chi tiết.
+        </div>
+      </CardFooter>
     </Card>
   );
 }

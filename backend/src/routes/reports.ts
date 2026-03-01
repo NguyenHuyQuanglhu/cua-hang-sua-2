@@ -122,7 +122,9 @@ router.get('/inventory', async (req: AuthRequest, res: Response) => {
     const storeId = req.storeId!;
     const { dateFrom, dateTo, search } = req.query;
 
-    const params: Record<string, unknown> = { 
+    console.log('[Inventory Report] Request:', { storeId, dateFrom, dateTo, search });
+
+    const params: Record<string, unknown> = {
       storeId,
       dateFrom: dateFrom || null,
       dateTo: dateTo || null,
@@ -161,6 +163,7 @@ router.get('/inventory', async (req: AuthRequest, res: Response) => {
                 JOIN Sales s ON si.sales_transaction_id = s.id 
                 WHERE si.product_id = p.id 
                   AND s.store_id = @storeId
+                  AND s.status = 'completed'
                   AND (@dateFrom IS NULL OR s.transaction_date >= @dateFrom)
                   AND (@dateTo IS NULL OR s.transaction_date <= DATEADD(day, 1, @dateTo))
                ), 0) as exportStock,
@@ -173,6 +176,7 @@ router.get('/inventory', async (req: AuthRequest, res: Response) => {
                 JOIN Sales s ON si.sales_transaction_id = s.id 
                 WHERE si.product_id = p.id 
                   AND s.store_id = @storeId
+                  AND s.status = 'completed'
                   AND (@dateFrom IS NULL OR s.transaction_date >= @dateFrom)
                   AND (@dateTo IS NULL OR s.transaction_date <= DATEADD(day, 1, @dateTo))
                ), 0) -
@@ -237,7 +241,7 @@ router.get('/inventory', async (req: AuthRequest, res: Response) => {
       };
     });
 
-    res.json({ 
+    res.json({
       success: true,
       data,
       totals: {
@@ -357,7 +361,7 @@ router.get('/profit', async (req: AuthRequest, res: Response) => {
     // Build date filter
     let dateFilter = '';
     const params: Record<string, unknown> = { storeId };
-    
+
     if (dateFrom) {
       dateFilter += ' AND s.transaction_date >= @dateFrom';
       params.dateFrom = dateFrom;
@@ -419,8 +423,8 @@ router.get('/profit', async (req: AuthRequest, res: Response) => {
 
     const profitMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
 
-    res.json({ 
-      data, 
+    res.json({
+      data,
       total: data.length,
       summary: {
         totalQuantity,
@@ -449,34 +453,38 @@ router.get('/sold-products', async (req: AuthRequest, res: Response) => {
     const storeId = req.storeId!;
     const { from, to } = req.query;
 
+    console.log('[Sold Products] ===== REQUEST START =====');
     console.log('[Sold Products] Request:', { storeId, from, to });
 
     const result = await query(
       `SELECT 
-        p.Id as id, 
-        p.Name as name, 
-        p.SKU as barcode,
-        c.Name as categoryName,
-        ISNULL(SUM(si.Quantity), 0) as totalSold,
-        ISNULL(SUM(si.Subtotal), 0) as totalRevenue
+        p.id, 
+        p.name, 
+        p.sku as barcode,
+        c.name as categoryName,
+        ISNULL(SUM(si.quantity), 0) as totalSold,
+        ISNULL(SUM(si.quantity * si.price), 0) as totalRevenue
        FROM Products p
-       LEFT JOIN SaleItems si ON p.Id = si.ProductId
-       LEFT JOIN Sales s ON si.SaleId = s.Id AND s.Status IN ('pending', 'printed')
-       LEFT JOIN Categories c ON p.CategoryId = c.Id
-       WHERE p.StoreId = @storeId
-         AND (s.Id IS NULL OR (s.TransactionDate >= @from AND s.TransactionDate <= DATEADD(day, 1, @to)))
-       GROUP BY p.Id, p.Name, p.SKU, c.Name
-       HAVING SUM(si.Quantity) > 0
+       LEFT JOIN SalesItems si ON p.id = si.product_id
+       LEFT JOIN Sales s ON si.sales_transaction_id = s.id AND s.status IN ('unprinted', 'printed', 'pending', 'completed')
+       LEFT JOIN Categories c ON p.category_id = c.id
+       WHERE p.store_id = @storeId
+         AND (s.id IS NULL OR (s.transaction_date >= @from AND s.transaction_date <= DATEADD(day, 1, CAST(@to AS DATETIME))))
+       GROUP BY p.id, p.name, p.sku, c.name
+       HAVING SUM(si.quantity) > 0
        ORDER BY totalRevenue DESC`,
       { storeId, from, to }
     );
 
-    console.log('[Sold Products] Result count:', result.length);
-    console.log('[Sold Products] Sample:', result[0]);
+    console.log('[Sold Products] SUCCESS - Result count:', result.length);
+    if (result.length > 0) {
+      console.log('[Sold Products] Sample:', result[0]);
+    }
 
     res.json(result);
   } catch (error) {
-    console.error('Get sold products report error:', error);
+    console.error('[Sold Products] ===== ERROR =====');
+    console.error('[Sold Products] Error details:', error);
     res.status(500).json({ error: 'Failed to get sold products report' });
   }
 });
@@ -492,7 +500,7 @@ router.get('/sales-trends', async (req: AuthRequest, res: Response) => {
 
     let groupByClause = 'CAST(s.transaction_date AS DATE)';
     let selectClause = 'CAST(s.transaction_date AS DATE) as date';
-    
+
     if (groupBy === 'week') {
       groupByClause = 'DATEPART(YEAR, s.transaction_date), DATEPART(WEEK, s.transaction_date)';
       selectClause = 'DATEPART(YEAR, s.transaction_date) as year, DATEPART(WEEK, s.transaction_date) as week';

@@ -16,6 +16,7 @@ import { getSalesForecast } from '@/app/actions'
 import { type ForecastSalesOutput, type ForecastedProduct } from '@/ai/flows/forecast-sales'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { useStore } from '@/contexts/store-context'
+import { apiClient } from '@/lib/api-client'
 import { Product, Sale, SalesItem, Unit } from '@/lib/types'
 import {
   Table,
@@ -53,27 +54,18 @@ export function PredictShortageForm() {
     const fetchData = async () => {
       try {
         setProductsLoading(true);
-        const productsRes = await fetch('/api/products');
-        if (productsRes.ok) {
-          const data = await productsRes.json();
-          setProducts(data.data || []);
-        }
+        const productsData = await apiClient.getProducts();
+        setProducts((productsData as any).data || productsData || []);
         setProductsLoading(false);
 
         setSalesLoading(true);
-        const salesRes = await fetch('/api/sales');
-        if (salesRes.ok) {
-          const data = await salesRes.json();
-          setSales(data.data || []);
-        }
+        const salesData = await apiClient.getSales({ pageSize: 1000 }); // Get all sales for accurate prediction
+        setSales((salesData.data as unknown as Sale[]) || []);
         setSalesLoading(false);
 
         setUnitsLoading(true);
-        const unitsRes = await fetch('/api/units');
-        if (unitsRes.ok) {
-          const data = await unitsRes.json();
-          setUnits(data.data || []);
-        }
+        const unitsData = await apiClient.getUnits();
+        setUnits((unitsData as any).data || unitsData || []);
         setUnitsLoading(false);
       } catch (error) {
         console.error('Error fetching predict shortage data:', error);
@@ -95,27 +87,27 @@ export function PredictShortageForm() {
   const getUnitInfo = useCallback((unitId: string): { baseUnit?: Unit; conversionFactor: number, name: string } => {
     const unit = unitsMap.get(unitId);
     if (!unit) return { conversionFactor: 1, name: '' };
-    
+
     if (unit.baseUnitId && unit.conversionFactor) {
       const baseUnit = unitsMap.get(unit.baseUnitId);
       return { baseUnit, conversionFactor: unit.conversionFactor, name: unit.name };
     }
-    
+
     return { baseUnit: unit, conversionFactor: 1, name: unit.name };
   }, [unitsMap]);
 
   const getStockInBaseUnit = useCallback((product: Product): number => {
-      let totalImportedInBaseUnit = 0;
-      product.purchaseLots?.forEach(lot => {
-          const { conversionFactor } = getUnitInfo(lot.unitId);
-          totalImportedInBaseUnit += lot.quantity * conversionFactor;
-      });
-      
-      const totalSoldInBaseUnit = allSalesItems
-        .filter(item => item.productId === product.id)
-        .reduce((acc, item) => acc + item.quantity, 0);
+    let totalImportedInBaseUnit = 0;
+    product.purchaseLots?.forEach(lot => {
+      const { conversionFactor } = getUnitInfo(lot.unitId);
+      totalImportedInBaseUnit += lot.quantity * conversionFactor;
+    });
 
-      return totalImportedInBaseUnit - totalSoldInBaseUnit;
+    const totalSoldInBaseUnit = allSalesItems
+      .filter(item => item.productId === product.id)
+      .reduce((acc, item) => acc + item.quantity, 0);
+
+    return totalImportedInBaseUnit - totalSoldInBaseUnit;
   }, [allSalesItems, getUnitInfo]);
 
 
@@ -132,8 +124,9 @@ export function PredictShortageForm() {
         // Sales items are typically included in the sales data from SQL Server
         // or we can fetch them separately if needed
         for (const sale of sales) {
-          if (sale.items && Array.isArray(sale.items)) {
-            sale.items.forEach((item: SalesItem) => {
+          const s = sale as any;
+          if (s.items && Array.isArray(s.items)) {
+            s.items.forEach((item: SalesItem) => {
               items.push({ ...item, salesTransactionId: sale.id });
             });
           }
@@ -156,46 +149,54 @@ export function PredictShortageForm() {
     setPrediction(null)
 
     if (!products || !sales || !allSalesItems) {
-        setError('Không thể tải dữ liệu cần thiết để dự báo.');
-        setIsLoading(false);
-        return;
+      setError('Không thể tải dữ liệu cần thiết để dự báo.');
+      setIsLoading(false);
+      return;
     }
-    
+
     const historicalSalesData = allSalesItems.map(item => {
-        const sale = sales.find(s => s.id === item.salesTransactionId);
-        const product = products.find(p => p.id === item.productId);
-        return {
-            productId: item.productId,
-            productName: product?.name,
-            quantity: item.quantity,
-            date: sale?.transactionDate,
-        }
+      const sale = sales.find(s => s.id === item.salesTransactionId);
+      const product = products.find(p => p.id === item.productId);
+      return {
+        productId: item.productId,
+        productName: product?.name,
+        quantity: item.quantity,
+        date: sale?.transactionDate,
+      }
     });
 
-    const currentInventoryLevels = products.map(p => ({ 
-        productId: p.id,
-        productName: p.name,
-        quantityInStock: getStockInBaseUnit(p)
+    const currentInventoryLevels = products.map(p => ({
+      productId: p.id,
+      productName: p.name,
+      quantityInStock: getStockInBaseUnit(p)
     }));
-    
+
     const result = await getSalesForecast({
-        historicalSalesData: JSON.stringify(historicalSalesData),
-        currentInventoryLevels: JSON.stringify(currentInventoryLevels),
-        forecastPeriodDays: 30,
-        marketContext: marketContext,
+      historicalSalesData: JSON.stringify(historicalSalesData),
+      currentInventoryLevels: JSON.stringify(currentInventoryLevels),
+      forecastPeriodDays: 30,
+      marketContext: marketContext,
     })
 
     if (result.success && result.data) {
-      setPrediction(result.data)
+      setPrediction({
+        ...result.data,
+        forecastedProducts: (result.data as any).forecastedProducts?.map((p: any) => ({
+          ...p,
+          forecastedDemand: p.forecastedDemand ?? p.forecastedSales ?? 0
+        })) || [],
+        totalForecastedDemand: (result.data as any).totalForecastedDemand ?? 0,
+        confidence: (result.data as any).confidence ?? 'medium'
+      })
     } else {
       setError(result.error || 'Đã xảy ra lỗi không xác định.')
     }
     setIsLoading(false)
   }
-  
+
   const handleCreateDraftPurchaseOrder = () => {
     if (!prediction) return;
-    
+
     const itemsToOrder = prediction.forecastedProducts
       .filter(p => p.suggestedReorderQuantity > 0)
       .map(p => {
@@ -208,8 +209,8 @@ export function PredictShortageForm() {
           cost: 0, // Default cost, user will fill this
           unitId: baseUnit?.id || product?.unitId || '' // Use base unit for ordering
         };
-    });
-    
+      });
+
     if (itemsToOrder.length === 0) {
       toast({
         title: "Không có sản phẩm nào cần nhập",
@@ -217,10 +218,10 @@ export function PredictShortageForm() {
       });
       return;
     }
-    
+
     // Store in localStorage to pass to the new page
     localStorage.setItem('draftPurchaseOrderItems', JSON.stringify(itemsToOrder));
-    
+
     // Close the dialog and navigate
     setOpen(false);
     router.push('/purchases/new?draft=true');
@@ -249,87 +250,90 @@ export function PredictShortageForm() {
         </DialogHeader>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-            <div className="space-y-4">
-                <div className="grid w-full gap-1.5">
-                    <Label htmlFor="market-context">Thêm bối cảnh thị trường (Tùy chọn)</Label>
-                    <Textarea 
-                        id="market-context"
-                        placeholder="Ví dụ: Sắp có đợt khuyến mãi lớn cho sản phẩm X, Tuần tới dự báo mưa nhiều, nhu cầu phân bón lá sẽ tăng..."
-                        value={marketContext}
-                        onChange={(e) => setMarketContext(e.target.value)}
-                        className="min-h-[100px]"
-                    />
-                    <p className="text-sm text-muted-foreground">
-                        Cung cấp thông tin về khuyến mãi, thời tiết, dịch bệnh... để AI dự báo chính xác hơn.
-                    </p>
+          <div className="space-y-4">
+            <div className="grid w-full gap-1.5">
+              <Label htmlFor="market-context">Thêm bối cảnh thị trường (Tùy chọn)</Label>
+              <Textarea
+                id="market-context"
+                placeholder="Ví dụ: Sắp có đợt khuyến mãi lớn cho sản phẩm X, Tuần tới dự báo mưa nhiều, nhu cầu phân bón lá sẽ tăng..."
+                value={marketContext}
+                onChange={(e) => setMarketContext(e.target.value)}
+                className="min-h-[100px]"
+              />
+              <p className="text-sm text-muted-foreground">
+                Cung cấp thông tin về khuyến mãi, thời tiết, dịch bệnh... để AI dự báo chính xác hơn.
+              </p>
+            </div>
+            {!prediction && !isLoading && !error && (
+              <div className="flex items-center justify-center space-x-2 p-4 h-48 border rounded-md bg-muted/50">
+                <p className="text-center text-muted-foreground">Nhấp vào nút "Chạy phân tích" để bắt đầu.</p>
+              </div>
+            )}
+
+            {isLoading && <div className="flex justify-center items-center p-8 h-48 border rounded-md"><Bot className="h-8 w-8 animate-spin" /> <span className="ml-2">Đang phân tích dữ liệu...</span></div>}
+
+            {error && <div className="text-destructive p-4 bg-destructive/10 rounded-md h-48">{error}</div>}
+
+            {prediction && (
+              <div className='space-y-4'>
+                <div>
+                  <h4 className="font-semibold mb-2">Tóm tắt phân tích</h4>
+                  <p className='text-sm text-muted-foreground bg-muted p-3 rounded-md'>{prediction.analysisSummary}</p>
                 </div>
-                {!prediction && !isLoading && !error && (
-                    <div className="flex items-center justify-center space-x-2 p-4 h-48 border rounded-md bg-muted/50">
-                        <p className="text-center text-muted-foreground">Nhấp vào nút "Chạy phân tích" để bắt đầu.</p>
-                    </div>
-                )}
-                
-                {isLoading && <div className="flex justify-center items-center p-8 h-48 border rounded-md"><Bot className="h-8 w-8 animate-spin" /> <span className="ml-2">Đang phân tích dữ liệu...</span></div>}
-                
-                {error && <div className="text-destructive p-4 bg-destructive/10 rounded-md h-48">{error}</div>}
+              </div>
+            )}
+          </div>
 
-                {prediction && (
-                    <div className='space-y-4'>
-                        <div>
-                            <h4 className="font-semibold mb-2">Tóm tắt phân tích</h4>
-                            <p className='text-sm text-muted-foreground bg-muted p-3 rounded-md'>{prediction.analysisSummary}</p>
-                        </div>
-                    </div>
-                )}
-            </div>
-
-            <div className="space-y-4">
-                 <h4 className="font-semibold">Kết quả dự báo & Đề xuất</h4>
-                 {prediction ? (
-                     <ScrollArea className="h-[400px] border rounded-md">
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Sản phẩm</TableHead>
-                                    <TableHead className="text-right">Tồn kho</TableHead>
-                                    <TableHead className="text-right">Dự báo bán</TableHead>
-                                    <TableHead className="text-center">Đề xuất</TableHead>
-                                    <TableHead className="text-right">SL cần nhập</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {prediction.forecastedProducts.map(p => {
-                                    const product = productsMap.get(p.productId);
-                                    const mainUnit = product ? unitsMap.get(product.unitId) : undefined;
-                                    const baseUnit = mainUnit?.baseUnitId ? unitsMap.get(mainUnit.baseUnitId) : mainUnit;
-                                    return (
-                                    <TableRow key={p.productId}>
-                                        <TableCell className="font-medium">{p.productName}</TableCell>
-                                        <TableCell className="text-right">{p.currentStock.toLocaleString()}</TableCell>
-                                        <TableCell className="text-right">{p.forecastedSales.toLocaleString()}</TableCell>
-                                        <TableCell className="text-center">
-                                            <Badge variant={p.suggestion === 'Re-order' || p.suggestion === 'Cần nhập' ? 'destructive' : 'default'}>
-                                                {p.suggestion === 'Re-order' ? 'Cần nhập' : p.suggestion}
-                                            </Badge>
-                                        </TableCell>
-                                        <TableCell className="text-right font-semibold">
-                                            {p.suggestedReorderQuantity > 0 ? `${p.suggestedReorderQuantity.toLocaleString()} ${baseUnit?.name || ''}` : '-'}
-                                        </TableCell>
-                                    </TableRow>
-                                )})}
-                            </TableBody>
-                        </Table>
-                    </ScrollArea>
-                 ) : (
-                    <div className="flex items-center justify-center h-[400px] border rounded-md bg-muted/50">
-                       <p className="text-muted-foreground">Kết quả sẽ hiển thị ở đây.</p>
-                    </div>
-                 )}
-            </div>
+          <div className="space-y-4">
+            <h4 className="font-semibold">Kết quả dự báo & Đề xuất</h4>
+            {prediction ? (
+              <ScrollArea className="h-[400px] border rounded-md">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Sản phẩm</TableHead>
+                      <TableHead className="text-right">Tồn kho</TableHead>
+                      <TableHead className="text-right">Dự báo bán</TableHead>
+                      <TableHead className="text-center">Đề xuất</TableHead>
+                      <TableHead className="text-right">SL cần nhập</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {prediction.forecastedProducts.map(p => {
+                      const product = productsMap.get(p.productId);
+                      const mainUnit = product ? unitsMap.get(product.unitId) : undefined;
+                      const baseUnit = mainUnit?.baseUnitId ? unitsMap.get(mainUnit.baseUnitId) : mainUnit;
+                      return (
+                        <TableRow key={p.productId}>
+                          <TableCell className="font-medium">{p.productName}</TableCell>
+                          <TableCell className="text-right">{p.currentStock.toLocaleString()}</TableCell>
+                          <TableCell className="text-right">
+                            {p.forecastedSales || 0}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <Badge variant={p.suggestion === 'Re-order' || p.suggestion === 'Cần nhập' ? 'destructive' : 'default'}>
+                              {p.suggestion === 'Re-order' ? 'Cần nhập' : p.suggestion}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right font-semibold">
+                            {p.suggestedReorderQuantity > 0 ? `${p.suggestedReorderQuantity.toLocaleString()} ${baseUnit?.name || ''}` : '-'}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                  </TableBody>
+                </Table>
+              </ScrollArea>
+            ) : (
+              <div className="flex items-center justify-center h-[400px] border rounded-md bg-muted/50">
+                <p className="text-muted-foreground">Kết quả sẽ hiển thị ở đây.</p>
+              </div>
+            )}
+          </div>
         </div>
-        
+
         <DialogFooter className="sm:justify-between pt-4">
-           <div>
+          <div>
             {hasReorderSuggestion && (
               <Button type="button" variant="outline" onClick={handleCreateDraftPurchaseOrder}>
                 <FilePlus2 className="mr-2 h-4 w-4" />
@@ -339,12 +343,12 @@ export function PredictShortageForm() {
           </div>
           <div className="flex gap-2">
             <Button type="button" variant="secondary" onClick={() => setOpen(false)}>
-                Đóng
+              Đóng
             </Button>
             <Button type="button" onClick={handlePredict} disabled={isLoading || dataIsLoading}>
-                {isLoading ? 'Đang dự đoán...' : 'Chạy lại phân tích'}
+              {isLoading ? 'Đang dự đoán...' : 'Chạy lại phân tích'}
             </Button>
-           </div>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

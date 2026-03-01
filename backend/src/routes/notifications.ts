@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { authenticate, storeContext } from '../middleware/auth';
 import * as notificationService from '../services/notification-service';
-import { executeQuery } from '../db';
+import { getConnection } from '../db/connection';
 
 const router = Router();
 
@@ -101,20 +101,23 @@ router.get('/logs', async (req: Request, res: Response) => {
       params.status = status;
     }
 
-    const countResult = await executeQuery(
-      `SELECT COUNT(*) as total FROM NotificationLogs WHERE ${whereClause}`,
-      params
-    );
+    const pool = await getConnection();
+    const countResult = await pool.request()
+      .input('type', type || null)
+      .input('status', status || null)
+      .query(`SELECT COUNT(*) as total FROM NotificationLogs WHERE ${whereClause}`);
 
     const total = countResult.recordset?.[0]?.total || 0;
 
-    const logsResult = await executeQuery(
-      `SELECT * FROM NotificationLogs
+    const logsResult = await pool.request()
+      .input('offset', offset)
+      .input('pageSize', pageSizeNum)
+      .input('type', type || null)
+      .input('status', status || null)
+      .query(`SELECT * FROM NotificationLogs
        WHERE ${whereClause}
        ORDER BY CreatedAt DESC
-       OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`,
-      params
-    );
+       OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`);
 
     res.json({
       success: true,

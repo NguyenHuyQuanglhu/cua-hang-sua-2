@@ -151,11 +151,11 @@ class ApiClient {
   // ==================== Auth ====================
   async login(email: string, password: string) {
     const result = await this.request<{
-      user: { 
-        id: string; 
-        email: string; 
-        displayName?: string; 
-        role: string; 
+      user: {
+        id: string;
+        email: string;
+        displayName?: string;
+        role: string;
         permissions?: Record<string, string[]>;
         tenantId?: string;
         tenantUserId?: string;
@@ -189,11 +189,11 @@ class ApiClient {
 
   async getMe() {
     return this.request<{
-      user: { 
-        id: string; 
-        email: string; 
-        displayName?: string; 
-        role: string; 
+      user: {
+        id: string;
+        email: string;
+        displayName?: string;
+        role: string;
         permissions?: Record<string, string[]>;
         tenantId?: string;
         tenantUserId?: string;
@@ -217,16 +217,16 @@ class ApiClient {
   }
 
   async createCategory(data: { name: string; description?: string }) {
-    return this.request<{ id: string; name: string; description?: string }>('/categories', { 
-      method: 'POST', 
-      body: data 
+    return this.request<{ id: string; name: string; description?: string }>('/categories', {
+      method: 'POST',
+      body: data
     });
   }
 
   async updateCategory(id: string, data: { name?: string; description?: string }) {
-    return this.request<{ id: string; name: string; description?: string }>(`/categories/${id}`, { 
-      method: 'PUT', 
-      body: data 
+    return this.request<{ id: string; name: string; description?: string }>(`/categories/${id}`, {
+      method: 'PUT',
+      body: data
     });
   }
 
@@ -466,10 +466,10 @@ class ApiClient {
   }
 
   // ==================== Cash Flow ====================
-  async getCashFlow(params?: { 
-    page?: number; 
-    pageSize?: number; 
-    type?: 'thu' | 'chi'; 
+  async getCashFlow(params?: {
+    page?: number;
+    pageSize?: number;
+    type?: 'thu' | 'chi';
     category?: string;
     dateFrom?: string;
     dateTo?: string;
@@ -571,7 +571,7 @@ class ApiClient {
 
   async deleteStorePermanently(id: string) {
     return this.request<{ success: boolean; message: string; deletedData?: { products: number; orders: number; customers: number } }>(
-      `/stores/${id}/permanent?confirm=true`, 
+      `/stores/${id}/permanent?confirm=true`,
       { method: 'DELETE' }
     );
   }
@@ -618,7 +618,7 @@ class ApiClient {
     return this.request(`/reports/sales${query ? `?${query}` : ''}`);
   }
 
-  async getInventoryReport(params?: { categoryId?: string; lowStockOnly?: boolean; dateFrom?: string; dateTo?: string; search?: string; [key: string]: any }) {
+  async getInventoryReport(params?: { categoryId?: string; lowStockOnly?: boolean; dateFrom?: string; dateTo?: string; search?: string;[key: string]: any }) {
     const searchParams = new URLSearchParams();
     if (params?.categoryId) searchParams.set('categoryId', params.categoryId);
     if (params?.lowStockOnly) searchParams.set('lowStockOnly', 'true');
@@ -701,7 +701,7 @@ class ApiClient {
 
   async syncOnlineStoreProducts(onlineStoreId: string, data?: { categoryId?: string }) {
     return this.request<{ success: boolean; synced: number; skipped: number; total: number; message: string }>(
-      `/online-stores/${onlineStoreId}/sync`, 
+      `/online-stores/${onlineStoreId}/sync`,
       { method: 'POST', body: data || {} }
     );
   }
@@ -822,7 +822,7 @@ class ApiClient {
   }
 
   // ==================== Unit Conversion ====================
-  
+
   // Product Units Configuration
   async getProductUnits(productId: string) {
     return this.request<{
@@ -925,7 +925,7 @@ class ApiClient {
   }
 
   // ==================== Unit Conversion ====================
-  async getProductUnits(productId: string) {
+  async getAvailableProductUnits(productId: string) {
     return this.request<{
       success: boolean;
       baseUnit: {

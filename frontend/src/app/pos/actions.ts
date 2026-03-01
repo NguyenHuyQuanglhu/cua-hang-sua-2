@@ -47,19 +47,19 @@ export async function getPOSCustomers(): Promise<{
 /**
  * Create a sale from POS
  */
-export async function createPOSSale(sale: Record<string, unknown>): Promise<{ 
-  success: boolean; 
+export async function createPOSSale(sale: Record<string, unknown>): Promise<{
+  success: boolean;
   sale?: Record<string, unknown>;
-  error?: string 
+  error?: string
 }> {
   try {
     const result = await apiClient.createSale(sale);
     return { success: true, sale: result as Record<string, unknown> };
   } catch (error: unknown) {
     console.error('Error creating POS sale:', error);
-    return { 
-      success: false, 
-      error: error instanceof Error ? error.message : 'Không thể tạo đơn hàng' 
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Không thể tạo đơn hàng'
     };
   }
 }
@@ -77,9 +77,9 @@ export async function getPOSActiveShift(): Promise<{
     return { success: true, shift };
   } catch (error: unknown) {
     console.error('Error fetching active shift:', error);
-    return { 
-      success: false, 
-      error: error instanceof Error ? error.message : 'Đã xảy ra lỗi khi lấy ca làm việc' 
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Đã xảy ra lỗi khi lấy ca làm việc'
     };
   }
 }
@@ -168,9 +168,9 @@ export async function getStoreSettings(): Promise<{
     return { success: true, settings };
   } catch (error: unknown) {
     console.error('Error fetching store settings:', error);
-    return { 
-      success: false, 
-      error: error instanceof Error ? error.message : 'Đã xảy ra lỗi khi lấy cài đặt cửa hàng' 
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Đã xảy ra lỗi khi lấy cài đặt cửa hàng'
     };
   }
 }
@@ -199,9 +199,9 @@ export async function startShift(data: { startingCash: number }): Promise<{
     return { success: true, shift: shift as Record<string, unknown> };
   } catch (error: unknown) {
     console.error('Error starting shift:', error);
-    return { 
-      success: false, 
-      error: error instanceof Error ? error.message : 'Không thể mở ca làm việc' 
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Không thể mở ca làm việc'
     };
   }
 }
@@ -245,7 +245,7 @@ export async function getProductUnits(productId: string): Promise<{
   error?: string;
 }> {
   try {
-    const response = await apiClient.getProductUnits(productId) as unknown as {
+    const response = await apiClient.getAvailableProductUnits(productId) as unknown as {
       success?: boolean;
       baseUnit?: ProductUnitInfo;
       availableUnits?: ProductUnitInfo[];

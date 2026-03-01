@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { DollarSign, Loader2 } from 'lucide-react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -75,6 +75,16 @@ export function RefundDialog({
       notes: `Hoàn tiền trả thừa cho khách hàng ${customer.customerName}`,
     },
   })
+
+  useEffect(() => {
+    if (isOpen) {
+      form.reset({
+        amount: customer.excessAmount,
+        paymentMethod: 'cash',
+        notes: `Hoàn tiền trả thừa cho khách hàng ${customer.customerName}`,
+      })
+    }
+  }, [isOpen, customer, form])
 
   const onSubmit = async (values: RefundFormValues) => {
     try {
