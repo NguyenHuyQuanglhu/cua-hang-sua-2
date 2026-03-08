@@ -98,9 +98,14 @@ router.post('/quick', async (req: AuthRequest, res: Response) => {
   try {
     const storeId = req.storeId!;
     const userId = req.user?.id;
-    const { productId, quantity, cost, unitId, importDate, baseQuantity, baseCost, baseUnitId } = req.body;
+    const { supplierId, productId, quantity, cost, unitId, importDate, baseQuantity, baseCost, baseUnitId } = req.body;
 
     // Validate required fields
+    if (!supplierId) {
+      res.status(400).json({ error: 'Supplier is required', code: 'VALIDATION_ERROR' });
+      return;
+    }
+
     if (!productId || !quantity || cost === undefined || !unitId || !importDate) {
       res.status(400).json({ error: 'All fields are required', code: 'VALIDATION_ERROR' });
       return;
@@ -125,6 +130,7 @@ router.post('/quick', async (req: AuthRequest, res: Response) => {
     const totalAmount = finalBaseQuantity * finalBaseCost;
 
     const input: CreatePurchaseOrderInput = {
+      supplierId,
       importDate,
       notes: 'Nhập hàng nhanh',
       totalAmount,

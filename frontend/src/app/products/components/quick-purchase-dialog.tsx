@@ -50,6 +50,7 @@ interface Product {
   name: string;
   unitId: string;
   costPrice?: number;
+  supplierName?: string;
 }
 
 interface Unit {
@@ -378,7 +379,14 @@ export function QuickPurchaseDialog({
                       ) : (
                         filteredProducts.map(product => (
                           <SelectItem key={product.id} value={product.id}>
-                            {product.name}
+                            <div className="flex flex-col">
+                              <span>{product.name}</span>
+                              {product.supplierName && (
+                                <span className="text-xs text-muted-foreground">
+                                  NCC: {product.supplierName}
+                                </span>
+                              )}
+                            </div>
                           </SelectItem>
                         ))
                       )}
