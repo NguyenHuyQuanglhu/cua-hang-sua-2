@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { apiClient, CreateStoreRequest, UpdateStoreRequest } from '@/lib/api-client';
+import { safeStorage } from '@/lib/error-handling';
 
 export interface Store {
   id: string;
@@ -99,29 +100,21 @@ export function StoreProvider({ children }: StoreProviderProps) {
   const [error, setError] = useState<string | null>(null);
   const [accessibleStoreIds, setAccessibleStoreIds] = useState<Set<string>>(new Set());
 
-  // Load saved store ID from localStorage
+  // Load saved store ID from localStorage with error handling
   const getSavedStoreId = useCallback((): string | null => {
     if (typeof window === 'undefined') return null;
-    try {
-      return localStorage.getItem(STORE_STORAGE_KEY);
-    } catch {
-      return null;
-    }
+    return safeStorage.getItem(STORE_STORAGE_KEY);
   }, []);
 
-  // Save store ID to localStorage and API client
+  // Save store ID to localStorage and API client with error handling
   const saveStoreId = useCallback((storeId: string | null) => {
     if (typeof window === 'undefined') return;
-    try {
-      if (storeId) {
-        localStorage.setItem(STORE_STORAGE_KEY, storeId);
-        apiClient.setStoreId(storeId);
-      } else {
-        localStorage.removeItem(STORE_STORAGE_KEY);
-        apiClient.setStoreId(null);
-      }
-    } catch {
-      // Ignore localStorage errors
+    if (storeId) {
+      safeStorage.setItem(STORE_STORAGE_KEY, storeId);
+      apiClient.setStoreId(storeId);
+    } else {
+      safeStorage.removeItem(STORE_STORAGE_KEY);
+      apiClient.setStoreId(null);
     }
   }, []);
 
@@ -163,7 +156,7 @@ export function StoreProvider({ children }: StoreProviderProps) {
         // Set tenant info if available
         if (data.tenant) {
           setTenant(data.tenant as TenantInfo);
-          localStorage.setItem('tenant', JSON.stringify(data.tenant));
+          safeStorage.setItem('tenant', JSON.stringify(data.tenant));
         }
 
         // Extract accessible store IDs from auth response
@@ -247,11 +240,11 @@ export function StoreProvider({ children }: StoreProviderProps) {
         // Clear invalid token and auth state silently
         apiClient.setToken(null);
         apiClient.setStoreId(null);
-        localStorage.removeItem('auth_token');
-        localStorage.removeItem('store_id');
-        localStorage.removeItem('tenant');
-        localStorage.removeItem('user');
-        localStorage.removeItem(STORE_STORAGE_KEY);
+        safeStorage.removeItem('auth_token');
+        safeStorage.removeItem('store_id');
+        safeStorage.removeItem('tenant');
+        safeStorage.removeItem('user');
+        safeStorage.removeItem(STORE_STORAGE_KEY);
         
         // Clear auth state only for auth errors
         setUser(null);
@@ -339,8 +332,8 @@ export function StoreProvider({ children }: StoreProviderProps) {
       setTenant(null);
       setAccessibleStoreIds(new Set());
       saveStoreId(null);
-      localStorage.removeItem('tenant');
-      localStorage.removeItem('user');
+      safeStorage.removeItem('tenant');
+      safeStorage.removeItem('user');
     }
   }, [saveStoreId]);
 

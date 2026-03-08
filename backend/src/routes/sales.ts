@@ -4,6 +4,7 @@ import { authenticate, storeContext, AuthRequest } from '../middleware/auth';
 import { salesService, InventoryInsufficientStockError } from '../services';
 import { salesSPRepository } from '../repositories/sales-sp-repository';
 import * as pdfInvoiceService from '../services/pdf-invoice-service';
+import { validateAndNormalizeStatus, validateStatusQuery } from '../middleware/validateStatus';
 
 const router = Router();
 
@@ -41,13 +42,13 @@ async function generateInvoiceNumber(storeId: string): Promise<string> {
 }
 
 // GET /api/sales
-router.get('/', async (req: AuthRequest, res: Response) => {
+router.get('/', validateStatusQuery, async (req: AuthRequest, res: Response) => {
   try {
     const storeId = req.storeId!;
     const userId = req.user!.id;
     const userRole = req.user!.role;
     const { page = '1', pageSize = '20', search, status, customerId, dateFrom, dateTo } = req.query;
-    
+
     const pageNum = parseInt(page as string);
     const pageSizeNum = parseInt(pageSize as string);
 
@@ -70,11 +71,17 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     // Apply search filter (client-side since SP doesn't support it)
     if (search) {
       const searchLower = (search as string).toLowerCase();
-      sales = sales.filter(s => 
+      sales = sales.filter(s =>
         s.invoiceNumber?.toLowerCase().includes(searchLower) ||
         s.customerName?.toLowerCase().includes(searchLower)
       );
     }
+
+    // Calculate status counts for all sales (before pagination)
+    const statusCounts = {
+      pending: sales.filter(s => s.status === 'pending').length,
+      processed: sales.filter(s => s.status === 'processed').length,
+    };
 
     // Calculate pagination
     const total = sales.length;
@@ -141,6 +148,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       page: pageNum,
       pageSize: pageSizeNum,
       totalPages,
+      counts: statusCounts,
     });
   } catch (error) {
     console.error('Get sales error:', error);
@@ -289,22 +297,25 @@ router.get('/:id/items', async (req: AuthRequest, res: Response) => {
 });
 
 // POST /api/sales
-router.post('/', async (req: AuthRequest, res: Response) => {
+router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Response) => {
   try {
     const storeId = req.storeId!;
     const userId = req.user!.id;
-    const { 
+    const {
       customerId, shiftId, items, totalAmount, vatAmount, finalAmount,
       discount, discountType, discountValue, customerPayment,
       previousDebt, remainingDebt, tierDiscountPercentage, tierDiscountAmount,
       pointsUsed, pointsDiscount, status
     } = req.body;
 
-    console.log('[POST /api/sales] Creating sale:', { storeId, userId, customerId, shiftId, itemsCount: items?.length, totalAmount, finalAmount, previousDebt });
+    // Set default status to "pending" if not provided (Requirement 2.2)
+    const orderStatus = status || 'pending';
+
+    console.log('[POST /api/sales] Creating sale:', { storeId, userId, customerId, shiftId, itemsCount: items?.length, totalAmount, finalAmount, previousDebt, status: orderStatus });
 
     // Allow empty items if this is a debt payment only (previousDebt > 0 and totalAmount = 0)
     const isDebtPaymentOnly = previousDebt > 0 && totalAmount === 0 && (!items || items.length === 0);
-    
+
     // Validate items (unless it's debt payment only)
     if (!isDebtPaymentOnly && (!items || items.length === 0)) {
       res.status(400).json({ error: 'Đơn hàng phải có ít nhất một sản phẩm' });
@@ -314,10 +325,10 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     // If debt payment only, create a simple sale record without inventory management
     if (isDebtPaymentOnly) {
       console.log('[POST /api/sales] Creating debt payment only sale');
-      
+
       const saleId = crypto.randomUUID();
       const invoiceNumber = await generateInvoiceNumber(storeId);
-      
+
       await query(
         `INSERT INTO Sales (
           id, store_id, customer_id, shift_id, invoice_number, transaction_date,
@@ -344,7 +355,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
           previousDebt: previousDebt || 0,
           remainingDebt: 0, // Debt is paid
           paymentMethod: req.body.paymentMethod || 'cash',
-          status: status || 'printed',
+          status: orderStatus,
           createdBy: userId,
         }
       );
@@ -362,11 +373,11 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       }
 
       console.log('[POST /api/sales] Debt payment sale created:', saleId, invoiceNumber);
-      
+
       res.status(201).json({
         id: saleId,
         invoiceNumber,
-        status: status || 'printed',
+        status: orderStatus,
         finalAmount: 0,
         conversions: [],
       });
@@ -398,6 +409,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
         customerPayment,
         previousDebt,
         vatAmount,
+        status: orderStatus, // Pass the status to the service
       },
       storeId,
       userId
@@ -424,7 +436,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     });
   } catch (error) {
     console.error('Create sale error:', error);
-    
+
     // Handle insufficient stock error
     if (error instanceof InventoryInsufficientStockError) {
       res.status(400).json({
@@ -438,13 +450,24 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    // Catch SQL Server RAISERROR for insufficient stock caused by concurrent transaction race conditions
+    if (errorMessage.includes('Insufficient stock for product')) {
+      res.status(400).json({
+        error: 'Sản phẩm đã hết hàng hoặc không đủ số lượng để bán. Vui lòng kiểm tra lại tồn kho.',
+        code: 'INSUFFICIENT_STOCK',
+        details: errorMessage
+      });
+      return;
+    }
+
     res.status(500).json({ error: `Failed to create sale: ${errorMessage}` });
   }
 });
 
 // PUT /api/sales/:id
-router.put('/:id', async (req: AuthRequest, res: Response) => {
+router.put('/:id', validateAndNormalizeStatus, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const storeId = req.storeId!;
@@ -463,7 +486,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
       console.log('[Sales PUT] Using SP for status update');
       const updated = await salesSPRepository.updateStatus(id, storeId, status);
       console.log('[Sales PUT] SP result:', updated);
-      
+
       if (!updated) {
         console.error('[Sales PUT] Sale not found:', { id, storeId });
         res.status(404).json({ error: 'Sale not found' });
@@ -476,6 +499,55 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     // For other updates, use inline query (SP doesn't support partial updates)
     console.log('[Sales PUT] Using inline query for update');
     await query(
+      `UPDATE Sales SET 
+        status = COALESCE(@status, status),
+        customer_payment = COALESCE(@customerPayment, customer_payment),
+        remaining_debt = COALESCE(@remainingDebt, remaining_debt),
+        updated_at = GETDATE()
+       WHERE id = @id AND store_id = @storeId`,
+      { id, storeId, status, customerPayment, remainingDebt }
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Update sale error:', error);
+    res.status(500).json({ error: 'Failed to update sale' });
+  }
+});
+
+// PATCH /api/sales/:id - Update sale status (Requirement 2.3, 2.4, 3.1)
+router.patch('/:id', validateAndNormalizeStatus, async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const storeId = req.storeId!;
+    const { status, customerPayment, remainingDebt } = req.body;
+
+    console.log('[Sales PATCH] Update request:', {
+      id,
+      storeId,
+      status,
+      customerPayment,
+      remainingDebt,
+    });
+
+    // Use SP Repository for status update if only status is being updated
+    if (status && !customerPayment && !remainingDebt) {
+      console.log('[Sales PATCH] Using SP for status update');
+      const updated = await salesSPRepository.updateStatus(id, storeId, status);
+      console.log('[Sales PATCH] SP result:', updated);
+
+      if (!updated) {
+        console.error('[Sales PATCH] Sale not found:', { id, storeId });
+        res.status(404).json({ error: 'Sale not found' });
+        return;
+      }
+      res.json({ success: true });
+      return;
+    }
+
+    // For other updates, use inline query (SP doesn't support partial updates)
+    console.log('[Sales PATCH] Using inline query for update');
+    const result = await query(
       `UPDATE Sales SET 
         status = COALESCE(@status, status),
         customer_payment = COALESCE(@customerPayment, customer_payment),

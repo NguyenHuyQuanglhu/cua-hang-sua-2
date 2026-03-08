@@ -59,16 +59,11 @@ BEGIN
             FOR JSON PATH
         ), '[]') AS avgCostByUnit,
         -- Total stock in base unit for sorting/filtering (convert all units to base unit)
+        -- Total stock in default base unit for sorting/filtering
         ISNULL((
-            SELECT SUM(
-                CASE 
-                    WHEN u.base_unit_id IS NULL THEN pi.Quantity  -- This is base unit
-                    ELSE pi.Quantity * ISNULL(u.conversion_factor, 1)  -- Convert to base unit
-                END
-            )
+            SELECT SUM(pi.Quantity)
             FROM ProductInventory pi
-            LEFT JOIN Units u ON pi.UnitId = u.id
-            WHERE pi.ProductId = p.id AND pi.StoreId = @storeId
+            WHERE pi.ProductId = p.id AND pi.StoreId = @storeId AND pi.UnitId = p.unit_id
         ), p.stock_quantity) AS currentStock
     FROM Products p
     LEFT JOIN Categories c ON p.category_id = c.id

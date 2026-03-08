@@ -42,12 +42,6 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs"
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -89,8 +83,10 @@ import { deleteSaleTransaction, updateSaleStatus, getSales } from "./actions"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
 import { useStore } from "@/contexts/store-context"
+import { StatusFilter } from "./components/StatusFilter"
+import { StatusBadge } from "./components/StatusBadge"
 
-type SaleStatus = 'all' | 'pending' | 'unprinted' | 'printed';
+type SaleStatus = 'all' | 'pending' | 'processed';
 type SortKey = 'invoiceNumber' | 'customer' | 'transactionDate' | 'status' | 'finalAmount';
 
 interface Sale {
@@ -99,27 +95,9 @@ interface Sale {
   customerId?: string;
   customerName?: string;
   transactionDate: string;
-  status: 'pending' | 'unprinted' | 'printed';
+  status: 'pending' | 'processed';
   finalAmount: number;
   itemCount: number;
-}
-
-const getStatusVariant = (status: Sale['status']): "default" | "secondary" | "outline" => {
-  switch (status) {
-    case 'printed': return 'default';
-    case 'pending': return 'secondary';
-    case 'unprinted': return 'outline';
-    default: return 'outline';
-  }
-}
-
-const getStatusText = (status: Sale['status']) => {
-  switch (status) {
-    case 'printed': return 'Đã in';
-    case 'pending': return 'Chờ xử lý';
-    case 'unprinted': return 'Chưa in';
-    default: return 'Không xác định';
-  }
 }
 
 
@@ -141,6 +119,7 @@ export default function SalesPage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [statusCounts, setStatusCounts] = useState({ pending: 0, processed: 0 });
   const { permissions, isLoading: isRoleLoading } = useUserRole();
 
   const { toast } = useToast();
@@ -174,6 +153,11 @@ export default function SalesPage() {
         setSales(result.data || []);
         setTotal(result.total || 0);
         setTotalPages(result.totalPages || 1);
+        
+        // Calculate status counts from the data
+        const pending = (result.data || []).filter(s => s.status === 'pending').length;
+        const processed = (result.data || []).filter(s => s.status === 'processed').length;
+        setStatusCounts({ pending, processed });
       } else {
         toast({
           variant: "destructive",
@@ -371,7 +355,7 @@ export default function SalesPage() {
       'Mã đơn hàng': sale.invoiceNumber,
       'Khách hàng': sale.customerName || 'Khách lẻ',
       'Ngày': format(new Date(sale.transactionDate), 'dd/MM/yyyy'),
-      'Trạng thái': getStatusText(sale.status),
+      'Trạng thái': sale.status === 'pending' ? 'Chưa xử lý' : 'Đã xử lý',
       'Tổng cộng': sale.finalAmount,
     }));
 
@@ -431,15 +415,14 @@ export default function SalesPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <Tabs defaultValue="all" onValueChange={(value) => setStatusFilter(value as SaleStatus)}>
-        <div className="flex items-center">
-          <TabsList>
-            <TabsTrigger value="all">Tất cả</TabsTrigger>
-            <TabsTrigger value="pending">Chờ xử lý</TabsTrigger>
-            <TabsTrigger value="unprinted">Chưa in</TabsTrigger>
-            <TabsTrigger value="printed">Đã in</TabsTrigger>
-          </TabsList>
-          <div className="ml-auto flex items-center gap-2">
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <StatusFilter
+            selectedStatus={statusFilter}
+            onStatusChange={setStatusFilter}
+            counts={statusCounts}
+          />
+          <div className="flex items-center gap-2">
             <Button size="sm" variant="outline" className="h-8 gap-1" onClick={handleExportExcel}>
               <File className="h-3.5 w-3.5" />
               <span className="sr-only sm:not-sr-only sm:whitespace-nowrap">
@@ -456,8 +439,7 @@ export default function SalesPage() {
             )}
           </div>
         </div>
-        <TabsContent value={statusFilter}>
-          <Card>
+        <Card>
             <CardHeader>
               <CardTitle>Đơn hàng</CardTitle>
               <CardDescription>
@@ -616,10 +598,8 @@ export default function SalesPage() {
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <Button variant="ghost" size="sm" className="p-1 h-auto" disabled={isUpdatingStatus}>
-                                  <Badge variant={getStatusVariant(sale.status)}>
-                                    {getStatusText(sale.status)}
-                                    <ChevronDown className="h-3 w-3 ml-1" />
-                                  </Badge>
+                                  <StatusBadge status={sale.status} size="sm" />
+                                  <ChevronDown className="h-3 w-3 ml-1" />
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="start">
@@ -627,19 +607,13 @@ export default function SalesPage() {
                                   onClick={() => handleStatusChange(sale, 'pending')}
                                   disabled={sale.status === 'pending' || isUpdatingStatus}
                                 >
-                                  Chờ xử lý
+                                  Chưa xử lý
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
-                                  onClick={() => handleStatusChange(sale, 'unprinted')}
-                                  disabled={sale.status === 'unprinted' || isUpdatingStatus}
+                                  onClick={() => handleStatusChange(sale, 'processed')}
+                                  disabled={sale.status === 'processed' || isUpdatingStatus}
                                 >
-                                  Chưa in
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => handleStatusChange(sale, 'printed')}
-                                  disabled={sale.status === 'printed' || isUpdatingStatus}
-                                >
-                                  Đã in
+                                  Đã xử lý
                                 </DropdownMenuItem>
                               </DropdownMenuContent>
                             </DropdownMenu>
@@ -715,8 +689,7 @@ export default function SalesPage() {
               </div>
             </CardFooter>
           </Card>
-        </TabsContent>
-      </Tabs>
-    </>
-  )
-}
+        </div>
+      </>
+    )
+  }

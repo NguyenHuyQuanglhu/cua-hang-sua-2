@@ -258,11 +258,11 @@ export class PurchaseOrderRepository extends BaseRepository<PurchaseOrder> {
           });
         }
         
-        // Update product's updated_at to move it to top of list
+        // Update product's stock_quantity and updated_at
         await transactionQuery(
           transaction,
-          `UPDATE Products SET updated_at = GETDATE() WHERE id = @productId AND store_id = @storeId`,
-          { productId: item.productId, storeId }
+          `UPDATE Products SET stock_quantity = stock_quantity + @quantity, updated_at = GETDATE() WHERE id = @productId AND store_id = @storeId`,
+          { productId: item.productId, storeId, quantity: baseQuantity }
         );
         
         items.push(this.mapItemToEntity(itemRecord));

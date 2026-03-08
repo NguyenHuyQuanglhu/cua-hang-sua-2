@@ -19,3 +19,13 @@ export {
   type TenantInfo,
   type TenantRouterConfig,
 } from './tenant-router';
+
+// Database error handling
+export {
+  withDatabaseErrorHandling,
+  handleSqlServerError,
+  isRetryableError,
+  retryDatabaseOperation,
+  withTransaction as withTransactionErrorHandling,
+  logDatabaseQuery,
+} from './errorHandler';

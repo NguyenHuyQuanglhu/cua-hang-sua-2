@@ -16,50 +16,40 @@ AS
 BEGIN
     SET NOCOUNT ON;
     
-    -- Get the requested unit's conversion factor
-    DECLARE @requestedConversionFactor DECIMAL(18, 6) = 1;
-    DECLARE @requestedIsBase BIT = 1;
-    
     SELECT 
-        @requestedConversionFactor = ISNULL(conversion_factor, 1),
-        @requestedIsBase = CASE WHEN base_unit_id IS NULL THEN 1 ELSE 0 END
-    FROM Units
-    WHERE id = @unitId;
-    
-    -- Calculate total stock in base unit from all inventory records
-    DECLARE @totalStockInBaseUnit DECIMAL(18, 6) = 0;
-    
-    SELECT @totalStockInBaseUnit = ISNULL(SUM(
-        CASE 
-            WHEN u.base_unit_id IS NULL THEN pi.Quantity  -- This is base unit
-            ELSE pi.Quantity * ISNULL(u.conversion_factor, 1)  -- Convert to base unit
-        END
-    ), 0)
-    FROM ProductInventory pi
-    LEFT JOIN Units u ON pi.UnitId = u.id
-    WHERE pi.ProductId = @productId AND pi.StoreId = @storeId;
-    
-    -- Convert from base unit to requested unit
-    DECLARE @availableInRequestedUnit DECIMAL(18, 6);
-    IF @requestedIsBase = 1
-        SET @availableInRequestedUnit = @totalStockInBaseUnit;
-    ELSE
-        SET @availableInRequestedUnit = @totalStockInBaseUnit / @requestedConversionFactor;
-    
-    -- Return the result
-    SELECT 
-        NULL AS id,
-        @productId AS productId,
-        @storeId AS storeId,
-        @unitId AS unitId,
-        @availableInRequestedUnit AS availableQuantity,
+        pi.Id AS id,
+        pi.ProductId AS productId,
+        pi.StoreId AS storeId,
+        pi.UnitId AS unitId,
+        ISNULL(pi.Quantity, 0) AS availableQuantity,
         p.name AS productName,
         u.name AS unitName,
-        GETDATE() AS createdAt,
-        GETDATE() AS updatedAt
-    FROM Products p
-    LEFT JOIN Units u ON u.id = @unitId
-    WHERE p.id = @productId;
+        pi.CreatedAt AS createdAt,
+        pi.UpdatedAt AS updatedAt
+    FROM ProductInventory pi
+    INNER JOIN Products p ON pi.ProductId = p.id
+    LEFT JOIN Units u ON pi.UnitId = u.id
+    WHERE pi.ProductId = @productId 
+        AND pi.StoreId = @storeId 
+        AND pi.UnitId = @unitId;
+    
+    -- If no record found, return 0 quantity
+    IF @@ROWCOUNT = 0
+    BEGIN
+        SELECT 
+            NULL AS id,
+            @productId AS productId,
+            @storeId AS storeId,
+            @unitId AS unitId,
+            0 AS availableQuantity,
+            p.name AS productName,
+            u.name AS unitName,
+            NULL AS createdAt,
+            NULL AS updatedAt
+        FROM Products p
+        LEFT JOIN Units u ON u.id = @unitId
+        WHERE p.id = @productId;
+    END
 END
 GO
 

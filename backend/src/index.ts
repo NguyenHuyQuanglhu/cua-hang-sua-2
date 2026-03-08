@@ -48,6 +48,9 @@ import debtReminderRoutes from './routes/debt-reminder';
 import { autoCloseShiftService } from './services/auto-close-shift.service';
 import { notificationGeneratorService } from './services/notification-generator.service';
 
+// Import error handling middleware
+import { errorHandler, notFoundHandler } from './middleware/errorHandler';
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -124,23 +127,15 @@ app.use('/api/printing', printingRoutes);
 app.use('/api/devices', devicesRoutes);
 app.use('/api/debt-reminder', debtReminderRoutes);
 
-// Error handling middleware
-app.use(
-  (
-    err: Error,
-    req: express.Request,
-    res: express.Response,
-    next: express.NextFunction
-  ) => {
-    console.error('Error:', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-);
+// 404 handler - must be before error handler
+app.use(notFoundHandler);
 
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ error: 'Not found' });
-});
+// Error handling middleware - must be last
+app.use(errorHandler({
+  includeStackTrace: process.env.NODE_ENV === 'development',
+  logErrors: true,
+  sendAdminAlerts: process.env.NODE_ENV === 'production',
+}));
 
 app.listen(PORT, () => {
   console.log(`🚀 Backend server running on http://localhost:${PORT}`);

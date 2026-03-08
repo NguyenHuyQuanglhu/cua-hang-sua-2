@@ -98,33 +98,43 @@ export class SalesService {
       }
 
       // Check inventory availability for all items first
+      // Accumulate requested quantities by product and unit
+      const requestedQuantities = new Map<string, number>();
+
       for (const item of saleData.items) {
         const unitId = item.unitId || await this.getDefaultUnitId(item.productId, storeId);
+        const key = `${item.productId}_${unitId}`;
+        const currentQty = requestedQuantities.get(key) || 0;
+        requestedQuantities.set(key, currentQty + item.quantity);
+      }
+
+      for (const [key, totalQty] of requestedQuantities.entries()) {
+        const [productId, unitId] = key.split('_');
 
         console.log('[SalesService] Checking stock:', {
-          productId: item.productId,
+          productId,
           storeId,
           unitId,
-          requestedQty: item.quantity
+          requestedQty: totalQty
         });
 
         const available = await inventoryService.checkAvailableQuantity(
-          item.productId,
+          productId,
           storeId,
           unitId
         );
 
         console.log('[SalesService] Available stock:', available);
 
-        if (available < item.quantity) {
+        if (available < totalQty) {
           const product = await queryOne<{ name: string }>(
             'SELECT name FROM Products WHERE id = @productId',
-            { productId: item.productId }
+            { productId }
           );
           throw new InsufficientStockError(
             `Không đủ hàng. Chỉ còn ${available} ${product?.name || 'sản phẩm'}`,
-            item.productId,
-            item.quantity,
+            productId,
+            totalQty,
             available,
             unitId
           );

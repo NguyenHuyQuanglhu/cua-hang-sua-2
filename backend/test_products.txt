@@ -1,0 +1,22 @@
+[
+  {
+    "id": "94CDFE41-6A63-4360-98AC-695090F00F9E",
+    "storeId": "B6E006C7-0115-4C46-9764-6BA61B911964",
+    "categoryId": "2F05FC73-5F58-4A39-BE94-FA760E2E1B63",
+    "name": "Bơ Président 200g",
+    "description": "Bơ lạt Président hộp 200g",
+    "price": 72000,
+    "costPrice": 55000,
+    "sku": "BOPRES200",
+    "unitId": "39F61B57-1BF8-4BCE-8974-F5255ED6BFD7",
+    "stockQuantity": 24,
+    "images": null,
+    "status": "active",
+    "createdAt": "2026-01-23T17:39:34.713Z",
+    "updatedAt": "2026-03-06T10:53:30.076Z",
+    "categoryName": "Bơ sữa",
+    "inventoryUnits": "[{\"unitId\":\"5FB3296E-7ABB-4676-862E-E17FA8AA0D03\",\"unitName\":\"Chai\",\"quantity\":24.0000},{\"unitId\":\"98044E55-A9BC-4F06-96E8-726E274DA8BD\",\"unitName\":\"Gói\",\"quantity\":1.0000}]",
+    "avgCostByUnit": "[{\"unitId\":\"5FB3296E-7ABB-4676-862E-E17FA8AA0D03\",\"unitName\":\"Chai\",\"avgCost\":87500.000000,\"totalQty\":23.00},{\"unitId\":\"98044E55-A9BC-4F06-96E8-726E274DA8BD\",\"unitName\":\"Gói\",\"avgCost\":20000.000000,\"totalQty\":1.00},{\"unitId\":\"39F61B57-1BF8-4BCE-8974-F5255ED6BFD7\",\"unitName\":\"Hộp\",\"avgCost\":55000.000000,\"totalQty\":1.00}]",
+    "currentStock": 0
+  }
+]
