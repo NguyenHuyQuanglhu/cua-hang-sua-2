@@ -44,28 +44,33 @@ interface SupplierPaymentFormProps {
   onSuccess?: () => void;
 }
 
-const FormattedNumberInput = ({ value, onChange, ...props }: { value: number; onChange: (value: number) => void; [key: string]: any }) => {
-  const [displayValue, setDisplayValue] = useState(value?.toLocaleString('en-US') || '');
+import React from 'react';
 
-  useEffect(() => {
-    setDisplayValue(value?.toLocaleString('en-US') || '0');
-  }, [value]);
+const FormattedNumberInput = React.forwardRef<HTMLInputElement, { value: number; onChange: (value: number) => void;[key: string]: any }>(
+  ({ value, onChange, ...props }, ref) => {
+    const [displayValue, setDisplayValue] = useState(value?.toLocaleString('en-US') || '');
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const rawValue = e.target.value.replace(/,/g, '');
-    const numberValue = parseInt(rawValue, 10);
+    useEffect(() => {
+      setDisplayValue(value?.toLocaleString('en-US') || '0');
+    }, [value]);
 
-    if (!isNaN(numberValue)) {
-      setDisplayValue(numberValue.toLocaleString('en-US'));
-      onChange(numberValue);
-    } else if (rawValue === '') {
-      setDisplayValue('');
-      onChange(0);
-    }
-  };
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const rawValue = e.target.value.replace(/,/g, '');
+      const numberValue = parseInt(rawValue, 10);
 
-  return <Input type="text" value={displayValue} onChange={handleChange} {...props} />;
-};
+      if (!isNaN(numberValue)) {
+        setDisplayValue(numberValue.toLocaleString('en-US'));
+        onChange(numberValue);
+      } else if (rawValue === '') {
+        setDisplayValue('');
+        onChange(0);
+      }
+    };
+
+    return <Input type="text" ref={ref} value={displayValue} onChange={handleChange} {...props} />;
+  }
+);
+FormattedNumberInput.displayName = 'FormattedNumberInput';
 
 
 export function SupplierPaymentForm({ isOpen, onOpenChange, supplier, onSuccess }: SupplierPaymentFormProps) {
@@ -91,8 +96,8 @@ export function SupplierPaymentForm({ isOpen, onOpenChange, supplier, onSuccess 
   }, [isOpen, supplier, form]);
 
   const onSubmit = async (data: PaymentFormValues) => {
-    if(!supplier) return;
-    
+    if (!supplier) return;
+
     const result = await addSupplierPayment({
       supplierId: supplier.supplierId,
       amount: data.amount,
@@ -116,7 +121,7 @@ export function SupplierPaymentForm({ isOpen, onOpenChange, supplier, onSuccess 
     }
   };
 
-  if(!supplier) return null;
+  if (!supplier) return null;
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
@@ -125,7 +130,7 @@ export function SupplierPaymentForm({ isOpen, onOpenChange, supplier, onSuccess 
           <DialogTitle>Thanh toán cho Nhà cung cấp</DialogTitle>
           <DialogDescription>
             Tạo một khoản thanh toán cho nhà cung cấp{' '}
-            <span className="font-semibold">{supplier.supplierName}</span>. 
+            <span className="font-semibold">{supplier.supplierName}</span>.
             Nợ hiện tại: <span className="font-semibold text-destructive">{formatCurrency(supplier.finalDebt)}</span>
           </DialogDescription>
         </DialogHeader>
@@ -157,7 +162,7 @@ export function SupplierPaymentForm({ isOpen, onOpenChange, supplier, onSuccess 
                 </FormItem>
               )}
             />
-             <FormField
+            <FormField
               control={form.control}
               name="notes"
               render={({ field }) => (

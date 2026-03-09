@@ -366,6 +366,18 @@ class ApiClient {
     return this.request<{ success: boolean }>(`/suppliers/${id}`, { method: 'DELETE' });
   }
 
+  // ==================== Supplier Payments ====================
+  async getSupplierPayments() {
+    return this.request('/supplier-payments');
+  }
+
+  async createSupplierPayment(data: Record<string, unknown>) {
+    return this.request('/supplier-payments', {
+      method: 'POST',
+      body: data,
+    });
+  }
+
   // ==================== Sales ====================
   async getSales(params?: {
     page?: number;
@@ -1052,6 +1064,7 @@ class ApiClient {
     if (params.limit) searchParams.set('limit', String(params.limit));
     return this.request(`/reports/customer-analytics?${searchParams.toString()}`);
   }
+
 }
 
 export const apiClient = new ApiClient();
