@@ -15,6 +15,63 @@ const router = Router();
 router.use(authenticate);
 router.use(storeContext);
 
+// GET /api/products/low-stock - Get products with low stock
+router.get('/low-stock', async (req: AuthRequest, res: Response) => {
+  try {
+    const storeId = req.storeId!;
+    const { threshold = '10' } = req.query;
+    const thresholdNum = parseInt(threshold as string);
+
+    // Get products with stock below threshold
+    // Use same logic as sp_Products_GetByStore: SUM of ProductInventory, fallback to stock_quantity
+    const lowStockQuery = `
+      SELECT 
+        p.id,
+        p.name,
+        p.sku,
+        p.price,
+        p.cost_price as costPrice,
+        p.stock_quantity as stockQuantity,
+        p.unit_id as unitId,
+        u.name as unitName,
+        c.name as categoryName,
+        p.category_id as categoryId,
+        ISNULL((SELECT SUM(Quantity) FROM ProductInventory WHERE ProductId = p.id AND StoreId = @storeId), p.stock_quantity) AS currentStock
+      FROM Products p
+      LEFT JOIN Units u ON p.unit_id = u.id
+      LEFT JOIN Categories c ON p.category_id = c.id
+      WHERE p.store_id = @storeId 
+        AND p.status = 'active'
+        AND ISNULL((SELECT SUM(Quantity) FROM ProductInventory WHERE ProductId = p.id AND StoreId = @storeId), p.stock_quantity) <= @threshold
+      ORDER BY ISNULL((SELECT SUM(Quantity) FROM ProductInventory WHERE ProductId = p.id AND StoreId = @storeId), p.stock_quantity) ASC, p.name ASC
+    `;
+
+    const products = await query(lowStockQuery, { storeId, threshold: thresholdNum });
+
+    res.json({
+      success: true,
+      data: products.map((p: any) => ({
+        id: p.id,
+        name: p.name,
+        sku: p.sku,
+        price: p.price,
+        costPrice: p.costPrice,
+        stockQuantity: p.stockQuantity || 0,
+        currentStock: p.currentStock,
+        unitId: p.unitId,
+        unitName: p.unitName,
+        categoryName: p.categoryName,
+        categoryId: p.categoryId,
+      })),
+      threshold: thresholdNum,
+      total: products.length,
+    });
+  } catch (error) {
+    console.error('Get low stock products error:', error);
+    res.status(500).json({ error: 'Failed to get low stock products' });
+  }
+});
+
 // GET /api/products
 router.get('/', async (req: AuthRequest, res: Response) => {
   try {
@@ -231,25 +288,37 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     const storeId = req.storeId!;
     const { name, description, categoryId, price, costPrice, sku, unitId, images, status } = req.body;
 
+    console.log('[PUT /api/products/:id] Request body:', req.body);
+    console.log('[PUT /api/products/:id] unitId:', unitId);
+
+    // Build update data, only include fields that are explicitly provided
+    const updateData: any = {};
+    
+    if (name !== undefined) updateData.name = name;
+    if (description !== undefined) updateData.description = description;
+    if (categoryId !== undefined) updateData.categoryId = categoryId;
+    if (price !== undefined) updateData.price = price;
+    if (costPrice !== undefined) updateData.costPrice = costPrice;
+    if (sku !== undefined) updateData.sku = sku;
+    if (unitId !== undefined && unitId !== null && unitId !== '') {
+      updateData.unitId = unitId;
+    }
+    if (images !== undefined) updateData.images = images ? JSON.stringify(images) : null;
+    if (status !== undefined) updateData.status = status;
+
+    console.log('[PUT /api/products/:id] Update data:', updateData);
+
     // Use SP Repository instead of inline query
-    const product = await productsSPRepository.update(id, storeId, {
-      name,
-      description: description !== undefined ? description : undefined,
-      categoryId: categoryId !== undefined ? categoryId : undefined,
-      price,
-      costPrice,
-      sku: sku !== undefined ? sku : undefined,
-      unitId: unitId !== undefined ? unitId : undefined,
-      images: images ? JSON.stringify(images) : undefined,
-      status,
-    });
+    const product = await productsSPRepository.update(id, storeId, updateData);
 
     if (!product) {
       res.status(404).json({ error: 'Không tìm thấy sản phẩm' });
       return;
     }
 
-    res.json({ success: true });
+    console.log('[PUT /api/products/:id] Updated product:', product);
+
+    res.json({ success: true, product });
   } catch (error) {
     console.error('Update product error:', error);
     res.status(500).json({ error: 'Failed to update product' });

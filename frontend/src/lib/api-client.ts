@@ -345,22 +345,6 @@ class ApiClient {
     return this.request<{ success: boolean }>(`/customers/${id}`, { method: 'DELETE' });
   }
 
-  async getCustomerDebtHistory(customerId: string) {
-    return this.request<{
-      success: boolean;
-      customerId: string;
-      history: Array<{
-        id: string;
-        customerId: string;
-        amount: number;
-        type: 'sale' | 'payment';
-        date: string;
-        description: string;
-        runningBalance: number;
-      }>;
-    }>(`/customers/${customerId}/history`);
-  }
-
   // ==================== Suppliers ====================
   async getSuppliers() {
     return this.request<Array<Record<string, unknown>>>('/suppliers');
@@ -513,23 +497,6 @@ class ApiClient {
 
   async deleteCashTransaction(id: string) {
     return this.request<{ success: boolean }>(`/cash-flow/${id}`, { method: 'DELETE' });
-  }
-
-  // ==================== Payments ====================
-  async getPayments() {
-    return this.request<Array<Record<string, unknown>>>('/payments');
-  }
-
-  async createPayment(data: Record<string, unknown>) {
-    return this.request('/payments', { method: 'POST', body: data });
-  }
-
-  async getSupplierPayments() {
-    return this.request<Array<Record<string, unknown>>>('/supplier-payments');
-  }
-
-  async createSupplierPayment(data: Record<string, unknown>) {
-    return this.request('/supplier-payments', { method: 'POST', body: data });
   }
 
   // ==================== Settings ====================

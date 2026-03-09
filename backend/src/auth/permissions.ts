@@ -18,7 +18,6 @@ export const DEFAULT_PERMISSIONS: Record<UserRole, Permissions> = {
     customers: ['view', 'add', 'edit', 'delete'],
     suppliers: ['view', 'add', 'edit', 'delete'],
     'cash-flow': ['view', 'add', 'edit', 'delete'],
-    debt_reminder: ['view', 'add'], // Send debt reminders
     reports_shifts: ['view'],
     reports_income_statement: ['view'],
     reports_profit: ['view'],
@@ -33,7 +32,6 @@ export const DEFAULT_PERMISSIONS: Record<UserRole, Permissions> = {
     reports_ai_basket_analysis: ['view'],
     settings: ['view', 'edit'],
     pos: ['view', 'add'],
-    ai_forecast: ['view'],
   },
 
   company_manager: {
@@ -49,7 +47,6 @@ export const DEFAULT_PERMISSIONS: Record<UserRole, Permissions> = {
     customers: ['view', 'add', 'edit'],
     suppliers: ['view', 'add', 'edit'],
     'cash-flow': ['view', 'add', 'edit'],
-    debt_reminder: ['view', 'add'], // Send debt reminders
     reports_shifts: ['view'],
     reports_income_statement: ['view'],
     reports_profit: ['view'],
@@ -64,7 +61,6 @@ export const DEFAULT_PERMISSIONS: Record<UserRole, Permissions> = {
     reports_ai_basket_analysis: ['view'],
     settings: ['view'],
     pos: ['view', 'add'],
-    ai_forecast: ['view'],
   },
 
   store_manager: {
@@ -78,7 +74,6 @@ export const DEFAULT_PERMISSIONS: Record<UserRole, Permissions> = {
     customers: ['view', 'add', 'edit'],
     suppliers: ['view', 'add'],
     'cash-flow': ['view', 'add'],
-    debt_reminder: ['view', 'add'], // Send debt reminders
     reports_shifts: ['view'],
     reports_profit: ['view'],
     reports_debt: ['view'],
@@ -107,7 +102,7 @@ export function getEffectivePermissions(
   customPermissions?: Permissions
 ): Permissions {
   const defaultPerms = DEFAULT_PERMISSIONS[userRole] || {};
-  
+
   if (!customPermissions) {
     return { ...defaultPerms };
   }
@@ -119,7 +114,7 @@ export function getEffectivePermissions(
       merged[module as Module] = perms;
     }
   }
-  
+
   return merged;
 }
 
@@ -136,7 +131,7 @@ export function hasPermission(
   if (userRole === 'owner') return true;
 
   // Get effective permissions
-  const effectivePerms = userRole 
+  const effectivePerms = userRole
     ? getEffectivePermissions(userRole, userPermissions)
     : userPermissions;
 
@@ -204,7 +199,7 @@ export function getModulePermissions(
     return ['view', 'add', 'edit', 'delete'];
   }
 
-  const effectivePerms = userRole 
+  const effectivePerms = userRole
     ? getEffectivePermissions(userRole, userPermissions)
     : userPermissions;
 
@@ -222,7 +217,7 @@ export function hasAnyPermission(
   // Owner has all permissions
   if (userRole === 'owner') return true;
 
-  const effectivePerms = userRole 
+  const effectivePerms = userRole
     ? getEffectivePermissions(userRole, userPermissions)
     : userPermissions;
 
@@ -259,7 +254,7 @@ export function getAccessibleModules(
     return Object.keys(DEFAULT_PERMISSIONS.owner) as Module[];
   }
 
-  const effectivePerms = userRole 
+  const effectivePerms = userRole
     ? getEffectivePermissions(userRole, userPermissions)
     : userPermissions;
 
@@ -292,7 +287,7 @@ export function checkPermission(
     return { allowed: true };
   }
 
-  const effectivePerms = userRole 
+  const effectivePerms = userRole
     ? getEffectivePermissions(userRole, userPermissions)
     : userPermissions;
 

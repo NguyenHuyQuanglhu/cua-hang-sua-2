@@ -20,6 +20,7 @@
     "rollback:order-status": "npx tsx scripts/rollback-order-status.ts"
   },
   "dependencies": {
+    "axios": "^1.13.6",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",

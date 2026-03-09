@@ -21,7 +21,6 @@ import settingsRoutes from './routes/settings';
 import usersRoutes from './routes/users';
 import storesRoutes from './routes/stores';
 import reportsRoutes from './routes/reports';
-import paymentsRoutes from './routes/payments';
 import supplierPaymentsRoutes from './routes/supplier-payments';
 import onlineStoresRoutes from './routes/online-stores';
 import storefrontRoutes from './routes/storefront';
@@ -32,7 +31,6 @@ import subscriptionRoutes from './routes/subscription';
 import unitConversionRoutes from './routes/unit-conversion';
 import uploadRoutes from './routes/upload';
 import bulkImportRoutes from './routes/bulk-import';
-import refundsRoutes from './routes/refunds';
 import notificationsRoutes from './routes/notifications';
 import inAppNotificationsRoutes from './routes/in-app-notifications';
 import paymentGatewayRoutes from './routes/payment-gateway';
@@ -42,7 +40,6 @@ import promotionRoutes from './routes/promotions';
 import voucherRoutes from './routes/vouchers';
 import printingRoutes from './routes/printing';
 import devicesRoutes from './routes/devices';
-import debtReminderRoutes from './routes/debt-reminder';
 
 // Import auto-close shift service
 import { autoCloseShiftService } from './services/auto-close-shift.service';
@@ -104,7 +101,6 @@ app.use('/api/settings', settingsRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/stores', storesRoutes);
 app.use('/api/reports', reportsRoutes);
-app.use('/api/payments', paymentsRoutes);
 app.use('/api/supplier-payments', supplierPaymentsRoutes);
 app.use('/api/online-stores', onlineStoresRoutes);
 app.use('/api/storefront', storefrontRoutes);
@@ -115,7 +111,6 @@ app.use('/api/subscription', subscriptionRoutes);
 app.use('/api', unitConversionRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/bulk', bulkImportRoutes);
-app.use('/api/refunds', refundsRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/in-app-notifications', inAppNotificationsRoutes);
 app.use('/api/payment-gateway', paymentGatewayRoutes);
@@ -125,7 +120,6 @@ app.use('/api/promotions', promotionRoutes);
 app.use('/api/vouchers', voucherRoutes);
 app.use('/api/printing', printingRoutes);
 app.use('/api/devices', devicesRoutes);
-app.use('/api/debt-reminder', debtReminderRoutes);
 
 // 404 handler - must be before error handler
 app.use(notFoundHandler);

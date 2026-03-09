@@ -1,5 +1,5 @@
 import PDFDocument from 'pdfkit';
-import { executeQuery } from '../db';
+import { query } from '../db/index';
 
 interface InvoiceItem {
   productName: string;
@@ -52,7 +52,7 @@ export async function getSaleForInvoice(
   tenantId: string
 ): Promise<InvoiceData | null> {
   // Get sale header
-  const saleResult = await executeQuery(
+  const saleResult = await query<any>(
     `SELECT
       s.SaleID, s.InvoiceNumber, s.SaleDate, s.SubTotal, s.DiscountAmount,
       s.TaxAmount, s.TotalAmount, s.PaymentMethod, s.Notes,
@@ -67,14 +67,14 @@ export async function getSaleForInvoice(
     { saleId, storeId, tenantId }
   );
 
-  if (!saleResult.recordset || saleResult.recordset.length === 0) {
+  if (!saleResult || saleResult.length === 0) {
     return null;
   }
 
-  const sale = saleResult.recordset[0];
+  const sale = saleResult[0];
 
   // Get sale items
-  const itemsResult = await executeQuery(
+  const itemsResult = await query<any>(
     `SELECT
       p.ProductName, si.Quantity, u.UnitName, si.UnitPrice,
       ISNULL(si.DiscountAmount, 0) as Discount, si.TotalPrice
@@ -85,7 +85,7 @@ export async function getSaleForInvoice(
     { saleId }
   );
 
-  const items: InvoiceItem[] = (itemsResult.recordset || []).map((item: any) => ({
+  const items: InvoiceItem[] = (itemsResult || []).map((item: any) => ({
     productName: item.ProductName || 'Unknown Product',
     quantity: item.Quantity,
     unitName: item.UnitName || '',

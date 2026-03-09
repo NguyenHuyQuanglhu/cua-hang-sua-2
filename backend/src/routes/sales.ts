@@ -1,103 +1,103 @@
-import { Router, Response } from 'express';
-import { query, queryOne } from '../db';
-import { authenticate, storeContext, AuthRequest } from '../middleware/auth';
-import { salesService, InventoryInsufficientStockError } from '../services';
-import { salesSPRepository } from '../repositories/sales-sp-repository';
-import * as pdfInvoiceService from '../services/pdf-invoice-service';
-import { validateAndNormalizeStatus, validateStatusQuery } from '../middleware/validateStatus';
+    import { Router, Response } from 'express';
+    import { query, queryOne } from '../db';
+    import { authenticate, storeContext, AuthRequest } from '../middleware/auth';
+    import { salesService, InventoryInsufficientStockError } from '../services';
+    import { salesSPRepository } from '../repositories/sales-sp-repository';
+    import * as pdfInvoiceService from '../services/pdf-invoice-service';
+    import { validateAndNormalizeStatus, validateStatusQuery } from '../middleware/validateStatus';
 
-const router = Router();
+    const router = Router();
 
-router.use(authenticate);
-router.use(storeContext);
+    router.use(authenticate);
+    router.use(storeContext);
 
-// Helper function to generate invoice number
-async function generateInvoiceNumber(storeId: string): Promise<string> {
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = (today.getMonth() + 1).toString().padStart(2, '0');
-  const day = today.getDate().toString().padStart(2, '0');
-  const datePrefix = `PN${year}${month}${day}`;
+    // Helper function to generate invoice number
+    async function generateInvoiceNumber(storeId: string): Promise<string> {
+      const today = new Date();
+      const year = today.getFullYear();
+      const month = (today.getMonth() + 1).toString().padStart(2, '0');
+      const day = today.getDate().toString().padStart(2, '0');
+      const datePrefix = `PN${year}${month}${day}`;
 
-  const result = await queryOne<{ invoice_number: string }>(
-    `SELECT TOP 1 invoice_number 
-     FROM Sales 
-     WHERE store_id = @storeId AND invoice_number LIKE @prefix + '%' 
-     ORDER BY invoice_number DESC`,
-    { storeId, prefix: datePrefix }
-  );
-
-  let nextSequence = 1;
-  if (result) {
-    const lastSequence = parseInt(
-      result.invoice_number.substring(datePrefix.length),
-      10
-    );
-    if (!isNaN(lastSequence)) {
-      nextSequence = lastSequence + 1;
-    }
-  }
-
-  return `${datePrefix}${nextSequence.toString().padStart(4, '0')}`;
-}
-
-// GET /api/sales
-router.get('/', validateStatusQuery, async (req: AuthRequest, res: Response) => {
-  try {
-    const storeId = req.storeId!;
-    const userId = req.user!.id;
-    const userRole = req.user!.role;
-    const { page = '1', pageSize = '20', search, status, customerId, dateFrom, dateTo } = req.query;
-
-    const pageNum = parseInt(page as string);
-    const pageSizeNum = parseInt(pageSize as string);
-
-    // Use SP Repository to get sales with filters
-    const filters = {
-      startDate: dateFrom ? new Date(dateFrom as string) : null,
-      endDate: dateTo ? new Date(dateTo as string) : null,
-      customerId: customerId && customerId !== 'all' ? customerId as string : null,
-      status: status && status !== 'all' ? status as string : null,
-    };
-
-    let sales = await salesSPRepository.getByStore(storeId, filters);
-
-    // Filter by employee: only show sales created by current user
-    // Exception: owner and company_manager can see all sales
-    if (userRole !== 'owner' && userRole !== 'company_manager') {
-      sales = sales.filter(s => s.createdBy === userId);
-    }
-
-    // Apply search filter (client-side since SP doesn't support it)
-    if (search) {
-      const searchLower = (search as string).toLowerCase();
-      sales = sales.filter(s =>
-        s.invoiceNumber?.toLowerCase().includes(searchLower) ||
-        s.customerName?.toLowerCase().includes(searchLower)
+      const result = await queryOne<{ invoice_number: string }>(
+        `SELECT TOP 1 invoice_number 
+        FROM Sales 
+        WHERE store_id = @storeId AND invoice_number LIKE @prefix + '%' 
+        ORDER BY invoice_number DESC`,
+        { storeId, prefix: datePrefix }
       );
+
+      let nextSequence = 1;
+      if (result) {
+        const lastSequence = parseInt(
+          result.invoice_number.substring(datePrefix.length),
+          10
+        );
+        if (!isNaN(lastSequence)) {
+          nextSequence = lastSequence + 1;
+        }
+      }
+
+      return `${datePrefix}${nextSequence.toString().padStart(4, '0')}`;
     }
 
-    // Calculate status counts for all sales (before pagination)
-    const statusCounts = {
-      pending: sales.filter(s => s.status === 'pending').length,
-      processed: sales.filter(s => s.status === 'processed').length,
-    };
+    // GET /api/sales
+    router.get('/', validateStatusQuery, async (req: AuthRequest, res: Response) => {
+      try {
+        const storeId = req.storeId!;
+        const userId = req.user!.id;
+        const userRole = req.user!.role;
+        const { page = '1', pageSize = '20', search, status, customerId, dateFrom, dateTo } = req.query;
 
-    // Calculate pagination
-    const total = sales.length;
-    const totalPages = Math.ceil(total / pageSizeNum);
-    const offset = (pageNum - 1) * pageSizeNum;
-    const paginatedSales = sales.slice(offset, offset + pageSizeNum);
+        const pageNum = parseInt(page as string);
+        const pageSizeNum = parseInt(pageSize as string);
 
-    // Get item counts for all paginated sales in a single query (fix N+1)
-    let itemCountMap: Record<string, number> = {};
-    if (paginatedSales.length > 0) {
-      const saleIds = paginatedSales.map(s => s.id);
-      const placeholders = saleIds.map((_, i) => `@id${i}`).join(',');
-      const params: Record<string, string> = {};
-      saleIds.forEach((id, i) => { params[`id${i}`] = id; });
+        // Use SP Repository to get sales with filters
+        const filters = {
+          startDate: dateFrom ? new Date(dateFrom as string) : null,
+          endDate: dateTo ? new Date(dateTo as string) : null,
+          customerId: customerId && customerId !== 'all' ? customerId as string : null,
+          status: status && status !== 'all' ? status as string : null,
+        };
 
-      const countResults = await query(
+        let sales = await salesSPRepository.getByStore(storeId, filters);
+
+        // Filter by employee: only show sales created by current user
+        // Exception: owner and company_manager can see all sales
+        if (userRole !== 'owner' && userRole !== 'company_manager') {
+          sales = sales.filter(s => s.createdBy === userId);
+        }
+
+        // Apply search filter (client-side since SP doesn't support it)
+        if (search) {
+          const searchLower = (search as string).toLowerCase();
+          sales = sales.filter(s =>
+            s.invoiceNumber?.toLowerCase().includes(searchLower) ||
+            s.customerName?.toLowerCase().includes(searchLower)
+          );
+        }
+
+        // Calculate status counts for all sales (before pagination)
+        const statusCounts = {
+          pending: sales.filter(s => s.status === 'pending').length,
+          processed: sales.filter(s => s.status === 'processed').length,
+        };
+
+        // Calculate pagination
+        const total = sales.length;
+        const totalPages = Math.ceil(total / pageSizeNum);
+        const offset = (pageNum - 1) * pageSizeNum;
+        const paginatedSales = sales.slice(offset, offset + pageSizeNum);
+
+        // Get item counts for all paginated sales in a single query (fix N+1)
+        let itemCountMap: Record<string, number> = {};
+        if (paginatedSales.length > 0) {
+          const saleIds = paginatedSales.map(s => s.id);
+          const placeholders = saleIds.map((_, i) => `@id${i}`).join(',');
+          const params: Record<string, string> = {};
+          saleIds.forEach((id, i) => { params[`id${i}`] = id; });
+
+          const countResults = await query(
         `SELECT sales_transaction_id, COUNT(*) as item_count
          FROM SalesItems
          WHERE sales_transaction_id IN (${placeholders})
@@ -308,13 +308,26 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
       pointsUsed, pointsDiscount, status
     } = req.body;
 
+    // Convert previousDebt to number if it's a string
+    const previousDebtAmount = previousDebt ? Number(previousDebt) : 0;
+    const customerPaymentAmount = customerPayment ? Number(customerPayment) : 0;
+    const totalAmountValue = totalAmount ? Number(totalAmount) : 0;
+
     // Set default status to "pending" if not provided (Requirement 2.2)
     const orderStatus = status || 'pending';
 
-    console.log('[POST /api/sales] Creating sale:', { storeId, userId, customerId, shiftId, itemsCount: items?.length, totalAmount, finalAmount, previousDebt, status: orderStatus });
+    console.log('[POST /api/sales] Creating sale:', { 
+      storeId, userId, customerId, shiftId, 
+      itemsCount: items?.length, 
+      totalAmount: totalAmountValue, 
+      finalAmount, 
+      previousDebt: previousDebtAmount,
+      customerPayment: customerPaymentAmount,
+      status: orderStatus 
+    });
 
     // Allow empty items if this is a debt payment only (previousDebt > 0 and totalAmount = 0)
-    const isDebtPaymentOnly = previousDebt > 0 && totalAmount === 0 && (!items || items.length === 0);
+    const isDebtPaymentOnly = previousDebtAmount > 0 && totalAmountValue === 0 && (!items || items.length === 0);
 
     // Validate items (unless it's debt payment only)
     if (!isDebtPaymentOnly && (!items || items.length === 0)) {
@@ -325,6 +338,12 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
     // If debt payment only, create a simple sale record without inventory management
     if (isDebtPaymentOnly) {
       console.log('[POST /api/sales] Creating debt payment only sale');
+      console.log('[POST /api/sales] Debt payment details:', { 
+        customerId, 
+        previousDebt: previousDebtAmount, 
+        customerPayment: customerPaymentAmount, 
+        totalAmount: totalAmountValue 
+      });
 
       const saleId = crypto.randomUUID();
       const invoiceNumber = await generateInvoiceNumber(storeId);
@@ -333,11 +352,11 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
         `INSERT INTO Sales (
           id, store_id, customer_id, shift_id, invoice_number, transaction_date,
           total_amount, discount, discount_type, discount_value, vat_amount, final_amount,
-          customer_payment, previous_debt, remaining_debt, payment_method, status, CreatedBy, created_at, updated_at
+          customer_payment, previous_debt, remaining_debt, status, CreatedBy, created_at, updated_at
         ) VALUES (
           @id, @storeId, @customerId, @shiftId, @invoiceNumber, GETDATE(),
           @totalAmount, @discount, @discountType, @discountValue, @vatAmount, @finalAmount,
-          @customerPayment, @previousDebt, @remainingDebt, @paymentMethod, @status, @createdBy, GETDATE(), GETDATE()
+          @customerPayment, @previousDebt, @remainingDebt, @status, @createdBy, GETDATE(), GETDATE()
         )`,
         {
           id: saleId,
@@ -351,25 +370,81 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
           discountValue: 0,
           vatAmount: 0,
           finalAmount: 0,
-          customerPayment: customerPayment || 0,
-          previousDebt: previousDebt || 0,
+          customerPayment: customerPaymentAmount,
+          previousDebt: previousDebtAmount,
           remainingDebt: 0, // Debt is paid
-          paymentMethod: req.body.paymentMethod || 'cash',
           status: orderStatus,
           createdBy: userId,
         }
       );
 
-      // Update customer debt
-      if (customerId && previousDebt > 0) {
-        await query(
+      // Update customer debt and clear remaining_debt from old sales
+      // IMPORTANT: Always run this if we have customerId and previousDebt
+      if (customerId && previousDebtAmount > 0) {
+        console.log('[POST /api/sales] ✓ Starting debt update process');
+        console.log('[POST /api/sales] Customer ID:', customerId);
+        console.log('[POST /api/sales] Previous Debt:', previousDebtAmount);
+        console.log('[POST /api/sales] Store ID:', storeId);
+        
+        // First, update the customer's total_debt
+        const updateCustomerResult = await query(
           `UPDATE Customers 
            SET total_debt = ISNULL(total_debt, 0) - @previousDebt,
                total_paid = ISNULL(total_paid, 0) + @previousDebt,
                updated_at = GETDATE()
            WHERE id = @customerId AND store_id = @storeId`,
-          { customerId, previousDebt, storeId }
+          { customerId, previousDebt: previousDebtAmount, storeId }
         );
+
+        console.log('[POST /api/sales] ✓ Customer table updated');
+
+        // Then, clear remaining_debt from old sales (FIFO - oldest first)
+        // Get all sales with remaining debt
+        const salesWithDebt = await query(
+          `SELECT id, remaining_debt, transaction_date, created_at, invoice_number
+           FROM Sales
+           WHERE customer_id = @customerId 
+             AND store_id = @storeId 
+             AND remaining_debt > 0
+           ORDER BY transaction_date ASC, created_at ASC`,
+          { customerId, storeId }
+        ) as Array<{ id: string; remaining_debt: number; transaction_date: Date; created_at: Date; invoice_number: string }>;
+
+        console.log('[POST /api/sales] ✓ Found', salesWithDebt.length, 'sales with debt');
+
+        // Apply payment to sales (FIFO)
+        let remainingPayment = previousDebtAmount;
+        for (const sale of salesWithDebt) {
+          if (remainingPayment <= 0) break;
+
+          const debtToPay = Math.min(sale.remaining_debt, remainingPayment);
+          const newRemainingDebt = sale.remaining_debt - debtToPay;
+
+          console.log('[POST /api/sales] ✓ Updating sale:', {
+            invoice: sale.invoice_number,
+            saleId: sale.id,
+            oldDebt: sale.remaining_debt,
+            payment: debtToPay,
+            newDebt: newRemainingDebt
+          });
+
+          await query(
+            `UPDATE Sales
+             SET remaining_debt = @newRemainingDebt,
+                 updated_at = GETDATE()
+             WHERE id = @saleId`,
+            { saleId: sale.id, newRemainingDebt }
+          );
+
+          remainingPayment -= debtToPay;
+        }
+
+        console.log('[POST /api/sales] ✓ Debt update completed successfully!');
+        console.log('[POST /api/sales] Remaining payment after allocation:', remainingPayment);
+      } else {
+        console.log('[POST /api/sales] ✗ SKIPPING debt update');
+        console.log('[POST /api/sales] Reason: customerId =', customerId, '(type:', typeof customerId, ')');
+        console.log('[POST /api/sales] Reason: previousDebt =', previousDebtAmount, '(type:', typeof previousDebtAmount, ')');
       }
 
       console.log('[POST /api/sales] Debt payment sale created:', saleId, invoiceNumber);
@@ -379,6 +454,9 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
         invoiceNumber,
         status: orderStatus,
         finalAmount: 0,
+        customerPayment: customerPaymentAmount,
+        previousDebt: previousDebtAmount,
+        totalAmount: 0,
         conversions: [],
       });
       return;

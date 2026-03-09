@@ -6,7 +6,7 @@ import { shiftRepository } from '../repositories/shift-repository';
  * Service tự động đóng ca làm việc khi hết thời gian
  */
 export class AutoCloseShiftService {
-  private cronJob: cron.ScheduledTask | null = null;
+  private cronJob: any = null;
   private isRunning = false;
 
   /**

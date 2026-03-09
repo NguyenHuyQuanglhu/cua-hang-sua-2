@@ -5,6 +5,7 @@
 'use client'
 
 import { useEffect, useMemo, useState, useTransition } from 'react'
+import React from 'react'
 import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -68,29 +69,33 @@ import { getProductInfoSuggestion } from '@/app/actions'
 import { Textarea } from '@/components/ui/textarea'
 
 // Helper component for formatted number input
-const FormattedNumberInput = ({ value, onChange, ...props }: { value: number; onChange: (value: number) => void; [key: string]: any }) => {
-  const [displayValue, setDisplayValue] = useState(value?.toLocaleString('en-US') || '');
+const FormattedNumberInput = React.forwardRef<HTMLInputElement, { value: number; onChange: (value: number) => void; [key: string]: any }>(
+  ({ value, onChange, ...props }, ref) => {
+    const [displayValue, setDisplayValue] = useState(value?.toLocaleString('en-US') || '');
 
-  useEffect(() => {
-    // Update display value when the underlying form value changes
-    setDisplayValue(value?.toLocaleString('en-US') || '');
-  }, [value]);
+    useEffect(() => {
+      // Update display value when the underlying form value changes
+      setDisplayValue(value?.toLocaleString('en-US') || '');
+    }, [value]);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const rawValue = e.target.value.replace(/,/g, '');
-    const numberValue = parseInt(rawValue, 10);
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const rawValue = e.target.value.replace(/,/g, '');
+      const numberValue = parseInt(rawValue, 10);
 
-    if (!isNaN(numberValue)) {
-      setDisplayValue(numberValue.toLocaleString('en-US'));
-      onChange(numberValue);
-    } else if (rawValue === '') {
-      setDisplayValue('');
-      onChange(0); // Or handle as needed
-    }
-  };
+      if (!isNaN(numberValue)) {
+        setDisplayValue(numberValue.toLocaleString('en-US'));
+        onChange(numberValue);
+      } else if (rawValue === '') {
+        setDisplayValue('');
+        onChange(0); // Or handle as needed
+      }
+    };
 
-  return <Input type="text" value={displayValue} onChange={handleChange} {...props} />;
-};
+    return <Input ref={ref} type="text" value={displayValue} onChange={handleChange} {...props} />;
+  }
+);
+
+FormattedNumberInput.displayName = 'FormattedNumberInput';
 
 
 const purchaseLotSchema = z.object({
@@ -232,10 +237,15 @@ export function ProductForm({ isOpen, onOpenChange, product, categories, units }
 
 
   const onSubmit = async (data: ProductFormValues) => {
-     const dataToSubmit = {
+    console.log('[ProductForm] Form data before submit:', data);
+    console.log('[ProductForm] unitId value:', data.unitId);
+    
+    const dataToSubmit = {
       ...data,
       id: product?.id,
     };
+
+    console.log('[ProductForm] Data to submit:', dataToSubmit);
 
     const result = await upsertProduct(dataToSubmit);
     if (result.success) {
@@ -252,6 +262,15 @@ export function ProductForm({ isOpen, onOpenChange, product, categories, units }
         description: result.error,
       });
     }
+  };
+  
+  const onError = (errors: any) => {
+    console.log('[ProductForm] Validation errors:', errors);
+    toast({
+      variant: "destructive",
+      title: "Lỗi validation",
+      description: "Vui lòng kiểm tra lại các trường bắt buộc",
+    });
   };
   
   const handleGetSuggestion = () => {
@@ -315,7 +334,7 @@ export function ProductForm({ isOpen, onOpenChange, product, categories, units }
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="grid grid-rows-[1fr_auto] gap-4 overflow-hidden">
+          <form onSubmit={form.handleSubmit(onSubmit, onError)} className="grid grid-rows-[1fr_auto] gap-4 overflow-hidden">
             <div className='space-y-4 overflow-y-auto pr-6'>
               <div className="grid grid-cols-2 gap-4">
                 <FormField
@@ -394,7 +413,11 @@ export function ProductForm({ isOpen, onOpenChange, product, categories, units }
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Đơn vị tính</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value} disabled={hasExistingLots}>
+                      <Select 
+                        onValueChange={field.onChange} 
+                        value={field.value}
+                        disabled={hasExistingLots && !!product?.unitId}
+                      >
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue placeholder="Chọn đơn vị tính chính" />
@@ -412,7 +435,19 @@ export function ProductForm({ isOpen, onOpenChange, product, categories, units }
                             })}
                         </SelectContent>
                       </Select>
-                       {hasExistingLots && <FormDescription>Không thể thay đổi ĐVT khi đã có lô nhập hàng.</FormDescription>}
+                      {hasExistingLots && !!product?.unitId ? (
+                        <FormDescription className="text-amber-600">
+                          Không thể thay đổi đơn vị khi đã có lô nhập hàng.
+                        </FormDescription>
+                      ) : !field.value ? (
+                        <FormDescription className="text-red-600">
+                          Vui lòng chọn đơn vị tính để có thể nhập hàng.
+                        </FormDescription>
+                      ) : (
+                        <FormDescription>
+                          Đơn vị tính cơ bản của sản phẩm.
+                        </FormDescription>
+                      )}
                       <FormMessage />
                     </FormItem>
                   )}
@@ -619,7 +654,16 @@ export function ProductForm({ isOpen, onOpenChange, product, categories, units }
 
             <DialogFooter className="pt-4 border-t">
               <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Hủy</Button>
-              <Button type="submit" disabled={form.formState.isSubmitting}>
+              <Button 
+                type="submit" 
+                disabled={form.formState.isSubmitting}
+                onClick={(e) => {
+                  console.log('[ProductForm] Submit button clicked');
+                  alert('Button clicked! Check console for logs');
+                  console.log('[ProductForm] Form values:', form.getValues());
+                  console.log('[ProductForm] Form errors:', form.formState.errors);
+                }}
+              >
                 {form.formState.isSubmitting ? 'Đang lưu...' : 'Lưu'}
               </Button>
             </DialogFooter>

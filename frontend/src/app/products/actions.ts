@@ -166,21 +166,33 @@ export async function upsertProduct(product: Record<string, unknown>): Promise<{
     
     // Map frontend field names to backend field names
     const productData = {
-      ...product,
+      name: product.name,
+      barcode: product.barcode,
+      description: product.description,
+      categoryId: product.categoryId,
+      unitId: product.unitId, // Keep unitId
       price: product.sellingPrice, // Map sellingPrice -> price
       costPrice: product.costPrice,
-      // Remove frontend-only fields
-      sellingPrice: undefined,
+      status: product.status,
+      lowStockThreshold: product.lowStockThreshold,
+      images: product.images,
     };
     
+    console.log('[upsertProduct] Input:', { id, product });
+    console.log('[upsertProduct] Mapped data:', productData);
+    
     if (id) {
-      await apiClient.updateProduct(id, productData);
+      console.log('[upsertProduct] Updating product:', id);
+      const result = await apiClient.updateProduct(id, productData);
+      console.log('[upsertProduct] Update result:', result);
     } else {
-      await apiClient.createProduct(productData);
+      console.log('[upsertProduct] Creating product');
+      const result = await apiClient.createProduct(productData);
+      console.log('[upsertProduct] Create result:', result);
     }
     return { success: true };
   } catch (error: unknown) {
-    console.error('Error upserting product:', error);
+    console.error('[upsertProduct] Error:', error);
     return { 
       success: false, 
       error: error instanceof Error ? error.message : 'Không thể tạo hoặc cập nhật sản phẩm' 

@@ -34,6 +34,85 @@ router.get('/revenue', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// GET /api/reports/supplier-debt
+router.get('/supplier-debt', async (req: AuthRequest, res: Response) => {
+  try {
+    const storeId = req.storeId!;
+    const suppliers = await query(
+      `SELECT
+        id, name as supplierName, contact_person as contactPerson, phone,
+        total_purchases as totalPurchases, total_paid as totalPaid,
+        (ISNULL(total_purchases, 0) - ISNULL(total_paid, 0)) as totalDebt
+       FROM Suppliers
+       WHERE store_id = @storeId
+         AND (ISNULL(total_purchases, 0) - ISNULL(total_paid, 0)) > 0`,
+      { storeId }
+    );
+
+    res.json({ success: true, data: suppliers });
+  } catch (error) {
+    console.error('Get supplier debt report error:', error);
+    res.status(500).json({ error: 'Failed to get supplier debt report' });
+  }
+});
+
+// GET /api/reports/debt
+router.get('/debt', async (req: AuthRequest, res: Response) => {
+  try {
+    const storeId = req.storeId!;
+    const { hasDebtOnly } = req.query;
+
+    const customersResult = await query(
+      `SELECT
+        c.id,
+        c.full_name as customerName,
+        c.phone,
+        c.total_debt as historicalDebt,
+        c.total_paid as historicalPaid,
+        -- Calculate accurate current debt from Sales
+        (
+            SELECT COALESCE(SUM(s.remaining_debt), 0)
+            FROM Sales s
+            WHERE s.customer_id = c.id AND s.remaining_debt > 0
+        ) AS currentDebt,
+        c.customer_group as customerGroup
+       FROM Customers c
+       WHERE c.store_id = @storeId`,
+      { storeId }
+    ) as any[];
+
+    // Map and calculate actual debt
+    let totalDebt = 0;
+    let data = customersResult.map(c => {
+      const debtValue = c.currentDebt > 0 ? c.currentDebt : 0;
+      totalDebt += debtValue;
+      return {
+        id: c.id,
+        customerName: c.customerName,
+        phone: c.phone,
+        totalDebt: debtValue,
+        customerGroup: c.customerGroup
+      };
+    });
+
+    if (hasDebtOnly === 'true') {
+      data = data.filter(c => c.totalDebt > 0);
+    }
+
+    res.json({
+      success: true,
+      data,
+      totals: {
+        totalDebt
+      }
+    });
+
+  } catch (error) {
+    console.error('Get customer debt report error:', error);
+    res.status(500).json({ success: false, error: 'Failed to get customer debt report' });
+  }
+});
+
 // GET /api/reports/sales - Sales report with filters
 router.get('/sales', async (req: AuthRequest, res: Response) => {
   try {
@@ -257,70 +336,6 @@ router.get('/inventory', async (req: AuthRequest, res: Response) => {
   } catch (error) {
     console.error('Get inventory report error:', error);
     res.status(500).json({ success: false, error: 'Failed to get inventory report' });
-  }
-});
-
-// GET /api/reports/debt - Customer debt report
-router.get('/debt', async (req: AuthRequest, res: Response) => {
-  try {
-    const storeId = req.storeId!;
-    const { hasDebtOnly } = req.query;
-
-    let havingClause = '';
-    if (hasDebtOnly === 'true') {
-      havingClause = 'AND (ISNULL(sales.totalSales, 0) - ISNULL(sales.customerPayment, 0) - ISNULL(payments.totalPayments, 0)) > 0';
-    }
-
-    const result = await query(
-      `SELECT 
-        c.id, 
-        c.full_name as name, 
-        c.phone, 
-        c.email,
-        ISNULL(sales.totalSales, 0) as totalSales,
-        ISNULL(sales.customerPayment, 0) + ISNULL(payments.totalPayments, 0) as totalPayments,
-        ISNULL(sales.totalSales, 0) - ISNULL(sales.customerPayment, 0) - ISNULL(payments.totalPayments, 0) as totalDebt,
-        ISNULL(sales.transactionCount, 0) as transactionCount
-       FROM Customers c
-       LEFT JOIN (
-         SELECT customer_id, 
-                SUM(final_amount) as totalSales,
-                SUM(customer_payment) as customerPayment,
-                COUNT(id) as transactionCount
-         FROM Sales 
-         WHERE store_id = @storeId
-         GROUP BY customer_id
-       ) sales ON c.id = sales.customer_id
-       LEFT JOIN (
-         SELECT customer_id, 
-                SUM(amount) as totalPayments
-         FROM Payments 
-         WHERE store_id = @storeId
-         GROUP BY customer_id
-       ) payments ON c.id = payments.customer_id
-       WHERE c.store_id = @storeId
-       ${havingClause}
-       ORDER BY totalDebt DESC`,
-      { storeId }
-    );
-
-    // Calculate totals
-    const totals = {
-      totalSales: 0,
-      totalPayments: 0,
-      totalDebt: 0,
-    };
-
-    result.forEach((row: any) => {
-      totals.totalSales += Number(row.totalSales) || 0;
-      totals.totalPayments += Number(row.totalPayments) || 0;
-      totals.totalDebt += Number(row.totalDebt) || 0;
-    });
-
-    res.json({ data: result, total: result.length, totals });
-  } catch (error) {
-    console.error('Get debt report error:', error);
-    res.status(500).json({ error: 'Failed to get debt report' });
   }
 });
 

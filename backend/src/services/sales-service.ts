@@ -33,6 +33,7 @@ export interface CreateSaleInput {
   customerPayment?: number;
   previousDebt?: number;
   vatAmount?: number;
+  status?: 'pending' | 'processed';
 }
 
 /**
@@ -160,8 +161,14 @@ export class SalesService {
       // Total sales value from THIS transaction
       const salesValueFromThisTransaction = finalAmount;
 
-      // Total remaining debt (old debt + new sales value - payment)
-      const remainingDebt = previousDebt + salesValueFromThisTransaction - customerPayment;
+      // Calculate debt for just THIS sale
+      const saleRemainingDebt = Math.max(0, salesValueFromThisTransaction - customerPayment);
+
+      // Calculate any excess payment that should go to old debt
+      const excessPayment = Math.max(0, customerPayment - salesValueFromThisTransaction);
+
+      // We still store remaining_debt as just the remaining debt of THIS sale
+      const remainingDebt = saleRemainingDebt;
 
       // Generate invoice number
       const invoiceNumber = await this.generateInvoiceNumber(storeId);
@@ -188,7 +195,7 @@ export class SalesService {
           customerId: saleData.customerId || null,
           shiftId: saleData.shiftId || null,
           transactionDate: now,
-          status: 'pending',
+          status: saleData.status || 'pending',
           totalAmount,
           vatAmount,
           finalAmount,
@@ -274,6 +281,45 @@ export class SalesService {
             }
           );
         }
+
+        // Apply excess payment to old debts (FIFO)
+        if (excessPayment > 0) {
+          const salesWithDebt = await query(
+            `SELECT id, remaining_debt FROM Sales
+             WHERE customer_id = @customerId AND store_id = @storeId AND remaining_debt > 0
+             ORDER BY transaction_date ASC, created_at ASC`,
+            { customerId: saleData.customerId, storeId }
+          ) as Array<{ id: string; remaining_debt: number }>;
+
+          let remainingToPay = excessPayment;
+          for (const oldSale of salesWithDebt) {
+            if (remainingToPay <= 0) break;
+            const debtToClear = Math.min(oldSale.remaining_debt, remainingToPay);
+            const newOldSaleDebt = oldSale.remaining_debt - debtToClear;
+
+            await query(
+              `UPDATE Sales SET remaining_debt = @newDebt, updated_at = @updatedAt WHERE id = @saleId`,
+              { newDebt: newOldSaleDebt, updatedAt: now, saleId: oldSale.id }
+            );
+            remainingToPay -= debtToClear;
+          }
+        }
+
+        // Explicitly create a Payments record so it shows up in History properly
+        if (customerPayment > 0) {
+          await query(
+            `INSERT INTO Payments (id, store_id, customer_id, payment_date, amount, notes, created_at)
+             VALUES (NEWID(), @storeId, @customerId, @paymentDate, @amount, @notes, @createdAt)`,
+            {
+              storeId,
+              customerId: saleData.customerId,
+              paymentDate: now,
+              amount: customerPayment,
+              notes: `Thanh toán tại quầy (Hoá đơn ${invoiceNumber})`,
+              createdAt: now
+            }
+          );
+        }
       }
 
       // Earn loyalty points for the customer (if applicable)
@@ -289,7 +335,7 @@ export class SalesService {
               saleId
             );
             if (earnResult.points > 0) {
-              console.log(`[SalesService] Customer ${saleData.customerId} earned ${earnResult.points} points. New balance: ${earnResult.newBalance}`);
+              console.log(`[SalesService] Customer ${saleData.customerId} earned ${earnResult.points} points.New balance: ${earnResult.newBalance}`);
             }
           }
         } catch (earnError) {
@@ -313,7 +359,7 @@ export class SalesService {
             },
             storeId
           );
-          console.log(`[SalesService] Created cash transaction for sale ${invoiceNumber}: ${customerPayment}`);
+          console.log(`[SalesService] Created cash transaction for sale ${invoiceNumber}: ${customerPayment} `);
         } catch (cashError) {
           // Log but don't fail the sale if cash transaction fails
           console.error('[SalesService] Failed to create cash transaction:', cashError);
@@ -386,8 +432,8 @@ export class SalesService {
           await query(
             `UPDATE Customers 
              SET total_debt = ISNULL(total_debt, 0) - @debtChange,
-                 total_paid = ISNULL(total_paid, 0) - @paidAmount,
-                 updated_at = @updatedAt
+            total_paid = ISNULL(total_paid, 0) - @paidAmount,
+            updated_at = @updatedAt
              WHERE id = @customerId AND store_id = @storeId`,
             {
               customerId: sale.customer_id,

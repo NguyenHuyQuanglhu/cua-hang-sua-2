@@ -4,7 +4,7 @@ import { getConnection } from '../db/connection';
 import cron from 'node-cron';
 
 class NotificationGeneratorService {
-  private cronJob: cron.ScheduledTask | null = null;
+  private cronJob: any = null;
 
   start() {
     // Run every hour
@@ -28,7 +28,7 @@ class NotificationGeneratorService {
   private async checkLowStock() {
     try {
       const pool = await getConnection();
-      
+
       // Get products with low stock
       const result = await pool.request().query(`
         SELECT 
@@ -93,7 +93,7 @@ class NotificationGeneratorService {
   private async checkDebtReminders() {
     try {
       const pool = await getConnection();
-      
+
       // Get customers with debt > 0
       const result = await pool.request().query(`
         SELECT 
@@ -156,7 +156,7 @@ class NotificationGeneratorService {
   private async checkShiftEnding() {
     try {
       const pool = await getConnection();
-      
+
       // Get active shifts that will end in 30 minutes
       const result = await pool.request().query(`
         SELECT 

@@ -410,7 +410,7 @@ export default function PurchasesPage() {
               </CardDescription>
               <Alert className="mt-3 bg-blue-50 border-blue-200">
                 <AlertDescription className="text-sm text-blue-900">
-                  <strong>2 cách nhập hàng:</strong> (1) Nhập theo đơn - nhập nhiều sản phẩm cùng lúc, (2) Nhập nhanh - nhập từng sản phẩm riêng lẻ từ trang Sản phẩm.
+                  <strong>2 cách nhập hàng:</strong> (1) Nhập theo đơn - nhập nhiều sản phẩm cùng lúc, (2) Nhập nhanh - nhập hàng cho sản phẩm tồn kho thấp.
                 </AlertDescription>
               </Alert>
             </div>
@@ -442,10 +442,10 @@ export default function PurchasesPage() {
                     </Link>
                   </DropdownMenuItem>
                   <DropdownMenuItem asChild>
-                    <Link href="/products" className="cursor-pointer">
+                    <Link href="/purchases/quick-import" className="cursor-pointer">
                       <div className="flex flex-col gap-1">
-                        <div className="font-medium">Nhập nhanh từng sản phẩm</div>
-                        <div className="text-xs text-muted-foreground">Nhập từng sản phẩm riêng lẻ</div>
+                        <div className="font-medium">Nhập nhanh - Tồn kho thấp</div>
+                        <div className="text-xs text-muted-foreground">Nhập hàng cho sản phẩm tồn kho dưới ngưỡng</div>
                       </div>
                     </Link>
                   </DropdownMenuItem>

@@ -41,13 +41,13 @@ export function validateAndNormalizeStatus(
     try {
       // Normalize the status value (accepts both old and new status values)
       req.body.status = StatusMapper.normalize(req.body.status);
-      
+
       // Continue to next middleware
       next();
-    } catch (error) {
+    } catch (error: any) {
       // Invalid status value - return 400 Bad Request
       const errorMessage = error instanceof Error ? error.message : 'Invalid status value';
-      
+
       res.status(400).json({
         error: {
           code: 'INVALID_STATUS',
@@ -93,23 +93,23 @@ export function validateStatusQuery(
   // Only validate if status query parameter is present
   if (req.query && req.query.status !== undefined) {
     const statusValue = req.query.status as string;
-    
+
     // Skip validation for 'all' filter
     if (statusValue === 'all') {
       next();
       return;
     }
-    
+
     try {
       // Normalize the status value
       req.query.status = StatusMapper.normalize(statusValue);
-      
+
       // Continue to next middleware
       next();
-    } catch (error) {
+    } catch (error: any) {
       // Invalid status value - return 400 Bad Request
       const errorMessage = error instanceof Error ? error.message : 'Invalid status value';
-      
+
       res.status(400).json({
         error: {
           code: 'INVALID_STATUS',

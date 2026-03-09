@@ -72,10 +72,7 @@ import { useRouter } from "next/navigation"
 import { Input } from "@/components/ui/input"
 import { formatCurrency } from "@/lib/utils"
 import { ImportCustomers } from "./components/import-customers"
-import { DebtPaymentDialog } from "./components/debt-payment-dialog"
-import { DebtReminderDialog } from "./components/debt-reminder-dialog"
 import { useUserRole } from "@/hooks/use-user-role"
-import { useDebtReminderPermission } from "@/hooks/use-debt-reminder-permission"
 
 
 interface Customer {
@@ -167,8 +164,6 @@ export default function CustomersPage() {
   const [genderFilter, setGenderFilter] = useState<GenderFilter>("all");
   const [groupFilter, setGroupFilter] = useState("");
   const [viewingPaymentsFor, setViewingPaymentsFor] = useState<CustomerWithDebt | null>(null);
-  const [customerForPayment, setCustomerForPayment] = useState<CustomerWithDebt | null>(null);
-  const [customerForReminder, setCustomerForReminder] = useState<CustomerWithDebt | null>(null);
   const [paymentHistory, setPaymentHistory] = useState<DebtHistoryItem[]>([]);
   const [isUpdating, startTransition] = useTransition();
   const [isExporting, startExportingTransition] = useTransition();
@@ -177,7 +172,6 @@ export default function CustomersPage() {
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [loyaltyTierFilter, setLoyaltyTierFilter] = useState<LoyaltyTierFilter>('all');
   const { permissions, isLoading: isRoleLoading } = useUserRole();
-  const { canSendDebtReminder } = useDebtReminderPermission();
 
   const { toast } = useToast();
   const router = useRouter();
@@ -449,17 +443,6 @@ export default function CustomersPage() {
         }}
         customer={selectedCustomer}
       />
-      {customerForPayment && (
-        <DebtPaymentDialog
-          isOpen={!!customerForPayment}
-          onOpenChange={() => setCustomerForPayment(null)}
-          customer={customerForPayment}
-          debtInfo={{
-            paid: customerForPayment.totalPayments,
-            debt: customerForPayment.calculatedDebt || customerForPayment.currentDebt,
-          }}
-        />
-      )}
       <AlertDialog open={!!customerToDelete} onOpenChange={(open) => !open && setCustomerToDelete(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -688,13 +671,9 @@ export default function CustomersPage() {
                         >
                           {formatCurrency(paid)}
                         </button>
-                         <button 
-                           onClick={() => hasDebt && setCustomerForPayment(customer)} 
-                           className={`block w-full text-left underline cursor-pointer ${debt > 0 ? "text-destructive" : ""}`} 
-                           disabled={!hasDebt}
-                         >
+                        <div className={`block w-full text-left ${debt > 0 ? "text-destructive" : ""}`}>
                           {formatCurrency(debt)}
-                        </button>
+                        </div>
                       </div>
                     </TableCell>
                     <TableCell className="hidden md:table-cell">
@@ -724,15 +703,6 @@ export default function CustomersPage() {
                           {canEditCustomer && (
                             <DropdownMenuItem onClick={() => handleEditCustomer(customer)}>Sửa</DropdownMenuItem>
                           )}
-                          {hasDebt && canSendDebtReminder && (
-                            <>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem onClick={() => setCustomerForReminder(customer)}>
-                                <Bell className="mr-2 h-4 w-4" />
-                                Gửi nhắc nợ
-                              </DropdownMenuItem>
-                            </>
-                          )}
                           {canDeleteCustomer && (
                           <DropdownMenuItem className="text-destructive" onClick={() => setCustomerToDelete(customer)} disabled={hasDebt}>Xóa</DropdownMenuItem>
                           )}
@@ -757,28 +727,6 @@ export default function CustomersPage() {
           </div>
         </CardFooter>
       </Card>
-
-      {/* Debt Reminder Dialog */}
-      {customerForReminder && (
-        <DebtReminderDialog
-          open={!!customerForReminder}
-          onOpenChange={(open) => !open && setCustomerForReminder(null)}
-          customer={{
-            id: customerForReminder.id,
-            name: customerForReminder.name,
-            email: customerForReminder.email,
-            phone: customerForReminder.phone,
-            debt: customerForReminder.calculatedDebt || customerForReminder.currentDebt || 0,
-          }}
-          onSent={() => {
-            toast({
-              title: "Thành công",
-              description: "Đã gửi thông báo nhắc nợ",
-            })
-            loadCustomers()
-          }}
-        />
-      )}
     </>
   )
 }

@@ -98,6 +98,9 @@ interface Sale {
   status: 'pending' | 'processed';
   finalAmount: number;
   itemCount: number;
+  customerPayment?: number;
+  previousDebt?: number;
+  totalAmount?: number;
 }
 
 
@@ -260,7 +263,12 @@ export default function SalesPage() {
   }, [sales, sortKey, sortDirection]);
 
   const totalRevenue = useMemo(() => {
-    return sortedSales.reduce((total, sale) => total + sale.finalAmount, 0);
+    return sortedSales.reduce((total, sale) => {
+      // For debt payment transactions, use customerPayment or previousDebt instead of finalAmount
+      const isDebtPayment = (sale.totalAmount === 0 || !sale.totalAmount) && (sale.previousDebt ?? 0) > 0;
+      const amount = isDebtPayment ? (sale.customerPayment || sale.previousDebt || 0) : sale.finalAmount;
+      return total + amount;
+    }, 0);
   }, [sortedSales]);
 
   const handleAddSale = () => {
@@ -350,14 +358,20 @@ export default function SalesPage() {
   };
 
   const handleExportExcel = () => {
-    const dataToExport = sortedSales.map((sale, index) => ({
-      'STT': index + 1,
-      'Mã đơn hàng': sale.invoiceNumber,
-      'Khách hàng': sale.customerName || 'Khách lẻ',
-      'Ngày': format(new Date(sale.transactionDate), 'dd/MM/yyyy'),
-      'Trạng thái': sale.status === 'pending' ? 'Chưa xử lý' : 'Đã xử lý',
-      'Tổng cộng': sale.finalAmount,
-    }));
+    const dataToExport = sortedSales.map((sale, index) => {
+      const isDebtPayment = (sale.totalAmount === 0 || !sale.totalAmount) && (sale.previousDebt ?? 0) > 0;
+      const displayAmount = isDebtPayment ? (sale.customerPayment || sale.previousDebt || 0) : sale.finalAmount;
+      const statusLabel = isDebtPayment ? 'Trả nợ' : (sale.status === 'pending' ? 'Chưa xử lý' : 'Đã xử lý');
+      
+      return {
+        'STT': index + 1,
+        'Mã đơn hàng': sale.invoiceNumber,
+        'Khách hàng': sale.customerName || 'Khách lẻ',
+        'Ngày': format(new Date(sale.transactionDate), 'dd/MM/yyyy'),
+        'Trạng thái': statusLabel,
+        'Tổng cộng': displayAmount,
+      };
+    });
 
     const totalRowData = {
       'STT': '',
@@ -572,6 +586,11 @@ export default function SalesPage() {
                     {isLoading && <TableRow><TableCell colSpan={7} className="text-center h-24">Đang tải...</TableCell></TableRow>}
                     {!isLoading && sortedSales.map((sale, index) => {
                       const isReturnOrder = sale.finalAmount < 0;
+                      // Check if this is a debt payment transaction
+                      const isDebtPayment = (sale.totalAmount === 0 || !sale.totalAmount) && (sale.previousDebt ?? 0) > 0;
+                      // For debt payment, display the amount paid (customerPayment or previousDebt)
+                      const displayAmount = isDebtPayment ? (sale.customerPayment || sale.previousDebt || 0) : sale.finalAmount;
+                      
                       return (
                         <TableRow key={sale.id}>
                           <TableCell className="font-medium">{index + 1}</TableCell>
@@ -597,8 +616,8 @@ export default function SalesPage() {
                           <TableCell>
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="sm" className="p-1 h-auto" disabled={isUpdatingStatus}>
-                                  <StatusBadge status={sale.status} size="sm" />
+                                <Button variant="ghost" size="sm" className="p-1 h-auto" disabled={isUpdatingStatus || isDebtPayment}>
+                                  <StatusBadge status={sale.status} size="sm" isDebtPayment={isDebtPayment} />
                                   <ChevronDown className="h-3 w-3 ml-1" />
                                 </Button>
                               </DropdownMenuTrigger>
@@ -619,7 +638,7 @@ export default function SalesPage() {
                             </DropdownMenu>
                           </TableCell>
                           <TableCell className="text-right">
-                            {formatCurrency(sale.finalAmount)}
+                            {formatCurrency(displayAmount)}
                           </TableCell>
                           <TableCell>
                             <DropdownMenu>

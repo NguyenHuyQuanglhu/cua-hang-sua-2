@@ -21,7 +21,6 @@ import { apiClient } from "@/lib/api-client"
 import { RevenueChart } from "./components/revenue-chart"
 import { TopProductsTable } from "./components/top-products-table"
 import { LowStockAlert } from "./components/low-stock-alert"
-import { DebtOverview } from "./components/debt-overview"
 
 interface DashboardStats {
   revenue: {
@@ -323,10 +322,6 @@ export default function DashboardPage() {
 
       <div className="grid gap-4 md:grid-cols-2">
         <LowStockAlert />
-        <DebtOverview 
-          customerDebt={stats?.debt.customerDebt || 0}
-          supplierDebt={stats?.debt.supplierDebt || 0}
-        />
       </div>
     </div>
   )

@@ -403,11 +403,11 @@ BEGIN
 
         UNION ALL
 
-        -- Payments at time of sale (from Sales.paid_amount)
+        -- Payments at time of sale (from Sales.customer_payment)
         SELECT
             CONCAT(s.id, '-payment') AS id,
             @customerId AS customerId,
-            s.paid_amount AS amount,
+            s.customer_payment AS amount,
             'payment' AS type,
             s.transaction_date AS date,
             CONCAT(N'Thanh toán tại quầy - HĐ #', s.invoice_number) AS description,
@@ -417,7 +417,7 @@ BEGIN
         WHERE s.customer_id = @customerId
             AND s.store_id = @storeId
             AND s.status IN ('completed', 'pending')
-            AND s.paid_amount > 0  -- Only show if there was a payment
+            AND s.customer_payment > 0  -- Only show if there was a payment
 
         UNION ALL
 

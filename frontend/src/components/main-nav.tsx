@@ -256,13 +256,6 @@ export function MainNav() {
                             </SidebarMenuSubButton>
                         </SidebarMenuSubItem>
                        )}
-                      {hasPermission('reports_debt', 'view') && (
-                        <SidebarMenuSubItem>
-                            <SidebarMenuSubButton asChild isActive={isActive('/reports/debt')}>
-                                <Link href="/reports/debt" className='flex items-center gap-2'><BookUser className="h-4 w-4" />Công nợ KH</Link>
-                            </SidebarMenuSubButton>
-                        </SidebarMenuSubItem>
-                      )}
                        {hasPermission('reports_supplier_debt', 'view') && (
                         <SidebarMenuSubItem>
                             <SidebarMenuSubButton asChild isActive={isActive('/reports/supplier-debt')}>

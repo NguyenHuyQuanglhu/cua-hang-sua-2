@@ -177,10 +177,6 @@ export function CommandMenu() {
               <DollarSign className="mr-2 h-4 w-4" />
               <span>Báo cáo Lợi nhuận</span>
             </CommandItem>
-            <CommandItem onSelect={() => runCommand(() => router.push('/reports/debt'))}>
-              <BookUser className="mr-2 h-4 w-4" />
-              <span>Báo cáo Công nợ KH</span>
-            </CommandItem>
             <CommandItem onSelect={() => runCommand(() => router.push('/reports/supplier-debt'))}>
               <Truck className="mr-2 h-4 w-4" />
               <span>Báo cáo Công nợ NCC</span>
@@ -188,10 +184,6 @@ export function CommandMenu() {
             <CommandItem onSelect={() => runCommand(() => router.push('/reports/transactions'))}>
               <History className="mr-2 h-4 w-4" />
               <span>Lịch sử Giao dịch</span>
-            </CommandItem>
-            <CommandItem onSelect={() => runCommand(() => router.push('/reports/supplier-debt-tracking'))}>
-              <History className="mr-2 h-4 w-4" />
-              <span>Đối soát Công nợ NCC</span>
             </CommandItem>
             <CommandItem onSelect={() => runCommand(() => router.push('/reports/revenue'))}>
               <FileText className="mr-2 h-4 w-4" />

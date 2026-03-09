@@ -6,7 +6,7 @@
  */
 
 import crypto from 'crypto';
-import { executeQuery } from '../db';
+import { query } from '../db/index';
 
 // VNPay Configuration
 interface VNPayConfig {
@@ -221,7 +221,7 @@ export async function createVNPayPayment(request: PaymentRequest): Promise<Payme
     });
 
     return { success: true, paymentUrl };
-  } catch (error) {
+  } catch (error: any) {
     console.error('VNPay payment error:', error);
     return { success: false, error: 'Failed to create VNPay payment' };
   }
@@ -284,7 +284,7 @@ export async function verifyVNPayReturn(
       responseCode,
       message: success ? 'Payment successful' : `Payment failed: ${responseCode}`,
     };
-  } catch (error) {
+  } catch (error: any) {
     console.error('VNPay verify error:', error);
     return {
       success: false,
@@ -339,7 +339,7 @@ export async function createMoMoPayment(request: PaymentRequest): Promise<Paymen
       body: JSON.stringify(requestBody),
     });
 
-    const data = await response.json();
+    const data: any = await response.json();
 
     if (data.resultCode === 0) {
       await logPaymentAttempt({
@@ -353,7 +353,7 @@ export async function createMoMoPayment(request: PaymentRequest): Promise<Paymen
     }
 
     return { success: false, error: data.message || 'MoMo payment failed' };
-  } catch (error) {
+  } catch (error: any) {
     console.error('MoMo payment error:', error);
     return { success: false, error: 'Failed to create MoMo payment' };
   }
@@ -414,7 +414,7 @@ export async function verifyMoMoCallback(
       responseCode: resultCode,
       message: success ? 'Payment successful' : `Payment failed: ${resultCode}`,
     };
-  } catch (error) {
+  } catch (error: any) {
     console.error('MoMo verify error:', error);
     return {
       success: false,
@@ -435,12 +435,12 @@ async function logPaymentAttempt(data: {
   status: string;
 }): Promise<void> {
   try {
-    await executeQuery(
+    await query(
       `INSERT INTO PaymentLogs (OrderID, Gateway, Amount, Status, CreatedAt)
        VALUES (@orderId, @gateway, @amount, @status, GETDATE())`,
       data
     );
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to log payment:', error);
   }
 }
@@ -453,13 +453,13 @@ async function updatePaymentLog(data: {
   responseCode: string;
 }): Promise<void> {
   try {
-    await executeQuery(
+    await query(
       `UPDATE PaymentLogs
        SET TransactionID = @transactionId, Status = @status, ResponseCode = @responseCode, UpdatedAt = GETDATE()
        WHERE OrderID = @orderId`,
       data
     );
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to update payment log:', error);
   }
 }
@@ -522,7 +522,7 @@ export async function createZaloPayPayment(request: PaymentRequest): Promise<Pay
       body: new URLSearchParams(orderData).toString(),
     });
 
-    const result = await response.json();
+    const result: any = await response.json();
 
     if (result.return_code === 1) {
       await logPaymentAttempt({
@@ -536,7 +536,7 @@ export async function createZaloPayPayment(request: PaymentRequest): Promise<Pay
     }
 
     return { success: false, error: result.return_message || 'ZaloPay payment failed' };
-  } catch (error) {
+  } catch (error: any) {
     console.error('ZaloPay payment error:', error);
     return { success: false, error: 'Failed to create ZaloPay payment' };
   }
@@ -596,7 +596,7 @@ export async function verifyZaloPayCallback(
       responseCode: String(data.status),
       message: success ? 'Payment successful' : 'Payment failed',
     };
-  } catch (error) {
+  } catch (error: any) {
     console.error('ZaloPay verify error:', error);
     return {
       success: false,

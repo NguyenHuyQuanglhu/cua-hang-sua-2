@@ -22,7 +22,7 @@ export interface Sale {
   customerId?: string;
   shiftId?: string;
   transactionDate: string;
-  status: 'pending' | 'unprinted' | 'printed';
+  status: 'pending' | 'processed' | 'unprinted' | 'printed';
   totalAmount: number;
   vatAmount: number;
   finalAmount: number;
