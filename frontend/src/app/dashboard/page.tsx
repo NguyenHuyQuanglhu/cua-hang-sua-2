@@ -126,9 +126,16 @@ export default function DashboardPage() {
         p.closingStock <= (p.lowStockThreshold || 10)
       );
 
-      const totalInventoryValue = inventoryData.reduce((sum: number, p: any) => 
-        sum + (p.closingStock * p.avgCost), 0
-      );
+      // Calculate total inventory value, but ignore negative stock values
+      const totalInventoryValue = inventoryData.reduce((sum: number, p: any) => {
+        const stockValue = (p.closingStock || 0) * (p.avgCost || 0);
+        return sum + (stockValue > 0 ? stockValue : 0);
+      }, 0);
+
+      // Count products with valid inventory (non-negative)
+      const validProductsCount = inventoryData.filter((p: any) => 
+        p.closingStock !== null && p.closingStock !== undefined
+      ).length;
 
       const customerDebt = (debtReport as any).totals?.totalDebt || 0;
       const supplierDebt = (supplierDebtReport as any).data?.reduce((sum: number, s: any) => 
@@ -153,7 +160,7 @@ export default function DashboardPage() {
           percentChange: salesChange
         },
         inventory: {
-          totalProducts: inventoryData.length,
+          totalProducts: validProductsCount,
           lowStockCount: lowStockProducts.length,
           totalValue: totalInventoryValue
         },

@@ -86,18 +86,18 @@ export default function InventoryReportPage() {
     setError(null);
 
     try {
-      const params = new URLSearchParams();
+      const params: any = {};
       if (dateRange?.from) {
-        params.set('dateFrom', dateRange.from.toISOString());
+        params.dateFrom = dateRange.from.toISOString();
       }
       if (dateRange?.to) {
-        params.set('dateTo', dateRange.to.toISOString());
+        params.dateTo = dateRange.to.toISOString();
       }
       if (searchTerm) {
-        params.set('search', searchTerm);
+        params.search = searchTerm;
       }
 
-      const data = await apiClient.getInventoryReport(Object.fromEntries(params));
+      const data = await apiClient.getInventoryReport(params) as InventoryReportResponse;
       setReportData(data);
     } catch (err) {
       console.error('Error fetching inventory report:', err);
@@ -174,7 +174,9 @@ export default function InventoryReportPage() {
 
   const formatStock = (quantity: number, unitName?: string) => {
     if (quantity === 0) return "0";
-    const formatted = quantity.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    // Don't show negative inventory - show 0 instead
+    const displayQuantity = Math.max(0, quantity);
+    const formatted = displayQuantity.toLocaleString(undefined, { maximumFractionDigits: 2 });
     return unitName ? `${formatted} ${unitName}` : formatted;
   }
 
@@ -258,8 +260,9 @@ export default function InventoryReportPage() {
           productInfo={{
             productId: productToAdjust.productId,
             productName: productToAdjust.productName,
-            unitName: productToAdjust.unitName || '',
             closingStock: productToAdjust.closingStock,
+            mainUnit: undefined, // We'll let the form fetch units
+            baseUnit: undefined, // We'll let the form fetch units
           }}
         />
       )}
