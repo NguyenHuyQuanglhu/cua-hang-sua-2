@@ -13,7 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { formatCurrency } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
-import { ShoppingBag, CreditCard, Banknote, Wallet, Loader2 } from 'lucide-react';
+import { ShoppingBag, CreditCard, Banknote, Loader2 } from 'lucide-react';
 
 interface ShippingAddress {
   fullName: string;
@@ -25,12 +25,11 @@ interface ShippingAddress {
   note?: string;
 }
 
-type PaymentMethod = 'cod' | 'bank_transfer' | 'momo' | 'vnpay' | 'zalopay';
+type PaymentMethod = 'cod' | 'bank_transfer';
 
 const paymentMethods = [
   { id: 'cod', name: 'Thanh toán khi nhận hàng (COD)', icon: Banknote },
   { id: 'bank_transfer', name: 'Chuyển khoản ngân hàng', icon: CreditCard },
-  { id: 'momo', name: 'Ví MoMo', icon: Wallet },
 ];
 
 export default function CheckoutPage() {

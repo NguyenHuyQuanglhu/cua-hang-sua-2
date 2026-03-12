@@ -96,21 +96,7 @@ router.post('/upgrade', async (req: AuthRequest, res: Response) => {
 
     console.log(`[Subscription] User ${userId} upgrading to plan ${planId} (${maxStores} stores) via ${paymentMethod}`);
 
-    // For payment gateways (vnpay, momo, zalopay), generate payment URL
-    if (paymentMethod === 'vnpay' || paymentMethod === 'momo' || paymentMethod === 'zalopay') {
-      // TODO: Integrate with actual payment gateway
-      // For now, return a demo URL
-      const demoPaymentUrl = `/payment/demo?plan=${planId}&amount=${getPlanPrice(planId)}&method=${paymentMethod}`;
-      
-      res.json({
-        success: true,
-        paymentUrl: demoPaymentUrl,
-        message: 'Redirecting to payment gateway',
-      });
-      return;
-    }
-
-    // For bank transfer or direct upgrade, update immediately
+    // For bank transfer, update immediately
     const now = new Date();
     const startDate = now;
     const endDate = new Date(now);

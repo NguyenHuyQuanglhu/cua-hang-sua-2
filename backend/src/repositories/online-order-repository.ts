@@ -5,7 +5,7 @@ import { query, queryOne, withTransaction } from '../db';
  */
 export type OrderStatus = 'pending' | 'confirmed' | 'processing' | 'shipped' | 'delivered' | 'cancelled';
 export type PaymentStatus = 'pending' | 'paid' | 'refunded' | 'failed';
-export type PaymentMethod = 'cod' | 'bank_transfer' | 'momo' | 'vnpay' | 'zalopay';
+export type PaymentMethod = 'cod' | 'bank_transfer';
 
 /**
  * Shipping Address interface

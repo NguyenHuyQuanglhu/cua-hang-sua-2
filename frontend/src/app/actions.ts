@@ -192,6 +192,8 @@ export async function getSalesForecast(
     // Group sales by product
     const productSales: Map<string, Array<{ quantity: number; date: string }>> = new Map();
     
+    console.log('[getSalesForecast] Processing historical sales:', historicalSalesData.length, 'items');
+    
     historicalSalesData.forEach((sale: any) => {
       if (!productSales.has(sale.productId)) {
         productSales.set(sale.productId, []);
@@ -201,17 +203,39 @@ export async function getSalesForecast(
         date: sale.date,
       });
     });
+    
+    console.log('[getSalesForecast] Products with sales:', productSales.size);
 
     // Calculate forecast for each product
     const forecastedProducts = currentInventoryLevels.map((inventory: any) => {
       const sales = productSales.get(inventory.productId) || [];
       
-      // Calculate average daily sales
-      const totalSales = sales.reduce((sum, s) => sum + s.quantity, 0);
-      const avgDailySales = sales.length > 0 ? totalSales / 30 : 0; // Assume 30 days history
+      console.log(`[Product ${inventory.productName}] Sales records:`, sales.length);
+      
+      // Calculate date range from sales data
+      const salesDates = sales.map(s => new Date(s.date).getTime()).filter(d => !isNaN(d));
+      const today = Date.now();
+      const thirtyDaysAgo = today - (30 * 24 * 60 * 60 * 1000);
+      
+      // Filter sales within last 30 days
+      const recentSales = sales.filter(s => {
+        const saleDate = new Date(s.date).getTime();
+        return !isNaN(saleDate) && saleDate >= thirtyDaysAgo && saleDate <= today;
+      });
+      
+      console.log(`[Product ${inventory.productName}] Recent sales (30d):`, recentSales.length);
+      
+      // Calculate average daily sales based on actual days with data
+      const totalSales = recentSales.reduce((sum, s) => sum + s.quantity, 0);
+      const daysWithData = recentSales.length > 0 ? 30 : 0; // Use 30 days as period
+      const avgDailySales = daysWithData > 0 ? totalSales / daysWithData : 0;
+      
+      console.log(`[Product ${inventory.productName}] Total sales: ${totalSales}, Avg daily: ${avgDailySales}`);
       
       // Forecast for the period
       const forecastedSales = Math.round(avgDailySales * forecastPeriodDays);
+      
+      console.log(`[Product ${inventory.productName}] Forecasted sales (${forecastPeriodDays}d): ${forecastedSales}`);
       
       // Determine if reorder is needed
       const currentStock = inventory.quantityInStock || 0;

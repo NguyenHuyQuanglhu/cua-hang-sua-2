@@ -75,9 +75,6 @@ const STATUS_LABELS: Record<OrderStatus, string> = {
 const PAYMENT_METHOD_LABELS: Record<string, string> = {
   cod: 'Thanh toán khi nhận hàng (COD)',
   bank_transfer: 'Chuyển khoản ngân hàng',
-  momo: 'Ví MoMo',
-  vnpay: 'VNPay',
-  zalopay: 'ZaloPay',
 };
 
 /**

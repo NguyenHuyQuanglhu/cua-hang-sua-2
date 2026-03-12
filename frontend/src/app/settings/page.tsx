@@ -106,28 +106,32 @@ const themeFormSchema = z.object({
 
 type ThemeFormValues = z.infer<typeof themeFormSchema>;
 
-const FormattedNumberInput = ({ value, onChange, ...props }: { value: number; onChange: (value: number) => void; [key: string]: any }) => {
-  const [displayValue, setDisplayValue] = React.useState(value?.toLocaleString('en-US') || '');
+const FormattedNumberInput = React.forwardRef<HTMLInputElement, { value: number; onChange: (value: number) => void; [key: string]: any }>(
+  ({ value, onChange, ...props }, ref) => {
+    const [displayValue, setDisplayValue] = React.useState(value?.toLocaleString('en-US') || '');
 
-  useEffect(() => {
-    setDisplayValue(value?.toLocaleString('en-US') || '0');
-  }, [value]);
+    useEffect(() => {
+      setDisplayValue(value?.toLocaleString('en-US') || '0');
+    }, [value]);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const rawValue = e.target.value.replace(/,/g, '');
-    const numberValue = parseInt(rawValue, 10);
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const rawValue = e.target.value.replace(/,/g, '');
+      const numberValue = parseInt(rawValue, 10);
 
-    if (!isNaN(numberValue)) {
-      setDisplayValue(numberValue.toLocaleString('en-US'));
-      onChange(numberValue);
-    } else if (rawValue === '') {
-      setDisplayValue('');
-      onChange(0);
-    }
-  };
+      if (!isNaN(numberValue)) {
+        setDisplayValue(numberValue.toLocaleString('en-US'));
+        onChange(numberValue);
+      } else if (rawValue === '') {
+        setDisplayValue('');
+        onChange(0);
+      }
+    };
 
-  return <Input type="text" value={displayValue} onChange={handleChange} {...props} />;
-};
+    return <Input ref={ref} type="text" value={displayValue} onChange={handleChange} {...props} />;
+  }
+);
+
+FormattedNumberInput.displayName = 'FormattedNumberInput';
 
 
 export default function SettingsPage() {
@@ -377,10 +381,15 @@ export default function SettingsPage() {
     setIsAuthenticating(true);
     setAuthError(null);
     try {
+      const token = localStorage.getItem('token');
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
       // Verify password using SQL Server API
-      const response = await fetch('/api/auth/verify-password', {
+      const response = await fetch(`${API_URL}/api/auth/verify-password`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         credentials: 'include',
         body: JSON.stringify({ password }),
       });

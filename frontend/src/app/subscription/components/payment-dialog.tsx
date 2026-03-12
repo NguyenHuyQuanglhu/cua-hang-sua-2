@@ -13,10 +13,6 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import { 
-  CreditCard, 
-  Smartphone, 
-  Wallet, 
-  QrCode,
   Building2,
   Check,
   ArrowRight
@@ -32,33 +28,9 @@ interface PaymentDialogProps {
   onConfirm: (paymentMethod: string) => Promise<void>;
 }
 
-type PaymentMethod = 'vnpay' | 'momo' | 'zalopay' | 'bank_transfer' | 'cash';
+type PaymentMethod = 'bank_transfer' | 'cash';
 
 const paymentMethods = [
-  {
-    id: 'vnpay' as PaymentMethod,
-    name: 'VNPay',
-    description: 'Thanh toán qua cổng VNPay (ATM, Visa, MasterCard)',
-    icon: <CreditCard className="h-5 w-5" />,
-    color: 'text-blue-600',
-    bgColor: 'bg-blue-50',
-  },
-  {
-    id: 'momo' as PaymentMethod,
-    name: 'MoMo',
-    description: 'Thanh toán qua ví điện tử MoMo',
-    icon: <Smartphone className="h-5 w-5" />,
-    color: 'text-pink-600',
-    bgColor: 'bg-pink-50',
-  },
-  {
-    id: 'zalopay' as PaymentMethod,
-    name: 'ZaloPay',
-    description: 'Thanh toán qua ví điện tử ZaloPay',
-    icon: <Wallet className="h-5 w-5" />,
-    color: 'text-blue-500',
-    bgColor: 'bg-blue-50',
-  },
   {
     id: 'bank_transfer' as PaymentMethod,
     name: 'Chuyển khoản ngân hàng',
@@ -77,7 +49,7 @@ export function PaymentDialog({
   maxStores,
   onConfirm,
 }: PaymentDialogProps) {
-  const [selectedMethod, setSelectedMethod] = useState<PaymentMethod>('vnpay');
+  const [selectedMethod, setSelectedMethod] = useState<PaymentMethod>('bank_transfer');
   const [isProcessing, setIsProcessing] = useState(false);
 
   const vat = planPrice * 0.1; // 10% VAT

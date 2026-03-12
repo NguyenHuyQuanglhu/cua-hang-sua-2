@@ -109,9 +109,6 @@ const getPaymentMethodLabel = (method: string): string => {
   switch (method) {
     case 'cod': return 'COD';
     case 'bank_transfer': return 'Chuyển khoản';
-    case 'momo': return 'MoMo';
-    case 'vnpay': return 'VNPay';
-    case 'zalopay': return 'ZaloPay';
     default: return method;
   }
 };

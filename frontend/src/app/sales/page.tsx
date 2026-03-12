@@ -116,7 +116,7 @@ export default function SalesPage() {
   const [statusFilter, setStatusFilter] = useState<SaleStatus>('all');
   const [customerFilter, setCustomerFilter] = useState<string>('all');
   const [isUpdatingStatus, startStatusTransition] = useTransition();
-  const [sortKey, setSortKey] = useState<SortKey>('invoiceNumber');
+  const [sortKey, setSortKey] = useState<SortKey>('transactionDate');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [customerPopoverOpen, setCustomerPopoverOpen] = useState(false);
   const [total, setTotal] = useState(0);

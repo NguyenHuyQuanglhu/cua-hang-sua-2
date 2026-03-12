@@ -47,9 +47,9 @@ export function QRPaymentDialog({
   const generateQRCode = async () => {
     setIsLoading(true);
     try {
-      // In real app, call backend to generate QR code via VNPay/MoMo/ZaloPay
+      // In real app, call backend to generate QR code
       // For now, generate a simple QR code using a free service
-      const qrData = `VNPAY|${amount}|${orderInfo}|${Date.now()}`;
+      const qrData = `PAYMENT|${amount}|${orderInfo}|${Date.now()}`;
       const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qrData)}`;
       setQrCodeUrl(qrUrl);
     } catch (error) {

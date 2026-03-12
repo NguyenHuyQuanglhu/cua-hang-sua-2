@@ -119,21 +119,22 @@ export function PredictShortageForm() {
 
     const fetchSalesItems = async () => {
       setSalesItemsLoading(true);
-      const items: SalesItem[] = [];
       try {
-        // Sales items are typically included in the sales data from SQL Server
-        // or we can fetch them separately if needed
-        for (const sale of sales) {
-          const s = sale as any;
-          if (s.items && Array.isArray(s.items)) {
-            s.items.forEach((item: SalesItem) => {
-              items.push({ ...item, salesTransactionId: sale.id });
-            });
-          }
-        }
-        setAllSalesItems(items);
+        // Fetch all sales items from dedicated endpoint
+        const response = await apiClient.request('/sales/items/all');
+        const items = (response as any).data || response || [];
+        
+        // Map items to include salesTransactionId
+        const mappedItems = items.map((item: any) => ({
+          ...item,
+          salesTransactionId: item.sales_transaction_id || item.salesTransactionId,
+          productId: item.product_id || item.productId,
+        }));
+        
+        setAllSalesItems(mappedItems);
       } catch (error) {
-        console.error('Error processing sales items: ', error);
+        console.error('Error fetching sales items: ', error);
+        setAllSalesItems([]);
       } finally {
         setSalesItemsLoading(false);
       }

@@ -104,7 +104,6 @@ import { InvoicePrintDialog } from '@/components/invoice-print-dialog'
 import { VoucherInput } from './components/voucher-input'
 import { PaymentMethodSelector, PaymentMethod } from './components/payment-method-selector'
 import { QRPaymentDialog } from './components/qr-payment-dialog'
-import { PaymentGatewayDialog } from './components/payment-gateway-dialog'
 import { PrintInvoiceCheckbox, loadPrintPreference } from './components/PrintInvoiceCheckbox'
 
 // Extended product type with stock info from SQL Server
@@ -202,7 +201,6 @@ export default function POSPage() {
   const [isCustomerFormOpen, setIsCustomerFormOpen] = useState(false);
   const [showPaymentMethodDialog, setShowPaymentMethodDialog] = useState(false);
   const [showQRPaymentDialog, setShowQRPaymentDialog] = useState(false);
-  const [showPaymentGatewayDialog, setShowPaymentGatewayDialog] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethod | null>(null);
   const [lastSaleId, setLastSaleId] = useState<string | null>(null);
 
@@ -789,9 +787,6 @@ export default function POSPage() {
     if (method === 'qr') {
       // Show QR payment dialog
       setShowQRPaymentDialog(true);
-    } else if (method === 'gateway') {
-      // Show payment gateway dialog (VNPay, MoMo, ZaloPay, Installment)
-      setShowPaymentGatewayDialog(true);
     } else if (method === 'cash') {
       // Process payment directly
       if (isDebtOnly) {
@@ -855,7 +850,7 @@ export default function POSPage() {
         customerPayment: customerPayment,
         previousDebt: previousDebt, // The debt being paid
         remainingDebt: 0, // After payment, debt should be 0
-        paymentMethod: paymentMethod === 'gateway' ? 'transfer' : paymentMethod,
+        paymentMethod: paymentMethod,
         status: 'processed', // Requirement 2.3: Update status to processed after payment
         isChangeReturned: customerPayment > previousDebt ? true : false,
         items: [], // Empty items array
@@ -877,8 +872,7 @@ export default function POSPage() {
                 Phương thức: {paymentMethod === 'cash' ? 'Tiền mặt' :
                   paymentMethod === 'card' ? 'Thẻ' :
                     paymentMethod === 'transfer' ? 'Chuyển khoản' :
-                      paymentMethod === 'qr' ? 'QR Code' :
-                        paymentMethod === 'gateway' ? 'Cổng thanh toán' : 'Khác'}
+                      paymentMethod === 'qr' ? 'QR Code' : 'Khác'}
               </p>
               {customerPayment > previousDebt && (
                 <p className="text-xs text-green-600">
@@ -939,7 +933,7 @@ export default function POSPage() {
       customerPayment: customerPayment,
       previousDebt: includeDebtPayment ? previousDebt : 0, // Only include debt if checkbox is checked
       remainingDebt: remainingDebt,
-      paymentMethod: paymentMethod === 'gateway' ? 'transfer' : paymentMethod,
+      paymentMethod: paymentMethod,
       status: 'processed', // Requirement 2.3: Update status to processed after payment
       isChangeReturned: isChangeReturned,
       items: itemsData,
@@ -1023,8 +1017,7 @@ export default function POSPage() {
               Phương thức: {paymentMethod === 'cash' ? 'Tiền mặt' :
                 paymentMethod === 'card' ? 'Thẻ' :
                   paymentMethod === 'transfer' ? 'Chuyển khoản' :
-                    paymentMethod === 'qr' ? 'QR Code' :
-                      paymentMethod === 'gateway' ? 'Cổng thanh toán' : 'Khác'}
+                    paymentMethod === 'qr' ? 'QR Code' : 'Khác'}
             </p>
             {includeDebtPayment && previousDebt > 0 && (
               <p className="text-xs text-green-600 font-semibold">
@@ -1858,22 +1851,6 @@ export default function POSPage() {
         onClose={() => setShowQRPaymentDialog(false)}
         onSuccess={() => processSale('qr')}
         amount={finalAmount}
-        orderInfo={`Thanh toán đơn hàng - ${new Date().toLocaleString('vi-VN')}`}
-      />
-
-      {/* Payment Gateway Dialog */}
-      <PaymentGatewayDialog
-        open={showPaymentGatewayDialog}
-        onClose={() => setShowPaymentGatewayDialog(false)}
-        onSuccess={(gateway, transactionId) => {
-          toast({
-            title: 'Thanh toán thành công',
-            description: `Đã thanh toán qua ${gateway}`,
-          });
-          processSale('gateway');
-        }}
-        amount={finalAmount}
-        orderId={`ORDER-${Date.now()}`}
         orderInfo={`Thanh toán đơn hàng - ${new Date().toLocaleString('vi-VN')}`}
       />
     </>
