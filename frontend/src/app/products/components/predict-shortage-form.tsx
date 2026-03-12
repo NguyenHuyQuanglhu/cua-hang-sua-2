@@ -107,7 +107,10 @@ export function PredictShortageForm() {
       .filter(item => item.productId === product.id)
       .reduce((acc, item) => acc + item.quantity, 0);
 
-    return totalImportedInBaseUnit - totalSoldInBaseUnit;
+    const currentStock = totalImportedInBaseUnit - totalSoldInBaseUnit;
+    
+    // Ensure we return a valid number (can be negative for over-sold items)
+    return isNaN(currentStock) ? 0 : currentStock;
   }, [allSalesItems, getUnitInfo]);
 
 
@@ -307,12 +310,23 @@ export function PredictShortageForm() {
                       return (
                         <TableRow key={p.productId}>
                           <TableCell className="font-medium">{p.productName}</TableCell>
-                          <TableCell className="text-right">{p.currentStock.toLocaleString()}</TableCell>
+                          <TableCell className="text-right">
+                            <span className={p.currentStock < 0 ? 'text-red-600 font-bold' : ''}>
+                              {p.currentStock.toLocaleString()}
+                            </span>
+                          </TableCell>
                           <TableCell className="text-right">
                             {p.forecastedSales || 0}
                           </TableCell>
                           <TableCell className="text-center">
-                            <Badge variant={p.suggestion === 'Re-order' || p.suggestion === 'Cần nhập' ? 'destructive' : 'default'}>
+                            <Badge 
+                              variant={
+                                p.suggestion === 'Khẩn cấp - Âm kho' ? 'destructive' : 
+                                p.suggestion === 'Re-order' || p.suggestion === 'Cần nhập' ? 'destructive' : 
+                                'default'
+                              }
+                              className={p.suggestion === 'Khẩn cấp - Âm kho' ? 'animate-pulse' : ''}
+                            >
                               {p.suggestion === 'Re-order' ? 'Cần nhập' : p.suggestion}
                             </Badge>
                           </TableCell>

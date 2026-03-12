@@ -61,28 +61,30 @@ export function RevenueChart({ timeRange }: RevenueChartProps) {
 
   return (
     <div className="h-[300px]">
-      <div className="flex items-end justify-between h-full gap-2">
-        {data.map((item, index) => {
-          const height = maxRevenue > 0 ? (item.revenue / maxRevenue) * 100 : 0;
-          return (
-            <div key={index} className="flex-1 flex flex-col items-center gap-2">
-              <div className="w-full flex items-end justify-center" style={{ height: '250px' }}>
-                <div 
-                  className="w-full bg-primary rounded-t hover:bg-primary/80 transition-all cursor-pointer relative group"
-                  style={{ height: `${height}%`, minHeight: height > 0 ? '4px' : '0' }}
-                  title={`${new Date(item.date).toLocaleDateString('vi-VN')}: ${formatCurrency(item.revenue)}`}
-                >
-                  <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-popover text-popover-foreground px-2 py-1 rounded text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity shadow-lg">
-                    {formatCurrency(item.revenue)}
+      <div className="overflow-x-auto overflow-y-hidden">
+        <div className="flex items-end justify-between h-full gap-1" style={{ minWidth: `${data.length * 40}px` }}>
+          {data.map((item, index) => {
+            const height = maxRevenue > 0 ? (item.revenue / maxRevenue) * 100 : 0;
+            return (
+              <div key={index} className="flex flex-col items-center gap-2" style={{ minWidth: '35px' }}>
+                <div className="w-full flex items-end justify-center" style={{ height: '250px' }}>
+                  <div 
+                    className="w-full bg-primary rounded-t hover:bg-primary/80 transition-all cursor-pointer relative group"
+                    style={{ height: `${height}%`, minHeight: height > 0 ? '4px' : '0' }}
+                    title={`${new Date(item.date).toLocaleDateString('vi-VN')}: ${formatCurrency(item.revenue)}`}
+                  >
+                    <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-popover text-popover-foreground px-2 py-1 rounded text-xs whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity shadow-lg z-10">
+                      {formatCurrency(item.revenue)}
+                    </div>
                   </div>
                 </div>
+                <div className="text-xs text-muted-foreground whitespace-nowrap">
+                  {new Date(item.date).getDate()}/{new Date(item.date).getMonth() + 1}
+                </div>
               </div>
-              <div className="text-xs text-muted-foreground">
-                {new Date(item.date).getDate()}/{new Date(item.date).getMonth() + 1}
-              </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     </div>
   );

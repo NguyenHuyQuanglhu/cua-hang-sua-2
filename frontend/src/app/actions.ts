@@ -244,9 +244,14 @@ export async function getSalesForecast(
       let suggestion = 'Đủ hàng';
       let suggestedReorderQuantity = 0;
       
-      if (shortfall > 0) {
+      // Handle negative inventory (over-sold items) - URGENT priority
+      if (currentStock < 0) {
+        suggestion = 'Khẩn cấp - Âm kho';
+        // Need to cover the negative amount + forecasted sales + safety buffer
+        suggestedReorderQuantity = Math.ceil((-currentStock + forecastedSales) * 1.3); // 30% buffer for urgent cases
+      } else if (shortfall > 0) {
         suggestion = 'Cần nhập';
-        // Add 20% buffer
+        // Add 20% buffer for normal cases
         suggestedReorderQuantity = Math.ceil(shortfall * 1.2);
       } else if (currentStock < avgDailySales * 7) {
         // Less than 1 week stock
@@ -265,8 +270,8 @@ export async function getSalesForecast(
     });
 
     // Generate summary
-    const needReorder = forecastedProducts.filter(p => p.suggestedReorderQuantity > 0);
-    const totalReorderQty = needReorder.reduce((sum, p) => sum + p.suggestedReorderQuantity, 0);
+    const needReorder = forecastedProducts.filter((p: any) => p.suggestedReorderQuantity > 0);
+    const totalReorderQty = needReorder.reduce((sum: number, p: any) => sum + p.suggestedReorderQuantity, 0);
     
     const analysisSummary = `Phân tích ${currentInventoryLevels.length} sản phẩm cho ${forecastPeriodDays} ngày tới. ` +
       `Có ${needReorder.length} sản phẩm cần nhập thêm với tổng số lượng ${totalReorderQty.toLocaleString()} đơn vị. ` +
@@ -338,7 +343,7 @@ export async function getProductInfoSuggestion(
     // If no cost, suggest based on product type
     let suggestedSellingPrice = 0;
     
-    if (avgCost > 0) {
+    if (avgCost && avgCost > 0) {
       suggestedSellingPrice = Math.round(avgCost * 1.3);
     } else {
       // Default pricing based on category
