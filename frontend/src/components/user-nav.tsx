@@ -21,6 +21,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { ProfileDialog } from '@/components/profile-dialog'
 import { useStore } from '@/contexts/store-context'
 import { useUserRole } from '@/hooks/use-user-role'
 import { useToast } from '@/hooks/use-toast'
@@ -35,6 +36,7 @@ export function UserNav() {
   const { toast } = useToast();
   const router = useRouter();
   const [showLogoutDialog, setShowLogoutDialog] = useState(false);
+  const [showProfileDialog, setShowProfileDialog] = useState(false);
   const [hasActiveShift, setHasActiveShift] = useState(false);
   const [checkingShift, setCheckingShift] = useState(false);
 
@@ -96,7 +98,7 @@ export function UserNav() {
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuGroup>
-            <DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setShowProfileDialog(true)}>
               Hồ sơ
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
@@ -114,6 +116,12 @@ export function UserNav() {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {/* Profile Dialog */}
+      <ProfileDialog 
+        open={showProfileDialog} 
+        onOpenChange={setShowProfileDialog} 
+      />
 
       {/* Logout Warning Dialog - MUST close shift */}
       <AlertDialog open={showLogoutDialog} onOpenChange={setShowLogoutDialog}>

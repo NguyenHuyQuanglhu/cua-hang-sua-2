@@ -22,6 +22,8 @@ import { useToast } from '@/hooks/use-toast'
 import { useRouter } from 'next/navigation'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { useStore } from '@/contexts/store-context'
+import { getPostShiftRedirectPath } from '@/lib/navigation'
 
 interface Shift {
   id: string;
@@ -90,6 +92,7 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
   const [isSubmittingCancelRequest, setIsSubmittingCancelRequest] = useState(false)
   const { toast } = useToast()
   const router = useRouter()
+  const { user } = useStore()
   
   // Countdown cho dialog tăng ca - tự động đóng ca sau 3 phút nếu không trả lời
   useEffect(() => {
@@ -204,8 +207,9 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
         if (onShiftClosed) {
           onShiftClosed()
         } else {
-          // Default behavior: redirect to login
-          router.push('/login')
+          // Default behavior: redirect based on user role
+          const redirectPath = user?.role ? getPostShiftRedirectPath(user.role) : '/login'
+          router.push(redirectPath)
         }
       } else {
         toast({

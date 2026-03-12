@@ -24,6 +24,7 @@ import { useRouter } from 'next/navigation'
 import { useReactToPrint } from 'react-to-print';
 
 import { useStore } from '@/contexts/store-context'
+import { getPostShiftRedirectPath } from '@/lib/navigation'
 import {
   Customer,
   Payment,
@@ -1128,7 +1129,9 @@ export default function POSPage() {
 
   const handleShiftClosed = () => {
     setActiveShift(null);
-    router.push('/login');
+    // Chuyển hướng dựa trên role của user
+    const redirectPath = user?.role ? getPostShiftRedirectPath(user.role) : '/login'
+    router.push(redirectPath);
   }
 
   const isLoading = customersLoading || productsLoading || unitsLoading || settingsLoading || shiftsLoading || isStoreLoading || isRoleLoading;

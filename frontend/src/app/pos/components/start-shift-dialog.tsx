@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import {
@@ -20,12 +20,20 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/hooks/use-toast'
 import { useStore } from '@/contexts/store-context'
 import { startShift } from '../actions'
-import { LogOut, AlertCircle } from 'lucide-react'
+import { LogOut, AlertCircle, Store } from 'lucide-react'
+import { getPostShiftRedirectPath, shouldRedirectToDashboard } from '@/lib/navigation'
 
 interface StartShiftDialogProps {
   userId: string;
@@ -67,12 +75,13 @@ const FormattedNumberInput = ({
 
 export function StartShiftDialog({ userId, userName, userRole, onShiftStarted, user }: StartShiftDialogProps) {
   const [startingCash, setStartingCash] = useState(0)
+  const [selectedStoreId, setSelectedStoreId] = useState<string>('')
   const [isStarting, setIsStarting] = useState(false)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
   const [showCloseWarning, setShowCloseWarning] = useState(false)
   const { toast } = useToast()
   const router = useRouter()
-  const { logout } = useStore()
+  const { logout, stores, currentStore, switchStore } = useStore()
 
   // Support both new props and legacy user object
   const effectiveUserId = userId || user?.uid || '';
@@ -80,25 +89,70 @@ export function StartShiftDialog({ userId, userName, userRole, onShiftStarted, u
   const effectiveUserRole = userRole || user?.role || 'salesperson';
 
   // Check if user can access management pages
-  const canAccessManagement = ['owner', 'company_manager', 'store_manager'].includes(effectiveUserRole);
+  const canAccessManagement = shouldRedirectToDashboard(effectiveUserRole as any);
+
+  // Initialize selected store with current store
+  useEffect(() => {
+    if (currentStore && !selectedStoreId) {
+      setSelectedStoreId(currentStore.id)
+    }
+  }, [currentStore, selectedStoreId])
+
+  // Check if user has multiple stores to choose from
+  const hasMultipleStores = stores.length > 1
 
   const handleStartShift = async () => {
-    setIsStarting(true)
-    const result = await startShift({ startingCash })
-    if (result.success) {
+    // Validate store selection
+    if (!selectedStoreId) {
       toast({
-        title: 'Đã bắt đầu ca mới',
-        description: 'Bạn có thể bắt đầu bán hàng.',
+        variant: 'destructive',
+        title: 'Chưa chọn cửa hàng',
+        description: 'Vui lòng chọn cửa hàng để bắt đầu ca làm việc.',
       })
-      onShiftStarted()
-    } else {
+      return
+    }
+
+    setIsStarting(true)
+    
+    try {
+      // Switch to selected store if different from current
+      if (currentStore?.id !== selectedStoreId) {
+        const switchSuccess = await switchStore(selectedStoreId)
+        if (!switchSuccess) {
+          toast({
+            variant: 'destructive',
+            title: 'Lỗi chuyển cửa hàng',
+            description: 'Không thể chuyển đến cửa hàng đã chọn.',
+          })
+          setIsStarting(false)
+          return
+        }
+      }
+
+      // Start shift
+      const result = await startShift({ startingCash })
+      if (result.success) {
+        toast({
+          title: 'Đã bắt đầu ca mới',
+          description: `Bạn có thể bắt đầu bán hàng tại ${stores.find(s => s.id === selectedStoreId)?.name}.`,
+        })
+        onShiftStarted()
+      } else {
+        toast({
+          variant: 'destructive',
+          title: 'Lỗi bắt đầu ca',
+          description: result.error,
+        })
+      }
+    } catch (error) {
       toast({
         variant: 'destructive',
         title: 'Lỗi bắt đầu ca',
-        description: result.error,
+        description: 'Đã xảy ra lỗi khi bắt đầu ca làm việc.',
       })
+    } finally {
+      setIsStarting(false)
     }
-    setIsStarting(false)
   }
 
   const handleLogout = async () => {
@@ -124,7 +178,8 @@ export function StartShiftDialog({ userId, userName, userRole, onShiftStarted, u
   const handleCloseAttempt = () => {
     // If user is admin/manager, redirect to dashboard
     if (canAccessManagement) {
-      router.push('/dashboard')
+      const redirectPath = getPostShiftRedirectPath(effectiveUserRole as any)
+      router.push(redirectPath)
     } else {
       // If user is salesperson, show warning
       setShowCloseWarning(true)
@@ -138,10 +193,66 @@ export function StartShiftDialog({ userId, userName, userRole, onShiftStarted, u
           <DialogHeader>
             <DialogTitle>Bắt đầu ca làm việc</DialogTitle>
             <DialogDescription>
-              Nhập số tiền mặt ban đầu trong ngăn kéo để bắt đầu ca mới.
+              {hasMultipleStores 
+                ? 'Chọn cửa hàng và nhập số tiền mặt ban đầu để bắt đầu ca mới.'
+                : 'Nhập số tiền mặt ban đầu trong ngăn kéo để bắt đầu ca mới.'
+              }
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
+            {/* Store Selection - Only show if user has multiple stores */}
+            {hasMultipleStores && (
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="storeSelect" className="text-right">
+                  Cửa hàng
+                </Label>
+                <div className="col-span-3">
+                  <Select value={selectedStoreId} onValueChange={setSelectedStoreId}>
+                    <SelectTrigger id="storeSelect">
+                      <SelectValue placeholder="Chọn cửa hàng">
+                        <div className="flex items-center gap-2">
+                          <Store className="h-4 w-4" />
+                          {stores.find(s => s.id === selectedStoreId)?.name || 'Chọn cửa hàng'}
+                        </div>
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {stores.map((store) => (
+                        <SelectItem key={store.id} value={store.id}>
+                          <div className="flex items-center gap-2">
+                            <Store className="h-4 w-4" />
+                            <div>
+                              <div className="font-medium">{store.name}</div>
+                              {store.address && (
+                                <div className="text-xs text-muted-foreground">{store.address}</div>
+                              )}
+                            </div>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
+            
+            {/* Current Store Display - Only show if user has single store */}
+            {!hasMultipleStores && currentStore && (
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label className="text-right">Cửa hàng</Label>
+                <div className="col-span-3 flex items-center gap-2 p-2 bg-muted rounded-md">
+                  <Store className="h-4 w-4 text-muted-foreground" />
+                  <div>
+                    <div className="font-medium">{currentStore.name}</div>
+                    {currentStore.address && (
+                      <div className="text-xs text-muted-foreground">{currentStore.address}</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Starting Cash Input */}
             <div className="grid grid-cols-4 items-center gap-4">
               <Label htmlFor="startingCash" className="text-right">
                 Tiền đầu ca
@@ -152,6 +263,7 @@ export function StartShiftDialog({ userId, userName, userRole, onShiftStarted, u
                   value={startingCash}
                   onChange={setStartingCash}
                   className="text-right"
+                  placeholder="0"
                 />
               </div>
             </div>
@@ -168,7 +280,7 @@ export function StartShiftDialog({ userId, userName, userRole, onShiftStarted, u
             </Button>
             <Button 
               onClick={handleStartShift} 
-              disabled={isStarting || isLoggingOut}
+              disabled={isStarting || isLoggingOut || !selectedStoreId}
               className="w-full sm:w-auto"
             >
               {isStarting ? 'Đang bắt đầu...' : 'Bắt đầu ca'}
