@@ -38,18 +38,69 @@ router.get('/revenue', async (req: AuthRequest, res: Response) => {
 router.get('/supplier-debt', async (req: AuthRequest, res: Response) => {
   try {
     const storeId = req.storeId!;
+    
+    // Get all suppliers
     const suppliers = await query(
-      `SELECT
-        id, name as supplierName, contact_person as contactPerson, phone,
-        total_purchases as totalPurchases, total_paid as totalPaid,
-        (ISNULL(total_purchases, 0) - ISNULL(total_paid, 0)) as totalDebt
-       FROM Suppliers
-       WHERE store_id = @storeId
-         AND (ISNULL(total_purchases, 0) - ISNULL(total_paid, 0)) > 0`,
+      `SELECT id, name, contact_person, phone FROM Suppliers WHERE store_id = @storeId`,
       { storeId }
     );
 
-    res.json({ success: true, data: suppliers });
+    // Get purchase totals per supplier
+    let purchaseTotals: Record<string, number> = {};
+    try {
+      const purchases = await query(
+        `SELECT supplier_id, SUM(total_amount) as total
+         FROM PurchaseOrders
+         WHERE store_id = @storeId AND supplier_id IS NOT NULL
+         GROUP BY supplier_id`,
+        { storeId }
+      );
+      purchaseTotals = (purchases as Array<{ supplier_id: string; total: number }>).reduce((acc, p) => {
+        acc[p.supplier_id] = Number(p.total) || 0;
+        return acc;
+      }, {} as Record<string, number>);
+    } catch {
+      // PurchaseOrders table may not exist
+    }
+
+    // Get payment totals per supplier
+    let paymentTotals: Record<string, number> = {};
+    try {
+      const payments = await query(
+        `SELECT supplier_id, SUM(amount) as total
+         FROM SupplierPayments
+         WHERE store_id = @storeId AND supplier_id IS NOT NULL
+         GROUP BY supplier_id`,
+        { storeId }
+      );
+      paymentTotals = (payments as Array<{ supplier_id: string; total: number }>).reduce((acc, p) => {
+        acc[p.supplier_id] = Number(p.total) || 0;
+        return acc;
+      }, {} as Record<string, number>);
+    } catch {
+      // SupplierPayments table may not exist
+    }
+
+    // Calculate debt for each supplier and filter those with debt > 0
+    const suppliersWithDebt = (suppliers as Array<{ id: string; name: string; contact_person: string; phone: string }>)
+      .map(supplier => {
+        const totalPurchases = purchaseTotals[supplier.id] || 0;
+        const totalPaid = paymentTotals[supplier.id] || 0;
+        const totalDebt = totalPurchases - totalPaid;
+        
+        return {
+          id: supplier.id,
+          supplierName: supplier.name,
+          contactPerson: supplier.contact_person,
+          phone: supplier.phone,
+          totalPurchases,
+          totalPaid,
+          totalDebt
+        };
+      })
+      .filter(supplier => supplier.totalDebt > 0);
+
+    res.json({ success: true, data: suppliersWithDebt });
   } catch (error) {
     console.error('Get supplier debt report error:', error);
     res.status(500).json({ error: 'Failed to get supplier debt report' });
@@ -339,33 +390,6 @@ router.get('/inventory', async (req: AuthRequest, res: Response) => {
   }
 });
 
-// GET /api/reports/supplier-debt - Supplier debt report
-router.get('/supplier-debt', async (req: AuthRequest, res: Response) => {
-  try {
-    const storeId = req.storeId!;
-
-    const result = await query(
-      `SELECT
-        s.id, s.name, s.phone, s.email,
-        ISNULL(SUM(p.total_amount), 0) as totalPurchases,
-        ISNULL(SUM(p.paid_amount), 0) as totalPaid,
-        ISNULL(SUM(p.remaining_debt), 0) as totalDebt,
-        COUNT(p.id) as purchaseCount
-       FROM Suppliers s
-       LEFT JOIN Purchases p ON s.id = p.supplier_id AND p.store_id = @storeId
-       WHERE s.store_id = @storeId
-       GROUP BY s.id, s.name, s.phone, s.email
-       HAVING ISNULL(SUM(p.remaining_debt), 0) > 0
-       ORDER BY totalDebt DESC`,
-      { storeId }
-    );
-
-    res.json({ data: result, total: result.length });
-  } catch (error) {
-    console.error('Get supplier debt report error:', error);
-    res.status(500).json({ error: 'Failed to get supplier debt report' });
-  }
-});
 
 // GET /api/reports/profit - Profit report
 router.get('/profit', async (req: AuthRequest, res: Response) => {
