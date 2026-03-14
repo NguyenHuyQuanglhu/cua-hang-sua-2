@@ -124,14 +124,22 @@ export default function AllTransactionsPage() {
 
     // Add purchases
     purchases.forEach(purchase => {
+      // Map field names from backend (camelCase) to expected format
+      const purchaseDate = (purchase as any).importDate || purchase.purchaseDate;
+      const invoiceNumber = (purchase as any).orderNumber || purchase.invoiceNumber;
+      const supplierName = purchase.supplierName || 'Không rõ';
+      
+      // Use paidAmount if available, otherwise use totalAmount
+      const displayAmount = purchase.paidAmount !== undefined ? purchase.paidAmount : purchase.totalAmount || 0;
+      
       transactions.push({
         id: `purchase-${purchase.id}`,
-        date: new Date(purchase.purchaseDate),
+        date: new Date(purchaseDate),
         type: 'purchase',
-        partnerName: purchase.supplierName || 'Không rõ',
+        partnerName: supplierName,
         partnerId: purchase.supplierId || '',
-        reference: purchase.invoiceNumber || '',
-        amount: purchase.totalAmount || 0,
+        reference: invoiceNumber || '',
+        amount: displayAmount,
         notes: purchase.notes,
         originalData: purchase,
       });
@@ -289,12 +297,20 @@ export default function AllTransactionsPage() {
       switch (tx.type) {
         case 'sale':
           acc.totalSales += tx.amount;
+          acc.totalRevenue += tx.amount; // Tổng thu từ bán hàng
           break;
         case 'purchase':
           acc.totalPurchases += tx.amount;
+          // Tính tổng tiền nhập hàng (để tính nợ NCC)
+          const purchase = tx.originalData as any;
+          const totalAmount = purchase.totalAmount || 0;
+          const paidAmount = purchase.paidAmount || 0;
+          acc.totalPurchaseAmount += totalAmount;
+          acc.totalPurchasePaid += paidAmount;
           break;
         case 'customer_payment':
           acc.totalCustomerPayments += tx.amount;
+          acc.totalRevenue += tx.amount; // Tổng thu từ thanh toán công nợ
           break;
         case 'supplier_payment':
           acc.totalSupplierPayments += tx.amount;
@@ -306,6 +322,9 @@ export default function AllTransactionsPage() {
       totalPurchases: 0,
       totalCustomerPayments: 0,
       totalSupplierPayments: 0,
+      totalRevenue: 0, // Tổng thu = bán hàng + thanh toán công nợ
+      totalPurchaseAmount: 0, // Tổng tiền nhập hàng
+      totalPurchasePaid: 0, // Tổng tiền đã trả NCC khi nhập
     });
   }, [sortedTransactions]);
 
@@ -351,11 +370,12 @@ export default function AllTransactionsPage() {
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Chi phí nhập hàng</CardTitle>
+            <CardTitle className="text-sm font-medium">Đã thanh toán NCC</CardTitle>
             <Package className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-orange-600">{formatCurrency(summary.totalPurchases)}</div>
+            <p className="text-xs text-muted-foreground mt-1">Số tiền đã trả cho nhà cung cấp</p>
           </CardContent>
         </Card>
         <Card>
@@ -364,7 +384,8 @@ export default function AllTransactionsPage() {
             <DollarSign className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-blue-600">{formatCurrency(summary.totalCustomerPayments)}</div>
+            <div className="text-2xl font-bold text-blue-600">{formatCurrency(summary.totalRevenue)}</div>
+            <p className="text-xs text-muted-foreground mt-1">Bán hàng + Thanh toán công nợ</p>
           </CardContent>
         </Card>
         <Card>
@@ -373,7 +394,10 @@ export default function AllTransactionsPage() {
             <TrendingDown className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-red-600">{formatCurrency(summary.totalSupplierPayments)}</div>
+            <div className="text-2xl font-bold text-red-600">
+              {formatCurrency(summary.totalPurchaseAmount - summary.totalPurchasePaid - summary.totalSupplierPayments)}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">Công nợ còn phải trả</p>
           </CardContent>
         </Card>
       </div>

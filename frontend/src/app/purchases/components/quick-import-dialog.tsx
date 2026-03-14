@@ -39,6 +39,8 @@ const quickImportSchema = z.object({
   quantity: z.coerce.number().min(1, "Số lượng phải lớn hơn 0"),
   cost: z.coerce.number().min(0, "Giá nhập không được âm"),
   importDate: z.string().min(1, "Vui lòng chọn ngày nhập"),
+  paidAmount: z.coerce.number().min(0, "Số tiền thanh toán không được âm").optional(),
+  paymentMethod: z.string().optional(),
 })
 
 type QuickImportFormValues = z.infer<typeof quickImportSchema>
@@ -103,6 +105,8 @@ export function QuickImportDialog({
       quantity: 10,
       cost: product.costPrice || 0,
       importDate: new Date().toISOString().split('T')[0],
+      paidAmount: 0,
+      paymentMethod: "cash",
     },
   })
 
@@ -169,6 +173,8 @@ export function QuickImportDialog({
         quantity: 10,
         cost: product.costPrice || 0,
         importDate: new Date().toISOString().split('T')[0],
+        paidAmount: 0,
+        paymentMethod: "cash",
       });
     }
   }, [open, currentStore?.id, product, form]);
@@ -224,6 +230,9 @@ export function QuickImportDialog({
         baseQuantity,
         baseCost,
         baseUnitId,
+        // Include payment information
+        paidAmount: data.paidAmount || 0,
+        paymentMethod: data.paymentMethod || "cash",
       };
 
       console.log('Quick import payload:', payload);
@@ -279,7 +288,9 @@ export function QuickImportDialog({
 
   const quantity = form.watch("quantity");
   const cost = form.watch("cost");
+  const paidAmount = form.watch("paidAmount") || 0;
   const totalAmount = quantity * cost;
+  const remainingDebt = totalAmount - paidAmount;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -449,11 +460,73 @@ export function QuickImportDialog({
               />
             </div>
 
-            <div className="rounded-lg bg-primary/10 border border-primary/20 p-4">
-              <div className="flex justify-between items-center mb-2">
+            <FormField
+              control={form.control}
+              name="paidAmount"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Số tiền thanh toán</FormLabel>
+                  <FormControl>
+                    <Input
+                      type="number"
+                      min="0"
+                      max={totalAmount}
+                      step="1000"
+                      placeholder="Nhập số tiền đã thanh toán"
+                      {...field}
+                    />
+                  </FormControl>
+                  <p className="text-xs text-muted-foreground">
+                    Để trống hoặc 0 nếu chưa thanh toán. Tối đa: {formatCurrency(totalAmount)}
+                  </p>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="paymentMethod"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Phương thức thanh toán</FormLabel>
+                  <Select
+                    onValueChange={field.onChange}
+                    value={field.value}
+                  >
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Chọn phương thức" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      <SelectItem value="cash">Tiền mặt</SelectItem>
+                      <SelectItem value="bank_transfer">Chuyển khoản</SelectItem>
+                      <SelectItem value="card">Thẻ</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <div className="rounded-lg bg-primary/10 border border-primary/20 p-4 space-y-2">
+              <div className="flex justify-between items-center">
                 <span className="text-sm font-medium">Tổng tiền nhập:</span>
                 <span className="text-xl font-bold text-primary">{formatCurrency(totalAmount)}</span>
               </div>
+              {paidAmount > 0 && (
+                <>
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-muted-foreground">Đã thanh toán:</span>
+                    <span className="font-medium text-green-600">{formatCurrency(paidAmount)}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-sm border-t pt-2">
+                    <span className="text-muted-foreground">Còn nợ:</span>
+                    <span className="font-medium text-orange-600">{formatCurrency(remainingDebt)}</span>
+                  </div>
+                </>
+              )}
               {form.watch("unitId") && form.watch("quantity") > 0 && (
                 <p className="text-xs text-muted-foreground text-right">
                   {form.watch("quantity")} {units.find(u => u.id === form.watch("unitId"))?.name} × {formatCurrency(form.watch("cost"))}

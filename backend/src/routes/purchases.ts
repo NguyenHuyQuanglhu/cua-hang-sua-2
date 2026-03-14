@@ -98,7 +98,7 @@ router.post('/quick', async (req: AuthRequest, res: Response) => {
   try {
     const storeId = req.storeId!;
     const userId = req.user?.id;
-    const { supplierId, productId, quantity, cost, unitId, importDate, baseQuantity, baseCost, baseUnitId } = req.body;
+    const { supplierId, productId, quantity, cost, unitId, importDate, baseQuantity, baseCost, baseUnitId, paidAmount, paymentMethod } = req.body;
 
     // Validate required fields
     if (!supplierId) {
@@ -128,6 +128,13 @@ router.post('/quick', async (req: AuthRequest, res: Response) => {
 
     // Calculate total amount using base values
     const totalAmount = finalBaseQuantity * finalBaseCost;
+    
+    // Validate paid amount
+    const finalPaidAmount = paidAmount || 0;
+    if (finalPaidAmount < 0 || finalPaidAmount > totalAmount) {
+      res.status(400).json({ error: 'Invalid paid amount', code: 'VALIDATION_ERROR' });
+      return;
+    }
 
     const input: CreatePurchaseOrderInput = {
       supplierId,
@@ -144,6 +151,8 @@ router.post('/quick', async (req: AuthRequest, res: Response) => {
         baseCost: finalBaseCost,
         baseUnitId: finalBaseUnitId,
       }],
+      paidAmount: finalPaidAmount,
+      paymentMethod: paymentMethod || 'cash',
     };
 
     const purchase = await purchaseOrderRepository.createWithItems(input, storeId);

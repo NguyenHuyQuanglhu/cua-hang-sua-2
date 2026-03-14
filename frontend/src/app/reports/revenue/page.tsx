@@ -66,7 +66,14 @@ interface SaleDetail {
 
 interface SalesReportResponse {
   success: boolean;
-  summary: SalesSummary[];
+  summary: {
+    totalOrders: number;
+    totalRevenue: number;
+    totalVat: number;
+    totalDiscount: number;
+    netRevenue: number;
+  };
+  dailySummary: SalesSummary[];
   totals: {
     totalSales: number;
     totalRevenue: number;
@@ -119,9 +126,9 @@ export default function RevenueReportPage() {
   }, [fetchReport]);
 
   const monthlyData = useMemo((): MonthlyRevenue[] => {
-    if (!reportData?.summary) return [];
+    if (!reportData?.dailySummary) return [];
 
-    return reportData.summary.map(s => ({
+    return reportData.dailySummary.map(s => ({
       month: format(new Date(s.date), "yyyy-MM"),
       revenue: s.netRevenue,
       salesCount: s.totalSales,

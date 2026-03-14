@@ -58,6 +58,8 @@ export interface CreatePurchaseOrderInput {
   totalAmount: number;
   createdBy?: string;
   items: CreatePurchaseOrderItemInput[];
+  paidAmount?: number;
+  paymentMethod?: string;
 }
 
 export interface CreatePurchaseOrderItemInput {
@@ -192,6 +194,17 @@ export class PurchaseOrderRepository extends BaseRepository<PurchaseOrder> {
       const orderNumber = await this.generateOrderNumber(storeId);
       const purchaseOrderId = crypto.randomUUID();
       const now = new Date();
+      
+      // Calculate payment status
+      const paidAmount = input.paidAmount || 0;
+      const remainingDebt = input.totalAmount - paidAmount;
+      let paymentStatus = 'unpaid';
+      if (paidAmount >= input.totalAmount) {
+        paymentStatus = 'paid';
+      } else if (paidAmount > 0) {
+        paymentStatus = 'partial';
+      }
+      
       const orderRecord = await transactionInsert<PurchaseOrderRecord>(transaction, 'PurchaseOrders', {
         id: purchaseOrderId, 
         store_id: storeId, 
@@ -199,14 +212,15 @@ export class PurchaseOrderRepository extends BaseRepository<PurchaseOrder> {
         supplier_id: input.supplierId || null,
         import_date: new Date(input.importDate), 
         total_amount: input.totalAmount, 
-        paid_amount: 0,
-        remaining_debt: input.totalAmount,
-        payment_status: 'unpaid',
+        paid_amount: paidAmount,
+        remaining_debt: remainingDebt,
+        payment_status: paymentStatus,
         notes: input.notes || null,
         created_at: now,
         // updated_at will be set automatically by database DEFAULT
       });
       if (!orderRecord) throw new Error('Failed to create purchase order');
+      
       const items: PurchaseOrderItemWithProduct[] = [];
       for (const item of input.items) {
         const itemId = crypto.randomUUID();
@@ -266,6 +280,23 @@ export class PurchaseOrderRepository extends BaseRepository<PurchaseOrder> {
         );
         
         items.push(this.mapItemToEntity(itemRecord));
+      }
+      
+      // Create supplier payment record if paid amount > 0
+      if (paidAmount > 0 && input.supplierId) {
+        const paymentId = crypto.randomUUID();
+        await transactionInsert(transaction, 'SupplierPayments', {
+          id: paymentId,
+          store_id: storeId,
+          supplier_id: input.supplierId,
+          purchase_id: purchaseOrderId,
+          amount: paidAmount,
+          payment_date: new Date(input.importDate),
+          payment_method: input.paymentMethod || 'cash',
+          notes: `Thanh toán khi nhập hàng - ${orderNumber}`,
+          created_at: now,
+        });
+        console.log(`[PurchaseOrderRepository] Created supplier payment for purchase ${orderNumber}: ${paidAmount}`);
       }
       
       // Create cash transaction for the purchase (expense)

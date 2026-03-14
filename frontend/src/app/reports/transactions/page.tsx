@@ -113,20 +113,56 @@ export default function TransactionHistoryPage() {
     const fromDate = dateRange.from;
     const toDate = dateRange.to || fromDate;
 
-    const allCustomerEntities = [
+    // Get all unique customer IDs from sales and payments
+    const customerIdsInTransactions = new Set<string>();
+    sales.forEach(s => {
+      if (s.customerId) customerIdsInTransactions.add(s.customerId);
+    });
+    payments.forEach(p => {
+      if (p.customerId) customerIdsInTransactions.add(p.customerId);
+    });
+
+    // Create customer entities including walk-in
+    const allCustomerEntities: Customer[] = [
         ...customers,
-        { id: WALK_IN_CUSTOMER_ID, name: 'Khách lẻ' } as Customer
     ];
+    
+    // Add walk-in customer if there are sales without customerId or with walk-in ID
+    const hasWalkInSales = sales.some(s => !s.customerId || s.customerId === WALK_IN_CUSTOMER_ID);
+    if (hasWalkInSales) {
+      allCustomerEntities.push({ 
+        id: WALK_IN_CUSTOMER_ID, 
+        name: 'Khách lẻ',
+        phone: '',
+        email: '',
+        address: '',
+        customerType: 'personal',
+        creditLimit: 0,
+        createdAt: '',
+        updatedAt: '',
+      } as Customer);
+    }
 
     return allCustomerEntities.map(customer => {
+      // Match sales and payments for this customer
+      // For walk-in customer, match sales without customerId or with walk-in ID
+      const matchSale = (s: Sale) => {
+        if (customer.id === WALK_IN_CUSTOMER_ID) {
+          return !s.customerId || s.customerId === WALK_IN_CUSTOMER_ID;
+        }
+        return s.customerId === customer.id;
+      };
+      
+      const matchPayment = (p: Payment) => p.customerId === customer.id;
+
       // Opening Balance
-      const salesBefore = sales.filter(s => s.customerId === customer.id && new Date(s.transactionDate) < fromDate);
-      const paymentsBefore = payments.filter(p => p.customerId === customer.id && new Date(p.paymentDate) < fromDate);
+      const salesBefore = sales.filter(s => matchSale(s) && new Date(s.transactionDate) < fromDate);
+      const paymentsBefore = payments.filter(p => matchPayment(p) && new Date(p.paymentDate) < fromDate);
       const openingBalance = salesBefore.reduce((sum, s) => sum + (s.finalAmount || 0), 0) - paymentsBefore.reduce((sum, p) => sum + p.amount, 0);
 
       // Transactions during the period
-      const salesDuring = sales.filter(s => s.customerId === customer.id && new Date(s.transactionDate) >= fromDate && new Date(s.transactionDate) <= toDate);
-      const paymentsDuring = payments.filter(p => p.customerId === customer.id && new Date(p.paymentDate) >= fromDate && new Date(p.paymentDate) <= toDate);
+      const salesDuring = sales.filter(s => matchSale(s) && new Date(s.transactionDate) >= fromDate && new Date(s.transactionDate) <= toDate);
+      const paymentsDuring = payments.filter(p => matchPayment(p) && new Date(p.paymentDate) >= fromDate && new Date(p.paymentDate) <= toDate);
       
       const incurredAmount = salesDuring.reduce((sum, s) => sum + (s.finalAmount || 0), 0);
       const paidAmount = paymentsDuring.reduce((sum, p) => sum + p.amount, 0);

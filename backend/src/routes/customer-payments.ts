@@ -14,7 +14,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     const storeId = req.storeId!;
     
     const payments = await query(
-      `SELECT p.*, c.name as customer_name
+      `SELECT p.*, c.full_name as customer_name
        FROM Payments p
        LEFT JOIN Customers c ON p.customer_id = c.id
        WHERE p.store_id = @storeId
@@ -23,16 +23,15 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     );
 
     res.json(payments.map((p: Record<string, unknown>) => ({
-      id: p.id,
-      storeId: p.store_id,
-      customerId: p.customer_id,
+      id: p.Id,
+      storeId: p.StoreId,
+      customerId: p.CustomerId,
       customerName: p.customer_name,
-      saleId: p.sale_id,
-      amount: p.amount,
-      paymentDate: p.payment_date,
-      paymentMethod: p.payment_method,
-      notes: p.notes,
-      createdAt: p.created_at,
+      amount: p.Amount,
+      paymentDate: p.PaymentDate,
+      paymentMethod: 'cash', // Default since not in schema
+      notes: p.Notes,
+      createdAt: p.CreatedAt,
     })));
   } catch (error) {
     console.error('Get customer payments error:', error);
@@ -44,24 +43,22 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 router.post('/', async (req: AuthRequest, res: Response) => {
   try {
     const storeId = req.storeId!;
-    const { customerId, saleId, amount, paymentDate, paymentMethod, notes } = req.body;
+    const { customerId, amount, paymentDate, notes } = req.body;
 
     const paymentId = crypto.randomUUID();
     const paymentDateValue = paymentDate || new Date();
 
     // Insert payment record
     await query(
-      `INSERT INTO Payments (id, store_id, customer_id, sale_id, amount, payment_date, payment_method, notes, created_at)
-       VALUES (@paymentId, @storeId, @customerId, @saleId, @amount, @paymentDate, @paymentMethod, @notes, GETDATE())`,
+      `INSERT INTO Payments (Id, StoreId, CustomerId, Amount, PaymentDate, Notes, CreatedAt)
+       VALUES (@paymentId, @storeId, @customerId, @amount, @paymentDate, @notes, GETDATE())`,
       {
         paymentId,
         storeId,
         customerId,
-        saleId: saleId || null,
         amount,
         paymentDate: paymentDateValue,
-        paymentMethod: paymentMethod || 'cash',
-        notes
+        notes: notes || null
       }
     );
 
@@ -81,11 +78,11 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     }
 
     // Get customer name for cash transaction description
-    const customer = await queryOne<{ name: string }>(
-      `SELECT name FROM Customers WHERE id = @customerId AND store_id = @storeId`,
+    const customer = await queryOne<{ full_name: string }>(
+      `SELECT full_name FROM Customers WHERE id = @customerId AND store_id = @storeId`,
       { customerId, storeId }
     );
-    const customerName = customer?.name || 'Khách hàng';
+    const customerName = customer?.full_name || 'Khách hàng';
 
     // Create cash transaction for the payment (income)
     try {
@@ -115,3 +112,4 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 });
 
 export default router;
+/** */

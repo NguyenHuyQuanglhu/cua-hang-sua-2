@@ -280,6 +280,13 @@ export type PurchaseOrder = {
   createdAt: any; // server timestamp
 }
 
+// Alias for backward compatibility
+export type Purchase = PurchaseOrder & {
+  purchaseDate: string; // Alias for importDate
+  invoiceNumber: string; // Alias for orderNumber
+  supplierName?: string;
+};
+
 export type CashTransaction = {
     id: string;
     type: 'thu' | 'chi';
