@@ -11,11 +11,11 @@ export function getPostShiftRedirectPath(userRole: UserRole): string {
       // Các role quản lý chuyển về dashboard
       return '/dashboard'
     case 'salesperson':
-      // Nhân viên bán hàng chuyển về login
-      return '/login'
+      // Nhân viên bán hàng chuyển về POS (có thể mở ca mới nếu cần)
+      return '/pos'
     default:
-      // Mặc định chuyển về login
-      return '/login'
+      // Mặc định chuyển về POS
+      return '/pos'
   }
 }
 

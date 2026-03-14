@@ -21,6 +21,7 @@ async function getAuthHeaders() {
 async function getSaleData(saleId: string) {
   try {
     const headers = await getAuthHeaders();
+    const storeId = (await cookies()).get('store-id')?.value;
 
     // Fetch sale with details
     const saleResponse = await fetch(`${API_BASE_URL}/sales/${saleId}`, {
@@ -30,7 +31,7 @@ async function getSaleData(saleId: string) {
     });
 
     if (!saleResponse.ok) {
-      return { sale: null, items: [], customer: null, productsMap: new Map(), unitsMap: new Map(), settings: null };
+      return { sale: null, items: [], customer: null, productsMap: new Map(), unitsMap: new Map(), settings: null, storeName: undefined };
     }
 
     const saleData = await saleResponse.json();
@@ -93,6 +94,20 @@ async function getSaleData(saleId: string) {
       settings = settingsData.settings;
     }
 
+    // Fetch store information
+    let storeName: string | undefined = undefined;
+    if (storeId) {
+      const storeResponse = await fetch(`${API_BASE_URL}/stores/${storeId}`, {
+        method: 'GET',
+        headers,
+        cache: 'no-store',
+      });
+      if (storeResponse.ok) {
+        const storeData = await storeResponse.json();
+        storeName = storeData.name;
+      }
+    }
+
     // Map items to expected format
     const mappedItems = items.map((item: any) => ({
       id: item.id,
@@ -125,10 +140,10 @@ async function getSaleData(saleId: string) {
       remainingDebt: sale.remainingDebt,
     };
 
-    return { sale: mappedSale, items: mappedItems, customer, productsMap, unitsMap, settings };
+    return { sale: mappedSale, items: mappedItems, customer, productsMap, unitsMap, settings, storeName };
   } catch (error) {
     console.error('Error fetching sale data:', error);
-    return { sale: null, items: [], customer: null, productsMap: new Map(), unitsMap: new Map(), settings: null };
+    return { sale: null, items: [], customer: null, productsMap: new Map(), unitsMap: new Map(), settings: null, storeName: undefined };
   }
 }
 
@@ -141,7 +156,7 @@ export default async function SaleDetailPage({ params, searchParams }: PageProps
   const { id } = await params;
   const search = await searchParams;
   
-  const { sale, items, customer, productsMap, unitsMap, settings } = await getSaleData(id);
+  const { sale, items, customer, productsMap, unitsMap, settings, storeName } = await getSaleData(id);
 
   if (!sale) {
     notFound()
@@ -161,6 +176,7 @@ export default async function SaleDetailPage({ params, searchParams }: PageProps
             productsMap={productsMap}
             unitsMap={unitsMap}
             settings={settings}
+            storeName={storeName}
           />
         </div>
       );

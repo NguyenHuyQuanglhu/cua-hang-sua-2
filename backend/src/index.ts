@@ -22,6 +22,7 @@ import usersRoutes from './routes/users';
 import storesRoutes from './routes/stores';
 import reportsRoutes from './routes/reports';
 import supplierPaymentsRoutes from './routes/supplier-payments';
+import customerPaymentsRoutes from './routes/customer-payments';
 import onlineStoresRoutes from './routes/online-stores';
 import storefrontRoutes from './routes/storefront';
 import tenantsRoutes from './routes/tenants';
@@ -59,12 +60,22 @@ console.log('Database config:', {
 });
 
 // Middleware
-app.use(
-  cors({
-    origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
-    credentials: true,
-  })
-);
+// More permissive CORS for development
+const corsOptions = process.env.NODE_ENV === 'development' 
+  ? {
+      origin: true, // Allow all origins in development
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Store-Id'],
+    }
+  : {
+      origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Store-Id'],
+    };
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // Static files - serve uploaded images
@@ -101,6 +112,8 @@ app.use('/api/users', usersRoutes);
 app.use('/api/stores', storesRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/supplier-payments', supplierPaymentsRoutes);
+app.use('/api/customer-payments', customerPaymentsRoutes);
+app.use('/api/payments', customerPaymentsRoutes); // Alias for customer payments
 app.use('/api/online-stores', onlineStoresRoutes);
 app.use('/api/storefront', storefrontRoutes);
 app.use('/api/tenants', tenantsRoutes);

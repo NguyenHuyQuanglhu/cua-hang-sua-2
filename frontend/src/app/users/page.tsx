@@ -12,6 +12,7 @@ import {
   Key,
   UserCog,
   Building2,
+  RefreshCw,
 } from "lucide-react"
 
 import {
@@ -266,13 +267,34 @@ export default function UsersPage() {
   const handleResetPassword = async () => {
     if (!userToResetPassword) return;
     try {
-      const response = await fetch(`/api/users/${userToResetPassword.id}/reset-password`, {
+      const response = await fetch(`http://localhost:3001/api/users/${userToResetPassword.id}/reset-password`, {
         method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+          'X-Store-Id': localStorage.getItem('store_id') || '',
+          'Content-Type': 'application/json',
+        },
       });
+      
       if (response.ok) {
+        const data = await response.json();
         toast({
           title: "Thành công!",
-          description: `Đã gửi email đặt lại mật khẩu cho ${userToResetPassword.email}`,
+          description: (
+            <div className="space-y-2">
+              <p>Đã đặt lại mật khẩu cho {userToResetPassword.email}</p>
+              {data.tempPassword && (
+                <div className="bg-muted p-3 rounded-md">
+                  <p className="text-sm font-semibold mb-1">Mật khẩu tạm thời:</p>
+                  <p className="text-lg font-mono font-bold select-all">{data.tempPassword}</p>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Vui lòng sao chép và gửi cho người dùng. Họ nên đổi mật khẩu sau khi đăng nhập.
+                  </p>
+                </div>
+              )}
+            </div>
+          ),
+          duration: 10000, // Show for 10 seconds
         });
       } else {
         const error = await response.json();
@@ -446,6 +468,18 @@ export default function UsersPage() {
               </DropdownMenuContent>
             </DropdownMenu>
             <div className="ml-auto flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-10 gap-1"
+                onClick={fetchUsers}
+                title="Tải lại danh sách"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                <span className="sr-only sm:not-sr-only sm:whitespace-nowrap">
+                  Tải lại
+                </span>
+              </Button>
               {canAdd && manageableRoles.length > 0 && (
                 <Button size="sm" className="h-10 gap-1" onClick={handleAddUser}>
                   <PlusCircle className="h-3.5 w-3.5" />

@@ -31,6 +31,9 @@ export interface StoreUser {
   id: string;
   email: string;
   displayName?: string;
+  photoURL?: string;
+  phone?: string;
+  address?: string;
   role: string;
   permissions: Record<string, string[]>;
   stores: Store[];
@@ -190,12 +193,16 @@ export function StoreProvider({ children }: StoreProviderProps) {
           code: s.code || s.slug || '',
         })) as Store[];
 
+        const rawUser = data.user as Record<string, unknown>;
         const userData: StoreUser = {
-          id: data.user.id,
-          email: data.user.email,
-          displayName: data.user.displayName,
-          role: data.user.role,
-          permissions: data.user.permissions || {},
+          id: rawUser.id as string,
+          email: rawUser.email as string,
+          displayName: rawUser.displayName as string | undefined,
+          photoURL: rawUser.photoURL as string | undefined,
+          phone: rawUser.phone as string | undefined,
+          address: rawUser.address as string | undefined,
+          role: rawUser.role as string,
+          permissions: (rawUser.permissions as Record<string, string[]>) || {},
           stores: userStores,
           accessibleStoreIds: Array.from(storeIds),
         };

@@ -128,26 +128,26 @@ export function UserNav() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>🚫 Không thể đăng xuất</AlertDialogTitle>
-            <AlertDialogDescription className="space-y-3">
-              <p className="text-base font-medium text-foreground">
-                Bạn hiện đang có ca làm việc chưa đóng. Bạn phải đóng ca trước khi đăng xuất.
-              </p>
-              <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-md p-4">
-                <p className="text-sm text-red-800 dark:text-red-200 font-semibold mb-2">
-                  ⚠️ Yêu cầu bắt buộc:
-                </p>
-                <ol className="text-sm text-red-700 dark:text-red-300 space-y-2 list-decimal list-inside">
-                  <li>Vào trang POS (Point of Sale)</li>
-                  <li>Kiểm tra và đối chiếu số tiền cuối ca</li>
-                  <li>Nhấn nút "Đóng ca" để kết thúc ca làm việc</li>
-                  <li>Sau đó mới có thể đăng xuất</li>
-                </ol>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                Việc đóng ca đúng quy trình giúp đảm bảo dữ liệu chính xác và tránh sai sót trong báo cáo.
-              </p>
+            <AlertDialogDescription>
+              Bạn hiện đang có ca làm việc chưa đóng. Bạn phải đóng ca trước khi đăng xuất.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <div className="space-y-3">
+            <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-md p-4">
+              <p className="text-sm text-red-800 dark:text-red-200 font-semibold mb-2">
+                ⚠️ Yêu cầu bắt buộc:
+              </p>
+              <ol className="text-sm text-red-700 dark:text-red-300 space-y-2 list-decimal list-inside">
+                <li>Vào trang POS (Point of Sale)</li>
+                <li>Kiểm tra và đối chiếu số tiền cuối ca</li>
+                <li>Nhấn nút "Đóng ca" để kết thúc ca làm việc</li>
+                <li>Sau đó mới có thể đăng xuất</li>
+              </ol>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Việc đóng ca đúng quy trình giúp đảm bảo dữ liệu chính xác và tránh sai sót trong báo cáo.
+            </p>
+          </div>
           <AlertDialogFooter>
             <AlertDialogCancel>Đóng</AlertDialogCancel>
             <AlertDialogAction asChild>

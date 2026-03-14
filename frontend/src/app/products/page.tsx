@@ -81,6 +81,7 @@ import { useRouter } from "next/navigation"
 import { ImportProducts } from "./components/import-products"
 import { QuickPurchaseDialog } from "./components/quick-purchase-dialog"
 import { useUserRole } from "@/hooks/use-user-role"
+import { useStore } from "@/contexts/store-context"
 
 
 // Product type from SQL Server API
@@ -146,6 +147,7 @@ export default function ProductsPage() {
   const { toast } = useToast();
   const router = useRouter();
   const { permissions, isLoading: isRoleLoading } = useUserRole();
+  const { selectedStoreId } = useStore();
 
   // Track previous filter values to detect changes
   const prevFiltersRef = useRef({ debouncedSearchTerm, categoryFilter: categoryFilter.join(','), statusFilter });
@@ -217,6 +219,16 @@ export default function ProductsPage() {
     
     fetchCategoriesAndUnits();
   }, []); // Only run once on mount
+
+  // Reload products when store changes
+  useEffect(() => {
+    if (selectedStoreId) {
+      console.log('[Products] Store changed to:', selectedStoreId);
+      // Reset to page 1 and reload
+      setCurrentPage(1);
+      fetchProducts();
+    }
+  }, [selectedStoreId]);
 
   // Fetch products and handle page reset
   useEffect(() => {

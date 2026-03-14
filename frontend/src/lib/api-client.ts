@@ -378,6 +378,18 @@ class ApiClient {
     });
   }
 
+  // ==================== Customer Payments ====================
+  async getPayments() {
+    return this.request<Array<Record<string, unknown>>>('/payments');
+  }
+
+  async createPayment(data: Record<string, unknown>) {
+    return this.request('/payments', {
+      method: 'POST',
+      body: data,
+    });
+  }
+
   // ==================== Sales ====================
   async getSales(params?: {
     page?: number;

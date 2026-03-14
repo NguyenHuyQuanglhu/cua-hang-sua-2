@@ -30,6 +30,7 @@ interface InvoicePrintDialogProps {
   customerName?: string
   customerPhone?: string
   settings: ThemeSettings | null
+  storeName?: string
 }
 
 export function InvoicePrintDialog({
@@ -47,6 +48,7 @@ export function InvoicePrintDialog({
   customerName,
   customerPhone,
   settings,
+  storeName,
 }: InvoicePrintDialogProps) {
   const printRef = useRef<HTMLDivElement>(null)
 
@@ -148,9 +150,11 @@ export function InvoicePrintDialog({
             {settings?.companyBusinessLine && (
               <p className="text-sm text-gray-600">{settings.companyBusinessLine}</p>
             )}
-            <h1 className="company-name text-2xl font-bold text-orange-500">
-              {settings?.companyName || 'TÊN DOANH NGHIỆP'}
-            </h1>
+            {storeName && (
+              <h1 className="company-name text-3xl font-bold text-orange-500 mb-2">
+                {storeName}
+              </h1>
+            )}
             {settings?.companyAddress && (
               <p className="company-info text-sm text-gray-600">{settings.companyAddress}</p>
             )}

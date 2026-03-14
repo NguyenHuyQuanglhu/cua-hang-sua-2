@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react"
 import Link from "next/link"
-import { ArrowLeft, AlertTriangle, Package, ShoppingCart } from "lucide-react"
+import { ArrowLeft, AlertTriangle, Package, ShoppingCart, CheckSquare, Square } from "lucide-react"
 import {
   Card,
   CardContent,
@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Checkbox } from "@/components/ui/checkbox"
 import { formatCurrency } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
 import { useStore } from "@/contexts/store-context"
@@ -49,6 +50,9 @@ export default function QuickImportPage() {
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [selectedProduct, setSelectedProduct] = useState<LowStockProduct | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
+  const [showBulkImportDialog, setShowBulkImportDialog] = useState(false);
+  const [importHistory, setImportHistory] = useState<any[]>([]);
   
   const { currentStore } = useStore();
   const { toast } = useToast();
@@ -122,19 +126,85 @@ export default function QuickImportPage() {
   useEffect(() => {
     fetchLowStockProducts();
     fetchCategories();
+    loadImportHistory();
   }, [fetchLowStockProducts, fetchCategories]);
+
+  // Load import history from localStorage
+  const loadImportHistory = () => {
+    try {
+      const history = localStorage.getItem('quick_import_history');
+      if (history) {
+        setImportHistory(JSON.parse(history));
+      }
+    } catch (error) {
+      console.error('Error loading import history:', error);
+    }
+  };
+
+  // Save import to history
+  const saveToHistory = (productId: string, productName: string, supplierId: string, supplierName: string, quantity: number, cost: number, unitName: string) => {
+    try {
+      const history = JSON.parse(localStorage.getItem('quick_import_history') || '[]');
+      const newEntry = {
+        productId,
+        productName,
+        supplierId,
+        supplierName,
+        quantity,
+        cost,
+        unitName,
+        timestamp: new Date().toISOString(),
+      };
+      
+      // Keep only last 50 entries
+      const updatedHistory = [newEntry, ...history].slice(0, 50);
+      localStorage.setItem('quick_import_history', JSON.stringify(updatedHistory));
+      setImportHistory(updatedHistory);
+    } catch (error) {
+      console.error('Error saving import history:', error);
+    }
+  };
+
+  // Get last import for a product
+  const getLastImport = (productId: string) => {
+    return importHistory.find(h => h.productId === productId);
+  };
 
   const handleQuickImport = (product: LowStockProduct) => {
     setSelectedProduct(product);
     setDialogOpen(true);
   };
 
-  const handleImportSuccess = () => {
+  const handleImportSuccess = (productId: string, productName: string, supplierId: string, supplierName: string, quantity: number, cost: number, unitName: string) => {
+    saveToHistory(productId, productName, supplierId, supplierName, quantity, cost, unitName);
     toast({
       title: "Thành công!",
       description: "Đã nhập hàng thành công",
     });
     fetchLowStockProducts();
+    loadImportHistory();
+  };
+
+  // Toggle product selection
+  const toggleProductSelection = (productId: string) => {
+    const newSelection = new Set(selectedProducts);
+    if (newSelection.has(productId)) {
+      newSelection.delete(productId);
+    } else {
+      newSelection.add(productId);
+    }
+    setSelectedProducts(newSelection);
+  };
+
+  // Select all products
+  const selectAllProducts = () => {
+    const validProducts = filteredProducts.filter(p => p.unitId);
+    setSelectedProducts(new Set(validProducts.map(p => p.id)));
+  };
+
+  // Clear selection
+  const clearSelection = () => {
+    setSelectedProducts(new Set());
   };
 
   const getStockBadgeVariant = (stock: number) => {
@@ -229,6 +299,28 @@ export default function QuickImportPage() {
                 <Button onClick={fetchLowStockProducts} size="sm">
                   Làm mới
                 </Button>
+                {selectedProducts.size > 0 && (
+                  <>
+                    <Badge variant="secondary" className="ml-2">
+                      {selectedProducts.size} đã chọn
+                    </Badge>
+                    <Button 
+                      onClick={clearSelection} 
+                      variant="outline" 
+                      size="sm"
+                    >
+                      Bỏ chọn
+                    </Button>
+                    <Button 
+                      onClick={() => setShowBulkImportDialog(true)} 
+                      size="sm"
+                      className="gap-1"
+                    >
+                      <ShoppingCart className="h-4 w-4" />
+                      Nhập tất cả ({selectedProducts.size})
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
             
@@ -270,6 +362,22 @@ export default function QuickImportPage() {
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead className="w-12">
+                          <Checkbox
+                            checked={categoryProducts.every(p => p.unitId && selectedProducts.has(p.id))}
+                            onCheckedChange={(checked) => {
+                              if (checked) {
+                                const newSelection = new Set(selectedProducts);
+                                categoryProducts.filter(p => p.unitId).forEach(p => newSelection.add(p.id));
+                                setSelectedProducts(newSelection);
+                              } else {
+                                const newSelection = new Set(selectedProducts);
+                                categoryProducts.forEach(p => newSelection.delete(p.id));
+                                setSelectedProducts(newSelection);
+                              }
+                            }}
+                          />
+                        </TableHead>
                         <TableHead className="w-16">STT</TableHead>
                         <TableHead>Sản phẩm</TableHead>
                         <TableHead>Mã SKU</TableHead>
@@ -281,12 +389,29 @@ export default function QuickImportPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {categoryProducts.map((product, index) => (
-                        <TableRow key={product.id}>
-                          <TableCell className="font-medium">{index + 1}</TableCell>
-                          <TableCell>
-                            <div className="font-medium">{product.name}</div>
-                          </TableCell>
+                      {categoryProducts.map((product, index) => {
+                        const lastImport = getLastImport(product.id);
+                        return (
+                          <TableRow key={product.id}>
+                            <TableCell>
+                              {product.unitId && (
+                                <Checkbox
+                                  checked={selectedProducts.has(product.id)}
+                                  onCheckedChange={() => toggleProductSelection(product.id)}
+                                />
+                              )}
+                            </TableCell>
+                            <TableCell className="font-medium">{index + 1}</TableCell>
+                            <TableCell>
+                              <div className="font-medium">{product.name}</div>
+                              {lastImport && (
+                                <div className="text-xs text-muted-foreground mt-1">
+                                  Lần trước: {lastImport.quantity} {lastImport.unitName} × {formatCurrency(lastImport.cost)}
+                                  <br />
+                                  NCC: {lastImport.supplierName}
+                                </div>
+                              )}
+                            </TableCell>
                           <TableCell>
                             <code className="text-xs bg-muted px-1 py-0.5 rounded">
                               {product.sku || 'N/A'}
@@ -338,7 +463,8 @@ export default function QuickImportPage() {
                             )}
                           </TableCell>
                         </TableRow>
-                      ))}
+                      );
+                    })}
                     </TableBody>
                   </Table>
                 </div>

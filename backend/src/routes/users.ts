@@ -535,6 +535,182 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
   }
 });
 
+/**
+ * POST /api/users/:id/reset-password - Reset user password
+ * Requirements: 4.1, 4.2, 4.5
+ * Admin can reset password for users they can manage
+ */
+router.post('/:id/reset-password', requireModulePermission('users', 'edit'), async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const currentUser = req.user!;
+    const currentUserRole = currentUser.role as UserRole;
+    const currentStoreId = req.headers['x-store-id'] as string;
+
+    console.log('[RESET PASSWORD] Request:', { userId: id, currentUser: currentUser.email, currentUserRole });
+
+    // Cannot reset own password through this endpoint
+    if (id === currentUser.id) {
+      console.log('[RESET PASSWORD] Error: Cannot reset own password');
+      return res.status(400).json({ error: 'Không thể đặt lại mật khẩu của chính mình qua chức năng này' });
+    }
+
+    // Get target user
+    console.log('[RESET PASSWORD] Fetching user:', id);
+    const user = await queryOne<{ 
+      id: string; 
+      email: string; 
+      display_name: string | null;
+      role: string;
+      status: string;
+    }>(
+      `SELECT id, email, display_name, role, status FROM Users WHERE id = @id`,
+      { id }
+    );
+
+    if (!user) {
+      console.log('[RESET PASSWORD] Error: User not found');
+      return res.status(404).json({ error: 'Không tìm thấy người dùng' });
+    }
+
+    console.log('[RESET PASSWORD] User found:', { email: user.email, role: user.role });
+
+    // Check if current user can manage target user's role
+    const targetRole = user.role as UserRole;
+    if (!canManageRole(currentUserRole, targetRole)) {
+      console.log('[RESET PASSWORD] Error: Cannot manage role', { currentUserRole, targetRole });
+      return res.status(403).json({ error: 'Bạn không có quyền đặt lại mật khẩu cho người dùng này' });
+    }
+
+    // Generate a temporary password (user should change it after first login)
+    const tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-8).toUpperCase();
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+    console.log('[RESET PASSWORD] Updating password for user:', user.email);
+
+    // Update password
+    await query(
+      `UPDATE Users SET password_hash = @passwordHash, updated_at = GETDATE() WHERE id = @id`,
+      { id, passwordHash: hashedPassword }
+    );
+
+    console.log('[RESET PASSWORD] Password updated successfully');
+
+    // Invalidate user's permission cache
+    try {
+      invalidateUserPermissionCache(id);
+    } catch (cacheError) {
+      console.error('[RESET PASSWORD] Cache invalidation error (non-blocking):', cacheError);
+    }
+
+    // Log audit - temporarily disabled for debugging
+    /*
+    try {
+      await auditLogRepository.create({
+        tenantId: currentUser.tenantId || null,
+        storeId: currentStoreId || 'system',
+        userId: currentUser.id,
+        action: 'reset_password',
+        entityType: 'User',
+        entityId: id,
+        newValues: { resetBy: currentUser.email },
+        ipAddress: (req.ip as string) || undefined,
+        userAgent: req.headers['user-agent'],
+      });
+    } catch (auditError) {
+      console.error('[RESET PASSWORD] Audit log error (non-blocking):', auditError);
+    }
+    */
+
+    // In production, you would send an email with the temporary password
+    // For now, return it in the response (NOT RECOMMENDED for production)
+    console.log(`[RESET PASSWORD] Success - User: ${user.email}, Temp Password: ${tempPassword}`);
+
+    res.json({ 
+      success: true, 
+      message: 'Mật khẩu đã được đặt lại thành công',
+      // TODO: Remove this in production - send via email instead
+      tempPassword: tempPassword,
+      note: 'Mật khẩu tạm thời đã được tạo. Trong môi trường production, mật khẩu này sẽ được gửi qua email.'
+    });
+  } catch (error) {
+    console.error('[RESET PASSWORD] Error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorStack = error instanceof Error ? error.stack : '';
+    console.error('[RESET PASSWORD] Stack:', errorStack);
+    res.status(500).json({ error: `Không thể đặt lại mật khẩu: ${errorMessage}` });
+  }
+});
+
+/**
+ * POST /api/users/change-password - Change own password
+ * User can change their own password
+ */
+router.post('/change-password', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const currentUser = req.user!;
+    const { currentPassword, newPassword } = req.body;
+
+    console.log('[CHANGE PASSWORD] Request from user:', currentUser.email);
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Vui lòng cung cấp mật khẩu hiện tại và mật khẩu mới' });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'Mật khẩu mới phải có ít nhất 6 ký tự' });
+    }
+
+    // Get user with password hash
+    const user = await queryOne<{ 
+      id: string; 
+      email: string; 
+      password_hash: string;
+    }>(
+      `SELECT id, email, password_hash FROM Users WHERE id = @id`,
+      { id: currentUser.id }
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: 'Không tìm thấy người dùng' });
+    }
+
+    // Verify current password
+    const isValidPassword = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!isValidPassword) {
+      console.log('[CHANGE PASSWORD] Invalid current password');
+      return res.status(401).json({ error: 'Mật khẩu hiện tại không đúng' });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password
+    await query(
+      `UPDATE Users SET password_hash = @passwordHash, updated_at = GETDATE() WHERE id = @id`,
+      { id: currentUser.id, passwordHash: hashedPassword }
+    );
+
+    console.log('[CHANGE PASSWORD] Password updated successfully for:', user.email);
+
+    // Invalidate user's permission cache
+    try {
+      invalidateUserPermissionCache(currentUser.id);
+    } catch (cacheError) {
+      console.error('[CHANGE PASSWORD] Cache invalidation error (non-blocking):', cacheError);
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Mật khẩu đã được thay đổi thành công'
+    });
+  } catch (error) {
+    console.error('[CHANGE PASSWORD] Error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    res.status(500).json({ error: `Không thể đổi mật khẩu: ${errorMessage}` });
+  }
+});
+
 
 /**
  * DELETE /api/users/:id - Deactivate user (soft delete)

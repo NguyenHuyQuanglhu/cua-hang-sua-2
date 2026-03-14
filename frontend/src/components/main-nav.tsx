@@ -264,18 +264,18 @@ export function MainNav() {
                         </SidebarMenuSubItem>
                        )}
                       {hasPermission('reports_transactions', 'view') && (
-                        <>
-                          <SidebarMenuSubItem>
-                              <SidebarMenuSubButton asChild isActive={isActive('/reports/all-transactions')}>
-                                  <Link href="/reports/all-transactions" className='flex items-center gap-2'><History className="h-4 w-4" />Tất cả Giao dịch</Link>
-                              </SidebarMenuSubButton>
-                          </SidebarMenuSubItem>
-                          <SidebarMenuSubItem>
-                              <SidebarMenuSubButton asChild isActive={isActive('/reports/transactions')}>
-                                  <Link href="/reports/transactions" className='flex items-center gap-2'><History className="h-4 w-4" />Lịch sử GD Khách hàng</Link>
-                              </SidebarMenuSubButton>
-                          </SidebarMenuSubItem>
-                        </>
+                        <SidebarMenuSubItem>
+                            <SidebarMenuSubButton asChild isActive={isActive('/reports/all-transactions')}>
+                                <Link href="/reports/all-transactions" className='flex items-center gap-2'><History className="h-4 w-4" />Tất cả Giao dịch</Link>
+                            </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      )}
+                      {hasPermission('reports_transactions', 'view') && (
+                        <SidebarMenuSubItem>
+                            <SidebarMenuSubButton asChild isActive={isActive('/reports/transactions')}>
+                                <Link href="/reports/transactions" className='flex items-center gap-2'><History className="h-4 w-4" />Lịch sử GD Khách hàng</Link>
+                            </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
                       )}
                       {hasPermission('reports_supplier_debt_tracking', 'view') && (
                         <SidebarMenuSubItem>

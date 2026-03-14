@@ -34,6 +34,7 @@ import {
   ThemeSettings,
   Unit,
   Shift,
+  UserRole,
 } from '@/lib/types'
 import { upsertSaleTransaction, updateSaleStatus } from '@/app/sales/actions'
 import {
@@ -161,7 +162,7 @@ const FormattedNumberInput = ({ value, onChange, ...props }: { value: number; on
 };
 
 export default function POSPage() {
-  const { user, isLoading: isStoreLoading } = useStore()
+  const { user, isLoading: isStoreLoading, currentStore } = useStore()
   const router = useRouter()
   const { toast } = useToast()
   const { toggleSidebar } = useSidebar();
@@ -228,12 +229,20 @@ export default function POSPage() {
 
   // Update cart items with latest stock info when products data changes
   useEffect(() => {
-    if (cart.length > 0 && products.length > 0 && productsMap.size > 0) {
+    if (cart.length > 0 && products.length > 0) {
+      const tempProductsMap = new Map(products.map((p) => [p.id, p]));
+      
       setCart(prevCart => prevCart.map(item => {
-        const product = productsMap.get(item.productId);
-        if (!product) return item;
+        const product = tempProductsMap.get(item.productId);
+        if (!product) {
+          console.log('[Update cart] Product not found:', item.productId);
+          return item;
+        }
 
-        const stockInBaseUnit = getStockInBaseUnit(product.id);
+        // Get stock from product
+        const stockInBaseUnit = (product as any).stockQuantity || (product as any).currentStock || 0;
+        console.log('[Update cart]', product.name, 'updating stock to:', stockInBaseUnit, 'from product:', product);
+        
         return {
           ...item,
           stockInfo: {
@@ -291,6 +300,15 @@ export default function POSPage() {
   const fetchProducts = useCallback(async () => {
     setProductsLoading(true);
     try {
+      // First, sync inventory to ensure ProductInventory is up-to-date
+      try {
+        await apiClient.request('/sync-data/inventory', { method: 'POST' });
+        console.log('[fetchProducts] Inventory synced successfully');
+      } catch (syncError) {
+        console.warn('[fetchProducts] Inventory sync failed (non-critical):', syncError);
+        // Continue even if sync fails
+      }
+
       const result = await getProducts({ pageSize: 1000 }); // Get all active products
       if (result.success && result.data) {
         console.log('[fetchProducts] First 3 products:', result.data.slice(0, 3));
@@ -442,7 +460,11 @@ export default function POSPage() {
     }
     // API returns 'stockQuantity', not 'currentStock'
     const stock = (product as any).stockQuantity || (product as ProductWithStock).currentStock || 0
-    console.log('[getStockInBaseUnit]', product.name, 'stock:', stock)
+    console.log('[getStockInBaseUnit]', product.name, 'stock:', stock, 'raw product:', {
+      stockQuantity: (product as any).stockQuantity,
+      currentStock: (product as ProductWithStock).currentStock,
+      allKeys: Object.keys(product)
+    })
     return stock
   }, [productsMap])
 
@@ -852,7 +874,7 @@ export default function POSPage() {
         previousDebt: previousDebt, // The debt being paid
         remainingDebt: 0, // After payment, debt should be 0
         paymentMethod: paymentMethod,
-        status: 'processed', // Requirement 2.3: Update status to processed after payment
+        status: 'printed', // Mark as printed since it's a debt payment
         isChangeReturned: customerPayment > previousDebt ? true : false,
         items: [], // Empty items array
       };
@@ -935,7 +957,7 @@ export default function POSPage() {
       previousDebt: includeDebtPayment ? previousDebt : 0, // Only include debt if checkbox is checked
       remainingDebt: remainingDebt,
       paymentMethod: paymentMethod,
-      status: 'processed', // Requirement 2.3: Update status to processed after payment
+      status: 'printed', // Mark as printed after payment
       isChangeReturned: isChangeReturned,
       items: itemsData,
     }
@@ -1130,7 +1152,7 @@ export default function POSPage() {
   const handleShiftClosed = () => {
     setActiveShift(null);
     // Chuyển hướng dựa trên role của user
-    const redirectPath = user?.role ? getPostShiftRedirectPath(user.role) : '/login'
+    const redirectPath = user?.role ? getPostShiftRedirectPath(user.role as UserRole) : '/login'
     router.push(redirectPath);
   }
 
@@ -1169,17 +1191,17 @@ export default function POSPage() {
           onOpenChange={handleNewCustomerCreated}
         />
       )}
-      <div className="flex flex-col h-[calc(100vh-5rem)] -m-6 bg-muted/30">
-        <header className="p-4 border-b bg-background flex items-center gap-4">
+      <div className="flex flex-col h-[calc(100vh-5rem)] w-full -m-6 bg-muted/30 overflow-x-hidden">
+        <header className="p-4 border-b bg-background flex items-center gap-3 flex-wrap shrink-0 w-full">
           <Button variant="ghost" size="icon" onClick={toggleSidebar} className='shrink-0'>
             <PanelLeft />
           </Button>
-          <div className="relative flex-grow max-w-sm">
+          <div className="relative flex-1 min-w-[200px] max-w-sm">
             <Barcode className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
             <Input
               ref={barcodeInputRef}
               placeholder="Quét mã vạch..."
-              className="pl-10 h-12 text-lg"
+              className="pl-10 h-12 text-lg w-full"
               value={barcode}
               onChange={(e) => setBarcode(e.target.value)}
               onKeyDown={handleBarcodeScan}
@@ -1205,9 +1227,10 @@ export default function POSPage() {
           </Button>
           <Popover open={productSearchOpen} onOpenChange={setProductSearchOpen}>
             <PopoverTrigger asChild>
-              <Button type="button" variant="outline" className="h-12" disabled={isLocked}>
+              <Button type="button" variant="outline" className="h-12 shrink-0" disabled={isLocked}>
                 <PlusCircle className="mr-2 h-4 w-4" />
-                Thêm thủ công
+                <span className="hidden sm:inline">Thêm thủ công</span>
+                <span className="sm:hidden">Thêm</span>
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-[400px] p-0" align="start">
@@ -1262,13 +1285,15 @@ export default function POSPage() {
                 role="combobox"
                 disabled={isLocked || !canViewCustomers}
                 className={cn(
-                  'w-[250px] justify-between h-12',
+                  'min-w-[150px] max-w-[250px] justify-between h-12 shrink-0',
                   !selectedCustomerId && 'text-muted-foreground'
                 )}
               >
-                {selectedCustomerId
-                  ? allCustomers.find((c) => c.id === selectedCustomerId)?.name
-                  : 'Chọn khách hàng...'}
+                <span className="truncate">
+                  {selectedCustomerId
+                    ? allCustomers.find((c) => c.id === selectedCustomerId)?.name
+                    : 'Chọn khách hàng...'}
+                </span>
                 <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
               </Button>
             </PopoverTrigger>
@@ -1365,9 +1390,10 @@ export default function POSPage() {
           </div>
         )}
 
-        <main className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6 p-6 overflow-hidden min-h-0">
-          {/* Cart Items */}
-          <div className="lg:col-span-2 flex flex-col min-h-0 relative">
+        <main className="flex-1 w-full overflow-hidden">
+          <div className="h-full w-full grid grid-cols-1 lg:grid-cols-3 gap-6 p-6 overflow-y-auto overflow-x-hidden">
+            {/* Cart Items */}
+            <div className="lg:col-span-2 flex flex-col h-full overflow-hidden max-w-full">
             {isLocked && (
               <div className="absolute inset-0 bg-background/80 flex flex-col items-center justify-center z-10">
                 <Lock className="h-16 w-16 text-muted-foreground mb-4" />
@@ -1397,16 +1423,16 @@ export default function POSPage() {
                 )}
               </div>
             )}
-            <h2 className="text-xl font-semibold mb-4">Đơn hàng hiện tại ({cart.length})</h2>
-            <div className="flex-1 overflow-y-auto -mr-4 pr-4 border rounded-lg">
+            <h2 className="text-xl font-semibold mb-4 shrink-0">Đơn hàng hiện tại ({cart.length})</h2>
+            <div className="flex-1 overflow-auto border rounded-lg w-full">
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-12">STT</TableHead>
-                    <TableHead className="w-[35%]">Sản phẩm</TableHead>
-                    <TableHead className="text-right">Đơn giá</TableHead>
-                    <TableHead className="text-center w-48">Số lượng</TableHead>
-                    <TableHead className="text-right">Thành tiền</TableHead>
+                    <TableHead>Sản phẩm</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Đơn giá</TableHead>
+                    <TableHead className="text-center whitespace-nowrap">Số lượng</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Thành tiền</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1523,10 +1549,15 @@ export default function POSPage() {
           </div>
 
           {/* Payment and Summary */}
-          <div className="lg:col-span-1 bg-card border rounded-lg p-6 flex flex-col min-h-0 overflow-hidden">
+          <div className="lg:col-span-1 bg-card border rounded-lg p-6 flex flex-col h-full w-full max-w-full overflow-x-hidden">
             <h2 className="text-xl font-semibold mb-6 shrink-0">Thanh toán</h2>
-            <ScrollArea className="flex-1 pr-4 -mr-4">
-              <div className="space-y-2 text-sm">
+            <div className="flex-1 flex flex-col gap-4 overflow-hidden w-full max-w-full">
+              <div className="space-y-2 text-sm w-full flex-1 overflow-y-auto overflow-x-hidden scrollbar-hide"
+                style={{
+                  scrollbarWidth: 'none',
+                  msOverflowStyle: 'none',
+                }}
+              >
                 <div className="flex justify-between items-center">
                   <Label>Tổng tiền hàng</Label>
                   <p className="font-semibold text-base">{formatCurrency(totalAmount)}</p>
@@ -1770,8 +1801,8 @@ export default function POSPage() {
                   disabled={isSubmitting || isLocked}
                 />
               </div>
-            </ScrollArea>
-            <div className="flex gap-2 mt-4 pt-4 border-t shrink-0">
+            </div>
+            <div className="flex gap-2 pt-4 border-t shrink-0 w-full">
               <Button
                 variant="outline"
                 className="w-full h-14"
@@ -1811,6 +1842,7 @@ export default function POSPage() {
               </Button>
             </div>
           </div>
+          </div>
         </main>
       </div>
 
@@ -1837,6 +1869,7 @@ export default function POSPage() {
           customerName={lastSaleData.customerName}
           customerPhone={lastSaleData.customerPhone}
           settings={settings}
+          storeName={currentStore?.name}
         />
       )}
 

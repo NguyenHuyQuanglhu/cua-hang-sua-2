@@ -56,12 +56,24 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [timeRange, setTimeRange] = useState<'7d' | '30d' | '90d'>('30d');
+  const [lastFetchedStore, setLastFetchedStore] = useState<string | null>(null);
 
   useEffect(() => {
     if (!currentStore?.id) return;
     
-    fetchDashboardData();
-  }, [currentStore, timeRange]);
+    // Only fetch if store changed or timeRange changed
+    if (lastFetchedStore !== currentStore.id) {
+      setLastFetchedStore(currentStore.id);
+      fetchDashboardData();
+    }
+  }, [currentStore?.id]);
+
+  useEffect(() => {
+    // Fetch when timeRange changes (but only if we have a store)
+    if (currentStore?.id && lastFetchedStore === currentStore.id) {
+      fetchDashboardData();
+    }
+  }, [timeRange]);
 
   const fetchDashboardData = async () => {
     setIsLoading(true);
@@ -188,147 +200,186 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-muted-foreground">
-            Tổng quan hoạt động kinh doanh của {currentStore?.name}
-          </p>
+    <div className="space-y-8 pb-8">
+      {/* Header Section with Gradient */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-primary/10 via-primary/5 to-background p-8 border shadow-sm">
+        <div className="absolute inset-0 bg-grid-white/10 [mask-image:linear-gradient(0deg,white,rgba(255,255,255,0.5))]" />
+        <div className="relative flex items-center justify-between">
+          <div className="space-y-2">
+            <h1 className="text-4xl font-bold tracking-tight bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
+              Bảng điều khiển
+            </h1>
+            <p className="text-base text-muted-foreground flex items-center gap-2">
+              <span className="inline-block w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+              Tổng quan hoạt động kinh doanh của {currentStore?.name}
+            </p>
+          </div>
+          <Tabs value={timeRange} onValueChange={(v) => setTimeRange(v as any)}>
+            <TabsList className="bg-background/50 backdrop-blur-sm">
+              <TabsTrigger value="7d" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">7 ngày</TabsTrigger>
+              <TabsTrigger value="30d" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">30 ngày</TabsTrigger>
+              <TabsTrigger value="90d" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">90 ngày</TabsTrigger>
+            </TabsList>
+          </Tabs>
         </div>
-        <Tabs value={timeRange} onValueChange={(v) => setTimeRange(v as any)}>
-          <TabsList>
-            <TabsTrigger value="7d">7 ngày</TabsTrigger>
-            <TabsTrigger value="30d">30 ngày</TabsTrigger>
-            <TabsTrigger value="90d">90 ngày</TabsTrigger>
-          </TabsList>
-        </Tabs>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      {/* Stats Cards with Enhanced Design */}
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
         {/* Revenue Card */}
-        <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => router.push('/reports/income-statement')}>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Doanh thu tháng này</CardTitle>
-            <DollarSign className="h-4 w-4 text-muted-foreground" />
+        <Card className="group relative overflow-hidden cursor-pointer border-0 shadow-lg hover:shadow-2xl transition-all duration-300 hover:-translate-y-1 bg-gradient-to-br from-blue-500/10 via-blue-500/5 to-background" onClick={() => router.push('/reports/income-statement')}>
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <CardHeader className="relative flex flex-row items-center justify-between space-y-0 pb-3">
+            <CardTitle className="text-sm font-semibold text-muted-foreground">Doanh thu tháng này</CardTitle>
+            <div className="p-2 rounded-lg bg-blue-500/10 group-hover:bg-blue-500/20 transition-colors">
+              <DollarSign className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+            </div>
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{formatCurrency(stats?.revenue.thisMonth || 0)}</div>
-            <p className="text-xs text-muted-foreground flex items-center mt-1">
+          <CardContent className="relative">
+            <div className="text-3xl font-bold tracking-tight">{formatCurrency(stats?.revenue.thisMonth || 0)}</div>
+            <div className="flex items-center gap-2 mt-3">
               {stats && stats.revenue.percentChange >= 0 ? (
                 <>
-                  <ArrowUpRight className="h-4 w-4 text-green-500 mr-1" />
-                  <span className="text-green-500">+{stats.revenue.percentChange.toFixed(1)}%</span>
+                  <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-green-500/10">
+                    <ArrowUpRight className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+                    <span className="text-xs font-semibold text-green-600 dark:text-green-400">+{stats.revenue.percentChange.toFixed(1)}%</span>
+                  </div>
                 </>
               ) : (
                 <>
-                  <ArrowDownRight className="h-4 w-4 text-red-500 mr-1" />
-                  <span className="text-red-500">{stats?.revenue.percentChange.toFixed(1)}%</span>
+                  <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-red-500/10">
+                    <ArrowDownRight className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
+                    <span className="text-xs font-semibold text-red-600 dark:text-red-400">{stats?.revenue.percentChange.toFixed(1)}%</span>
+                  </div>
                 </>
               )}
-              <span className="ml-1">so với tháng trước</span>
-            </p>
+              <span className="text-xs text-muted-foreground">so với tháng trước</span>
+            </div>
           </CardContent>
         </Card>
 
         {/* Profit Card */}
-        <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => router.push('/reports/profit')}>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Lợi nhuận tháng này</CardTitle>
-            <TrendingUp className="h-4 w-4 text-muted-foreground" />
+        <Card className="group relative overflow-hidden cursor-pointer border-0 shadow-lg hover:shadow-2xl transition-all duration-300 hover:-translate-y-1 bg-gradient-to-br from-green-500/10 via-green-500/5 to-background" onClick={() => router.push('/reports/profit')}>
+          <div className="absolute inset-0 bg-gradient-to-br from-green-500/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <CardHeader className="relative flex flex-row items-center justify-between space-y-0 pb-3">
+            <CardTitle className="text-sm font-semibold text-muted-foreground">Lợi nhuận tháng này</CardTitle>
+            <div className="p-2 rounded-lg bg-green-500/10 group-hover:bg-green-500/20 transition-colors">
+              <TrendingUp className="h-5 w-5 text-green-600 dark:text-green-400" />
+            </div>
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{formatCurrency(stats?.profit.thisMonth || 0)}</div>
-            <p className="text-xs text-muted-foreground flex items-center mt-1">
+          <CardContent className="relative">
+            <div className="text-3xl font-bold tracking-tight">{formatCurrency(stats?.profit.thisMonth || 0)}</div>
+            <div className="flex items-center gap-2 mt-3">
               {stats && stats.profit.percentChange >= 0 ? (
                 <>
-                  <ArrowUpRight className="h-4 w-4 text-green-500 mr-1" />
-                  <span className="text-green-500">+{stats.profit.percentChange.toFixed(1)}%</span>
+                  <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-green-500/10">
+                    <ArrowUpRight className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+                    <span className="text-xs font-semibold text-green-600 dark:text-green-400">+{stats.profit.percentChange.toFixed(1)}%</span>
+                  </div>
                 </>
               ) : (
                 <>
-                  <ArrowDownRight className="h-4 w-4 text-red-500 mr-1" />
-                  <span className="text-red-500">{stats?.profit.percentChange.toFixed(1)}%</span>
+                  <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-red-500/10">
+                    <ArrowDownRight className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
+                    <span className="text-xs font-semibold text-red-600 dark:text-red-400">{stats?.profit.percentChange.toFixed(1)}%</span>
+                  </div>
                 </>
               )}
-              <span className="ml-1">so với tháng trước</span>
-            </p>
+              <span className="text-xs text-muted-foreground">so với tháng trước</span>
+            </div>
           </CardContent>
         </Card>
 
         {/* Sales Card */}
-        <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => router.push('/sales')}>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Đơn hàng tháng này</CardTitle>
-            <ShoppingCart className="h-4 w-4 text-muted-foreground" />
+        <Card className="group relative overflow-hidden cursor-pointer border-0 shadow-lg hover:shadow-2xl transition-all duration-300 hover:-translate-y-1 bg-gradient-to-br from-purple-500/10 via-purple-500/5 to-background" onClick={() => router.push('/sales')}>
+          <div className="absolute inset-0 bg-gradient-to-br from-purple-500/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <CardHeader className="relative flex flex-row items-center justify-between space-y-0 pb-3">
+            <CardTitle className="text-sm font-semibold text-muted-foreground">Đơn hàng tháng này</CardTitle>
+            <div className="p-2 rounded-lg bg-purple-500/10 group-hover:bg-purple-500/20 transition-colors">
+              <ShoppingCart className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+            </div>
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats?.sales.thisMonth || 0}</div>
-            <p className="text-xs text-muted-foreground flex items-center mt-1">
+          <CardContent className="relative">
+            <div className="text-3xl font-bold tracking-tight">{stats?.sales.thisMonth || 0}</div>
+            <div className="flex items-center gap-2 mt-3">
               {stats && stats.sales.percentChange >= 0 ? (
                 <>
-                  <ArrowUpRight className="h-4 w-4 text-green-500 mr-1" />
-                  <span className="text-green-500">+{stats.sales.percentChange.toFixed(1)}%</span>
+                  <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-green-500/10">
+                    <ArrowUpRight className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+                    <span className="text-xs font-semibold text-green-600 dark:text-green-400">+{stats.sales.percentChange.toFixed(1)}%</span>
+                  </div>
                 </>
               ) : (
                 <>
-                  <ArrowDownRight className="h-4 w-4 text-red-500 mr-1" />
-                  <span className="text-red-500">{stats?.sales.percentChange.toFixed(1)}%</span>
+                  <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-red-500/10">
+                    <ArrowDownRight className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
+                    <span className="text-xs font-semibold text-red-600 dark:text-red-400">{stats?.sales.percentChange.toFixed(1)}%</span>
+                  </div>
                 </>
               )}
-              <span className="ml-1">so với tháng trước</span>
-            </p>
+              <span className="text-xs text-muted-foreground">so với tháng trước</span>
+            </div>
           </CardContent>
         </Card>
 
         {/* Inventory Card */}
-        <Card className="cursor-pointer hover:shadow-lg transition-shadow" onClick={() => router.push('/reports/inventory')}>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Tồn kho</CardTitle>
-            <Package className="h-4 w-4 text-muted-foreground" />
+        <Card className="group relative overflow-hidden cursor-pointer border-0 shadow-lg hover:shadow-2xl transition-all duration-300 hover:-translate-y-1 bg-gradient-to-br from-amber-500/10 via-amber-500/5 to-background" onClick={() => router.push('/reports/inventory')}>
+          <div className="absolute inset-0 bg-gradient-to-br from-amber-500/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <CardHeader className="relative flex flex-row items-center justify-between space-y-0 pb-3">
+            <CardTitle className="text-sm font-semibold text-muted-foreground">Tồn kho</CardTitle>
+            <div className="p-2 rounded-lg bg-amber-500/10 group-hover:bg-amber-500/20 transition-colors">
+              <Package className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+            </div>
           </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{stats?.inventory.totalProducts || 0}</div>
-            <p className="text-xs text-muted-foreground flex items-center mt-1">
+          <CardContent className="relative">
+            <div className="text-3xl font-bold tracking-tight">{stats?.inventory.totalProducts || 0}</div>
+            <div className="flex items-center gap-2 mt-3">
               {stats && stats.inventory.lowStockCount > 0 ? (
                 <>
-                  <AlertTriangle className="h-4 w-4 text-amber-500 mr-1" />
-                  <span className="text-amber-500">{stats.inventory.lowStockCount} sản phẩm sắp hết</span>
+                  <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500/10">
+                    <AlertTriangle className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                    <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">{stats.inventory.lowStockCount} sắp hết</span>
+                  </div>
                 </>
               ) : (
-                <span className="text-green-500">Tồn kho ổn định</span>
+                <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-green-500/10">
+                  <span className="text-xs font-semibold text-green-600 dark:text-green-400">Tồn kho ổn định</span>
+                </div>
               )}
-            </p>
+            </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Charts and Tables */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-        <Card className="col-span-4">
-          <CardHeader>
-            <CardTitle>Doanh thu</CardTitle>
-            <CardDescription>Biểu đồ doanh thu theo thời gian</CardDescription>
+      {/* Charts and Tables with Enhanced Design */}
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-7">
+        <Card className="col-span-4 border-0 shadow-lg overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500" />
+          <CardHeader className="bg-gradient-to-br from-muted/50 to-background">
+            <CardTitle className="text-xl font-bold">Doanh thu</CardTitle>
+            <CardDescription className="text-sm">Biểu đồ doanh thu theo thời gian</CardDescription>
           </CardHeader>
-          <CardContent className="pl-2">
+          <CardContent className="pl-2 pt-6">
             <RevenueChart timeRange={timeRange} />
           </CardContent>
         </Card>
 
-        <Card className="col-span-3">
-          <CardHeader>
-            <CardTitle>Top sản phẩm bán chạy</CardTitle>
-            <CardDescription>Sản phẩm có doanh số cao nhất</CardDescription>
+        <Card className="col-span-3 border-0 shadow-lg overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-amber-500 via-orange-500 to-red-500" />
+          <CardHeader className="bg-gradient-to-br from-muted/50 to-background">
+            <CardTitle className="text-xl font-bold">Top sản phẩm bán chạy</CardTitle>
+            <CardDescription className="text-sm">Sản phẩm có doanh số cao nhất</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pt-6">
             <TopProductsTable timeRange={timeRange} />
           </CardContent>
         </Card>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <LowStockAlert />
+      <div className="grid gap-6 md:grid-cols-2">
+        <div className="transform transition-all duration-300 hover:scale-[1.02]">
+          <LowStockAlert />
+        </div>
       </div>
     </div>
   )

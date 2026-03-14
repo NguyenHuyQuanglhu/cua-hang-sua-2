@@ -176,14 +176,9 @@ export function StartShiftDialog({ userId, userName, userRole, onShiftStarted, u
   }
 
   const handleCloseAttempt = () => {
-    // If user is admin/manager, redirect to dashboard
-    if (canAccessManagement) {
-      const redirectPath = getPostShiftRedirectPath(effectiveUserRole as any)
-      router.push(redirectPath)
-    } else {
-      // If user is salesperson, show warning
-      setShowCloseWarning(true)
-    }
+    // Show warning for all users - they must either start shift or logout
+    // Don't allow closing the dialog without action
+    setShowCloseWarning(true)
   }
 
   return (
@@ -289,7 +284,7 @@ export function StartShiftDialog({ userId, userName, userRole, onShiftStarted, u
         </DialogContent>
       </Dialog>
 
-      {/* Warning Dialog when trying to close - Only for salesperson */}
+      {/* Warning Dialog when trying to close */}
       <AlertDialog open={showCloseWarning} onOpenChange={setShowCloseWarning}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -299,7 +294,10 @@ export function StartShiftDialog({ userId, userName, userRole, onShiftStarted, u
             </AlertDialogTitle>
             <AlertDialogDescription className="space-y-3">
               <p className="text-base font-medium text-foreground">
-                Nhân viên bán hàng phải bắt đầu ca làm việc mới có thể sử dụng hệ thống POS.
+                {canAccessManagement 
+                  ? 'Bạn cần bắt đầu ca làm việc để sử dụng hệ thống POS.'
+                  : 'Nhân viên bán hàng phải bắt đầu ca làm việc mới có thể sử dụng hệ thống POS.'
+                }
               </p>
               <div className="bg-orange-50 dark:bg-orange-950 border border-orange-200 dark:border-orange-800 rounded-md p-4">
                 <p className="text-sm text-orange-900 dark:text-orange-100">
@@ -310,9 +308,11 @@ export function StartShiftDialog({ userId, userName, userRole, onShiftStarted, u
                   <li><strong>Đăng xuất</strong> - Để kết thúc và cho người khác đăng nhập</li>
                 </ul>
               </div>
-              <p className="text-xs text-muted-foreground italic">
-                💡 Lưu ý: Chỉ tài khoản quản lý mới có thể truy cập các trang khác mà không cần mở ca.
-              </p>
+              {canAccessManagement && (
+                <p className="text-xs text-muted-foreground italic">
+                  💡 Lưu ý: Nếu bạn muốn truy cập các trang quản lý khác, vui lòng đăng xuất và đăng nhập lại mà không vào trang POS.
+                </p>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

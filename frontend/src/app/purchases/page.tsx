@@ -528,7 +528,7 @@ export default function PurchasesPage() {
                         </Link>
                     </TableCell>
                     <TableCell>
-                      {new Date(order.importDate).toLocaleDateString()}
+                      {new Date(order.importDate).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}
                     </TableCell>
                     <TableCell className="max-w-[200px]">
                       <span className="text-sm" title={productNames}>

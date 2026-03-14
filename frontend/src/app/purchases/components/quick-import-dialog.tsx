@@ -77,7 +77,7 @@ interface QuickImportDialogProps {
     unitName: string;
     currentStock: number;
   };
-  onSuccess: () => void;
+  onSuccess: (productId: string, productName: string, supplierId: string, supplierName: string, quantity: number, cost: number, unitName: string) => void;
 }
 
 export function QuickImportDialog({
@@ -126,14 +126,25 @@ export function QuickImportDialog({
         const suppliersResponse = await fetch('/api/suppliers', { headers });
         if (suppliersResponse.ok) {
           const suppliersResult = await suppliersResponse.json();
-          setSuppliers(suppliersResult.suppliers || []);
+          console.log('[QuickImport] Suppliers response:', suppliersResult);
+          setSuppliers(suppliersResult.data || []); // API trả về 'data' không phải 'suppliers'
+        } else {
+          console.error('[QuickImport] Failed to fetch suppliers:', suppliersResponse.status);
         }
 
         // Fetch units
         const unitsResponse = await fetch('/api/units', { headers });
         if (unitsResponse.ok) {
           const unitsResult = await unitsResponse.json();
-          setUnits(unitsResult.units || []);
+          console.log('[QuickImport] Units response:', unitsResult);
+          // API trả về array trực tiếp, không có wrapper
+          if (Array.isArray(unitsResult)) {
+            setUnits(unitsResult);
+          } else {
+            setUnits(unitsResult.data || unitsResult.units || []);
+          }
+        } else {
+          console.error('[QuickImport] Failed to fetch units:', unitsResponse.status);
         }
 
         // Fetch product unit configuration
@@ -226,11 +237,25 @@ export function QuickImportDialog({
       if (response.ok) {
         const selectedUnit = units.find(u => u.id === data.unitId);
         const unitName = selectedUnit?.name || product.unitName;
+        const selectedSupplier = suppliers.find(s => s.id === data.supplierId);
+        const supplierName = selectedSupplier?.name || '';
+        
         toast({
           title: "Thành công!",
           description: `Đã nhập ${data.quantity} ${unitName} cho sản phẩm "${product.name}"`,
         });
-        onSuccess();
+        
+        // Call onSuccess with import details for history
+        onSuccess(
+          product.id,
+          product.name,
+          data.supplierId,
+          supplierName,
+          data.quantity,
+          data.cost,
+          unitName
+        );
+        
         onOpenChange(false);
       } else {
         const error = await response.json();
@@ -258,7 +283,7 @@ export function QuickImportDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Nhập Hàng Nhanh</DialogTitle>
           <DialogDescription>
@@ -299,12 +324,18 @@ export function QuickImportDialog({
                         <SelectValue placeholder="Chọn nhà cung cấp" />
                       </SelectTrigger>
                     </FormControl>
-                    <SelectContent>
-                      {suppliers.map((supplier) => (
-                        <SelectItem key={supplier.id} value={supplier.id}>
-                          {supplier.name}
-                        </SelectItem>
-                      ))}
+                    <SelectContent className="max-h-[200px]">
+                      {suppliers.length === 0 ? (
+                        <div className="p-2 text-sm text-muted-foreground text-center">
+                          Không có nhà cung cấp nào
+                        </div>
+                      ) : (
+                        suppliers.map((supplier) => (
+                          <SelectItem key={supplier.id} value={supplier.id}>
+                            {supplier.name}
+                          </SelectItem>
+                        ))
+                      )}
                     </SelectContent>
                   </Select>
                   <FormMessage />
@@ -328,7 +359,7 @@ export function QuickImportDialog({
                         <SelectValue placeholder="Chọn đơn vị nhập hàng" />
                       </SelectTrigger>
                     </FormControl>
-                    <SelectContent>
+                    <SelectContent className="max-h-[200px]">
                       {units.map((unit) => (
                         <SelectItem key={unit.id} value={unit.id}>
                           {unit.name}
