@@ -34,11 +34,25 @@ async function runMigration(migrationFile: string) {
     const migrationSQL = fs.readFileSync(migrationPath, 'utf-8');
     
     console.log(`📄 Running migration: ${migrationFile}`);
-    const result = await pool.request().query(migrationSQL);
     
-    console.log('✅ Migration completed successfully');
-    console.log('Result:', result);
-
+    // Split the SQL file by GO statements
+    // This allows running multiple statements in a single file
+    const batches = migrationSQL.split(/^\s*GO\s*$/im);
+    
+    let successCount = 0;
+    for (const batch of batches) {
+      if (batch.trim().length > 0) {
+        try {
+          await pool.request().query(batch);
+          successCount++;
+        } catch (err: any) {
+          console.error(`❌ Failed on batch:\n${batch.substring(0, 100)}...`);
+          throw err;
+        }
+      }
+    }
+    
+    console.log(`✅ Migration completed successfully (${successCount} batches executed)`);
   } catch (error) {
     console.error('❌ Migration failed:', error);
     throw error;

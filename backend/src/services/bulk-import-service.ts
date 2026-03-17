@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { executeQuery, executeProcedure } from '../db';
+import { query, insert } from '../db';
 
 export interface ProductImportRow {
   barcode?: string;
@@ -60,11 +60,11 @@ export async function importProducts(
   };
 
   // Get categories and units for lookup
-  const categoriesResult = await executeQuery(
+  const categoriesResult = await query(
     `SELECT CategoryID, CategoryName FROM Categories WHERE TenantID = @tenantId`,
     { tenantId }
   );
-  const unitsResult = await executeQuery(
+  const unitsResult = await query(
     `SELECT UnitID, UnitName FROM Units WHERE TenantID = @tenantId`,
     { tenantId }
   );
@@ -72,10 +72,10 @@ export async function importProducts(
   const categoryMap = new Map<string, number>();
   const unitMap = new Map<string, number>();
 
-  (categoriesResult.recordset || []).forEach((c: { CategoryID: number; CategoryName: string }) => {
+  (categoriesResult || []).forEach((c: any) => {
     categoryMap.set(c.CategoryName.toLowerCase(), c.CategoryID);
   });
-  (unitsResult.recordset || []).forEach((u: { UnitID: number; UnitName: string }) => {
+  (unitsResult || []).forEach((u: any) => {
     unitMap.set(u.UnitName.toLowerCase(), u.UnitID);
   });
 
@@ -112,14 +112,14 @@ export async function importProducts(
 
       // Check if product with barcode already exists
       if (product.barcode) {
-        const existingResult = await executeQuery(
+        const existingResult = await query(
           `SELECT ProductID FROM Products WHERE Barcode = @barcode AND TenantID = @tenantId`,
           { barcode: product.barcode, tenantId }
         );
 
-        if (existingResult.recordset && existingResult.recordset.length > 0) {
+        if (existingResult && existingResult.length > 0) {
           // Update existing product
-          await executeQuery(
+          await query(
             `UPDATE Products SET
               ProductName = @name,
               CategoryID = @categoryId,
@@ -148,7 +148,7 @@ export async function importProducts(
       }
 
       // Insert new product
-      await executeQuery(
+      await query(
         `INSERT INTO Products (
           TenantID, StoreID, Barcode, ProductName, CategoryID, UnitID,
           CostPrice, SellingPrice, MinStockLevel, Description, IsActive, CreatedAt
@@ -187,7 +187,7 @@ export async function importProducts(
 export async function exportProducts(options: ExportOptions): Promise<Buffer> {
   const { storeId, tenantId, includeInventory = true } = options;
 
-  let query = `
+  let sqlQuery = `
     SELECT
       p.Barcode,
       p.ProductName AS [Tên sản phẩm],
@@ -200,30 +200,30 @@ export async function exportProducts(options: ExportOptions): Promise<Buffer> {
   `;
 
   if (includeInventory) {
-    query += `,
+    sqlQuery += `,
       ISNULL(pi.Quantity, 0) AS [Tồn kho]
     `;
   }
 
-  query += `
+  sqlQuery += `
     FROM Products p
     LEFT JOIN Categories c ON p.CategoryID = c.CategoryID
     LEFT JOIN Units u ON p.UnitID = u.UnitID
   `;
 
   if (includeInventory) {
-    query += `
+    sqlQuery += `
     LEFT JOIN ProductInventory pi ON p.ProductID = pi.ProductID AND pi.StoreID = @storeId
     `;
   }
 
-  query += `
+  sqlQuery += `
     WHERE p.TenantID = @tenantId AND p.IsActive = 1
     ORDER BY p.ProductName
   `;
 
-  const result = await executeQuery(query, { storeId, tenantId });
-  const products = result.recordset || [];
+  const result = await query(sqlQuery, { storeId, tenantId });
+  const products = result || [];
 
   // Create workbook
   const workbook = XLSX.utils.book_new();
@@ -371,14 +371,14 @@ export async function importCustomers(
 
       // Check if customer with same phone already exists
       if (customer.phone) {
-        const existing = await executeQuery(
+        const existing = await query(
           `SELECT id FROM Customers WHERE phone = @phone AND store_id = @storeId`,
           { phone: customer.phone, storeId }
         );
 
         if (existing.length > 0) {
           // Update existing customer
-          await executeQuery(
+          await query(
             `UPDATE Customers 
              SET full_name = @name,
                  email = @email,
@@ -401,7 +401,7 @@ export async function importCustomers(
           );
         } else {
           // Insert new customer
-          await executeQuery(
+          await query(
             `INSERT INTO Customers (
               id, store_id, full_name, phone, email, address, gender, birthday, notes,
               status, customer_type, total_debt, total_paid, created_at, updated_at
@@ -423,7 +423,7 @@ export async function importCustomers(
         }
       } else {
         // No phone number, just insert
-        await executeQuery(
+        await query(
           `INSERT INTO Customers (
             id, store_id, full_name, phone, email, address, gender, birthday, notes,
             status, customer_type, total_debt, total_paid, created_at, updated_at
@@ -501,7 +501,7 @@ export function generateCustomerImportTemplate(): Buffer {
 
 // Export customers to Excel
 export async function exportCustomers(storeId: string): Promise<Buffer> {
-  const result = await executeQuery(
+  const result = await query(
     `SELECT 
       full_name as 'Tên',
       phone as 'Số điện thoại',

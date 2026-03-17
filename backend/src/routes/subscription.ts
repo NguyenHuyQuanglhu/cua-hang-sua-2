@@ -55,7 +55,7 @@ router.get('/current', async (req: AuthRequest, res: Response) => {
     let isExpired = false;
     if (endDate) {
       const now = new Date();
-      const end = new Date(endDate);
+      const end = new Date(endDate as string);
       const diffTime = end.getTime() - now.getTime();
       daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
       isExpired = daysRemaining < 0;
@@ -65,8 +65,8 @@ router.get('/current', async (req: AuthRequest, res: Response) => {
       maxStores,
       currentStores,
       planId,
-      startDate: startDate ? new Date(startDate).toISOString() : null,
-      endDate: endDate ? new Date(endDate).toISOString() : null,
+      startDate: startDate ? new Date(startDate as string).toISOString() : null,
+      endDate: endDate ? new Date(endDate as string).toISOString() : null,
       daysRemaining,
       isExpired,
       autoRenewal,

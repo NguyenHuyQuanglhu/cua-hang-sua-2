@@ -116,7 +116,6 @@ router.post(
       );
 
       res.json({
-        success: result.success,
         message: `Imported ${result.imported} of ${result.totalRows} products`,
         ...result,
       });
@@ -214,7 +213,6 @@ router.post(
       const result = await bulkImportService.importCustomers(customers, storeId);
 
       res.json({
-        success: result.success,
         message: `Imported ${result.imported} of ${result.totalRows} customers`,
         ...result,
       });

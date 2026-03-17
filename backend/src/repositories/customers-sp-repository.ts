@@ -7,6 +7,7 @@
  */
 
 import { SPBaseRepository, SPParams } from './sp-base-repository';
+import { query } from '../db/query';
 
 /**
  * Database record interface for Customers from stored procedures (camelCase - as returned by SP)
@@ -257,39 +258,42 @@ export class CustomersSPRepository extends SPBaseRepository<Customer> {
     storeId: string,
     data: UpdateCustomerSPInput
   ): Promise<Customer | null> {
+    // Only pass parameters that are actually provided to avoid SP parameter mismatch
     const params: SPParams = {
       id,
       storeId,
-      name: data.name,
-      phone: data.phone,
-      email: data.email,
-      address: data.address,
-      customerType: data.customerType,
-      customerGroup: data.customerGroup,
-      gender: data.gender,
-      birthday: data.birthday,
-      zalo: data.zalo,
-      bankName: data.bankName,
-      bankAccountNumber: data.bankAccountNumber,
-      bankBranch: data.bankBranch,
-      creditLimit: data.creditLimit,
-      status: data.status,
-      lifetimePoints: data.lifetimePoints,
-      loyaltyPoints: data.loyaltyPoints,
-      loyaltyTier: data.loyaltyTier,
-      notes: data.notes,
     };
 
-    const result = await this.executeSPSingle<AffectedRowsResult>(
+    // Add only non-undefined parameters
+    if (data.name !== undefined) params.name = data.name;
+    if (data.phone !== undefined) params.phone = data.phone;
+    if (data.email !== undefined) params.email = data.email;
+    if (data.address !== undefined) params.address = data.address;
+    if (data.customerType !== undefined) params.customerType = data.customerType;
+    if (data.customerGroup !== undefined) params.customerGroup = data.customerGroup;
+    if (data.gender !== undefined) params.gender = data.gender;
+    if (data.birthday !== undefined) params.birthday = data.birthday;
+    if (data.zalo !== undefined) params.zalo = data.zalo;
+    if (data.bankName !== undefined) params.bankName = data.bankName;
+    if (data.bankAccountNumber !== undefined) params.bankAccountNumber = data.bankAccountNumber;
+    if (data.bankBranch !== undefined) params.bankBranch = data.bankBranch;
+    if (data.creditLimit !== undefined) params.creditLimit = data.creditLimit;
+    if (data.status !== undefined) params.status = data.status;
+    if (data.lifetimePoints !== undefined) params.lifetimePoints = data.lifetimePoints;
+    if (data.loyaltyPoints !== undefined) params.loyaltyPoints = data.loyaltyPoints;
+    if (data.loyaltyTier !== undefined) params.loyaltyTier = data.loyaltyTier;
+    if (data.notes !== undefined) params.notes = data.notes;
+
+    const result = await this.executeSPSingle<CustomerSPRecord>(
       'sp_Customers_Update',
       params
     );
 
-    if (!result || result.AffectedRows === 0) {
+    if (!result) {
       return null;
     }
 
-    return this.getById(id, storeId);
+    return this.mapToEntity(result);
   }
 
   /**
@@ -298,12 +302,13 @@ export class CustomersSPRepository extends SPBaseRepository<Customer> {
    * 
    * @param id - Customer ID
    * @param storeId - Store ID
+   * @param forceDelete - Admin can force delete customers with transactions
    * @returns True if deleted, false if not found
    */
-  async delete(id: string, storeId: string): Promise<boolean> {
+  async delete(id: string, storeId: string, forceDelete: boolean = false): Promise<boolean> {
     const result = await this.executeSPSingle<AffectedRowsResult>(
       'sp_Customers_Delete',
-      { id, storeId }
+      { id, storeId, forceDelete }
     );
 
     return (result?.AffectedRows ?? 0) > 0;

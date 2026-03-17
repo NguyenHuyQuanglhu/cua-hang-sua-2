@@ -148,4 +148,67 @@ router.put('/settings', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// POST /api/loyalty-points/recalculate-tiers - Recalculate loyalty tiers for all customers
+router.post('/recalculate-tiers', async (req: AuthRequest, res: Response) => {
+  try {
+    const storeId = req.storeId!;
+
+    const result = await loyaltyPointsService.recalculateAllTiers(storeId);
+    res.json({ 
+      success: true, 
+      message: `Updated ${result.updated} customers`,
+      updated: result.updated 
+    });
+  } catch (error) {
+    console.error('Recalculate tiers error:', error);
+    res.status(500).json({ 
+      error: error instanceof Error ? error.message : 'Failed to recalculate tiers' 
+    });
+  }
+});
+
+// GET /api/loyalty-points/tier-info/:tier - Get tier information
+router.get('/tier-info/:tier', async (req: AuthRequest, res: Response) => {
+  try {
+    const { tier } = req.params;
+    const tierInfo = loyaltyPointsService.getTierInfo(tier);
+    res.json(tierInfo);
+  } catch (error) {
+    console.error('Get tier info error:', error);
+    res.status(500).json({ error: 'Failed to get tier info' });
+  }
+});
+
+// POST /api/loyalty-points/deploy-sp - Deploy customer update stored procedure (admin only)
+router.post('/deploy-sp', async (req: AuthRequest, res: Response) => {
+  try {
+    const { getConnection } = require('../db/connection');
+    const fs = require('fs');
+    const path = require('path');
+    
+    console.log('🚀 Deploying sp_Customers_Update stored procedure...');
+
+    const pool = await getConnection();
+    
+    // Read the stored procedure file
+    const spPath = path.join(__dirname, '../../scripts/stored-procedures/sp_Customers_Update.sql');
+    const spContent = fs.readFileSync(spPath, 'utf8');
+    
+    // Execute the stored procedure
+    await pool.request().query(spContent);
+    
+    console.log('✅ Successfully deployed sp_Customers_Update');
+    
+    res.json({ 
+      success: true, 
+      message: 'Successfully deployed sp_Customers_Update stored procedure' 
+    });
+  } catch (error) {
+    console.error('Deploy SP error:', error);
+    res.status(500).json({ 
+      error: error instanceof Error ? error.message : 'Failed to deploy stored procedure' 
+    });
+  }
+});
+
 export default router;

@@ -1,5 +1,16 @@
 import { loyaltyPointsRepository } from '../repositories/loyalty-points-repository';
 import { customersSPRepository } from '../repositories/customers-sp-repository';
+import { notificationGeneratorService } from './notification-generator.service';
+
+/**
+ * Calculate loyalty tier based on lifetime points
+ */
+function calculateLoyaltyTier(lifetimePoints: number): string {
+  if (lifetimePoints >= 10000) return 'diamond';
+  if (lifetimePoints >= 5000) return 'gold';
+  if (lifetimePoints >= 1000) return 'silver';
+  return 'bronze';
+}
 
 /**
  * Service for managing loyalty points operations
@@ -44,7 +55,7 @@ export class LoyaltyPointsService {
     purchaseAmount: number,
     saleId: string,
     userId?: string
-  ): Promise<{ points: number; newBalance: number }> {
+  ): Promise<{ points: number; newBalance: number; newTier?: string; tierUpgraded?: boolean }> {
     const settings = await loyaltyPointsRepository.getSettings(storeId);
     if (!settings || !settings.enabled) {
       return { points: 0, newBalance: 0 };
@@ -58,6 +69,11 @@ export class LoyaltyPointsService {
     const currentBalance = await loyaltyPointsRepository.getBalance(customerId, storeId);
     const newBalance = currentBalance + points;
 
+    // Get current customer info to check tier change
+    const customers = await customersSPRepository.getByStore(storeId);
+    const customer = customers.find(c => c.id === customerId);
+    const oldTier = customer?.loyaltyTier || 'bronze';
+
     await loyaltyPointsRepository.addTransaction({
       storeId,
       customerId,
@@ -70,12 +86,29 @@ export class LoyaltyPointsService {
       createdBy: userId,
     });
 
-    // Update customer's lifetime_points using SP Repository
+    // Calculate new loyalty tier
+    const newTier = calculateLoyaltyTier(newBalance);
+    const tierUpgraded = oldTier !== newTier;
+
+    // Update customer's lifetime_points and loyalty tier using SP Repository
     await customersSPRepository.update(customerId, storeId, {
       lifetimePoints: newBalance,
+      loyaltyTier: newTier,
     });
 
-    return { points, newBalance };
+    // Create notification if tier upgraded
+    if (tierUpgraded && customer) {
+      await notificationGeneratorService.createTierUpgradeNotification(
+        customerId,
+        customer.name || 'Khách hàng',
+        storeId,
+        oldTier,
+        newTier,
+        newBalance
+      );
+    }
+
+    return { points, newBalance, newTier, tierUpgraded };
   }
 
   /**
@@ -88,7 +121,7 @@ export class LoyaltyPointsService {
     orderAmount: number,
     saleId: string,
     userId?: string
-  ): Promise<{ discount: number; newBalance: number }> {
+  ): Promise<{ discount: number; newBalance: number; newTier?: string }> {
     const settings = await loyaltyPointsRepository.getSettings(storeId);
     if (!settings || !settings.enabled) {
       throw new Error('Loyalty points system is not enabled');
@@ -132,12 +165,16 @@ export class LoyaltyPointsService {
       createdBy: userId,
     });
 
-    // Update customer's lifetime_points using SP Repository
+    // Calculate new loyalty tier (points might have decreased)
+    const newTier = calculateLoyaltyTier(newBalance);
+
+    // Update customer's lifetime_points and loyalty tier using SP Repository
     await customersSPRepository.update(customerId, storeId, {
       lifetimePoints: newBalance,
+      loyaltyTier: newTier,
     });
 
-    return { discount, newBalance };
+    return { discount, newBalance, newTier };
   }
 
   /**
@@ -149,7 +186,7 @@ export class LoyaltyPointsService {
     pointsAdjustment: number,
     reason: string,
     userId: string
-  ): Promise<{ newBalance: number }> {
+  ): Promise<{ newBalance: number; newTier?: string }> {
     const currentBalance = await loyaltyPointsRepository.getBalance(customerId, storeId);
     const newBalance = currentBalance + pointsAdjustment;
 
@@ -168,12 +205,16 @@ export class LoyaltyPointsService {
       createdBy: userId,
     });
 
-    // Update customer's lifetime_points using SP Repository
+    // Calculate new loyalty tier
+    const newTier = calculateLoyaltyTier(newBalance);
+
+    // Update customer's lifetime_points and loyalty tier using SP Repository
     await customersSPRepository.update(customerId, storeId, {
       lifetimePoints: newBalance,
+      loyaltyTier: newTier,
     });
 
-    return { newBalance };
+    return { newBalance, newTier };
   }
 
   /**
@@ -252,6 +293,50 @@ export class LoyaltyPointsService {
     }
 
     return { valid: true, discount };
+  }
+
+  /**
+   * Recalculate loyalty tiers for all customers in a store
+   */
+  async recalculateAllTiers(storeId: string): Promise<{ updated: number }> {
+    try {
+      // Get all customers with their current lifetime points
+      const customers = await customersSPRepository.getByStore(storeId);
+      let updatedCount = 0;
+
+      for (const customer of customers) {
+        const lifetimePoints = customer.lifetimePoints || 0;
+        const currentTier = customer.loyaltyTier;
+        const newTier = calculateLoyaltyTier(lifetimePoints);
+
+        // Only update if tier has changed
+        if (currentTier !== newTier) {
+          await customersSPRepository.update(customer.id, storeId, {
+            loyaltyTier: newTier,
+          });
+          updatedCount++;
+        }
+      }
+
+      return { updated: updatedCount };
+    } catch (error) {
+      console.error('Error recalculating loyalty tiers:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get loyalty tier information
+   */
+  getTierInfo(tier: string): { name: string; vietnameseName: string; minPoints: number } {
+    const tiers = {
+      bronze: { name: 'bronze', vietnameseName: 'Đồng', minPoints: 0 },
+      silver: { name: 'silver', vietnameseName: 'Bạc', minPoints: 1000 },
+      gold: { name: 'gold', vietnameseName: 'Vàng', minPoints: 5000 },
+      diamond: { name: 'diamond', vietnameseName: 'Kim Cương', minPoints: 10000 },
+    };
+
+    return tiers[tier as keyof typeof tiers] || tiers.bronze;
   }
 }
 

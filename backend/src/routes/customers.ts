@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { authenticate, storeContext, AuthRequest } from '../middleware/auth';
+import { validateUUID, debugRequest } from '../middleware/validate-uuid';
 import { customersSPRepository } from '../repositories/customers-sp-repository';
 
 const router = Router();
@@ -108,7 +109,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 });
 
 // GET /api/customers/:id
-router.get('/:id', async (req: AuthRequest, res: Response) => {
+router.get('/:id', validateUUID(), debugRequest, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const storeId = req.storeId!;
@@ -162,7 +163,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
 
 // POST /api/customers
 // Requirements: 3.1 - Uses sp_Customers_Create
-router.post('/', async (req: AuthRequest, res: Response) => {
+router.post('/', debugRequest, async (req: AuthRequest, res: Response) => {
   try {
     const storeId = req.storeId!;
     const {
@@ -186,7 +187,13 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       notes,
     } = req.body;
 
+    // Validate required fields
+    if (!name || name.trim() === '') {
+      return res.status(400).json({ error: 'Customer name is required' });
+    }
+
     const customerId = uuidv4();
+    console.log(`🔄 Creating customer with ID: ${customerId}`);
 
     // Use SP Repository instead of inline query
     const customer = await customersSPRepository.create({
@@ -213,15 +220,25 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     });
 
     res.status(201).json({ id: customer.id, success: true });
-  } catch (error) {
-    console.error('Create customer error:', error);
-    res.status(500).json({ error: 'Failed to create customer' });
+  } catch (error: any) {
+    console.error('❌ Create customer error:', error);
+    
+    // Handle specific database errors
+    if (error.message?.includes('UNIQUE KEY constraint')) {
+      return res.status(409).json({ error: 'Customer with this information already exists' });
+    }
+    
+    if (error.message?.includes('Conversion failed')) {
+      return res.status(400).json({ error: 'Invalid data format provided' });
+    }
+    
+    res.status(500).json({ error: 'Failed to create customer', details: error.message });
   }
 });
 
 // PUT /api/customers/:id
 // Requirements: 3.2 - Uses sp_Customers_Update
-router.put('/:id', async (req: AuthRequest, res: Response) => {
+router.put('/:id', validateUUID(), debugRequest, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const storeId = req.storeId!;
@@ -246,6 +263,9 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
       notes,
     } = req.body;
 
+    console.log(`🔄 Updating customer ${id} for store ${storeId}`);
+    console.log('📊 Update data:', JSON.stringify(req.body, null, 2));
+
     // Use SP Repository instead of inline query
     const customer = await customersSPRepository.update(id, storeId, {
       name,
@@ -269,42 +289,80 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     });
 
     if (!customer) {
+      console.log('❌ Customer not found');
       res.status(404).json({ error: 'Customer not found' });
       return;
     }
 
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Update customer error:', error);
-    res.status(500).json({ error: 'Failed to update customer' });
+    console.log('✅ Customer updated successfully');
+    res.json(customer);
+  } catch (error: any) {
+    console.error('❌ Update customer error:', error);
+    console.error('📊 Request body:', JSON.stringify(req.body, null, 2));
+    console.error('📊 Customer ID:', req.params.id);
+    console.error('📊 Store ID:', req.storeId);
+    
+    // Handle specific database errors
+    if (error.message?.includes('Conversion failed')) {
+      return res.status(400).json({ error: 'Invalid data format provided', details: error.message });
+    }
+    
+    res.status(500).json({ error: 'Failed to update customer', details: error.message });
   }
 });
 
 // DELETE /api/customers/:id
 // Requirements: 3.3 - Uses sp_Customers_Delete
-router.delete('/:id', async (req: AuthRequest, res: Response) => {
+router.delete('/:id', validateUUID(), debugRequest, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const storeId = req.storeId!;
+    const user = req.user!;
+    
+    // Check if force delete is requested (admin only)
+    const forceDelete = req.query.force === 'true' || req.body.force === true;
+    
+    // Only admin/owner can force delete
+    const canForceDelete = ['admin', 'owner'].includes(user.role) && forceDelete;
+    
+    console.log(`🔄 Deleting customer ${id} (force: ${canForceDelete})`);
 
     // Use SP Repository instead of inline query
-    const deleted = await customersSPRepository.delete(id, storeId);
+    const deleted = await customersSPRepository.delete(id, storeId, canForceDelete);
 
     if (!deleted) {
       res.status(404).json({ error: 'Customer not found' });
       return;
     }
 
+    console.log('✅ Customer deleted successfully');
     res.json({ success: true });
-  } catch (error) {
-    console.error('Delete customer error:', error);
-    res.status(500).json({ error: 'Failed to delete customer' });
+  } catch (error: any) {
+    console.error('❌ Delete customer error:', error);
+    
+    // Handle specific database errors
+    if (error.message?.includes('Cannot delete customer with existing transactions')) {
+      return res.status(409).json({ 
+        error: 'Cannot delete customer with existing transactions',
+        details: 'This customer has sales or payment records. Only admins can force delete.',
+        canForceDelete: ['admin', 'owner'].includes(req.user?.role || '')
+      });
+    }
+    
+    if (error.message?.includes('FOREIGN KEY constraint')) {
+      return res.status(409).json({ 
+        error: 'Cannot delete customer with existing transactions',
+        details: 'Please remove all sales and payments for this customer first'
+      });
+    }
+    
+    res.status(500).json({ error: 'Failed to delete customer', details: error.message });
   }
 });
 
 // PUT /api/customers/:id/debt
 // Requirements: 3.5 - Uses sp_Customers_UpdateDebt
-router.put('/:id/debt', async (req: AuthRequest, res: Response) => {
+router.put('/:id/debt', validateUUID(), debugRequest, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const storeId = req.storeId!;
@@ -327,7 +385,7 @@ router.put('/:id/debt', async (req: AuthRequest, res: Response) => {
 
 // GET /api/customers/:id/history
 // Requirements: 3.6 - Uses sp_Customers_GetDebtHistory
-router.get('/:id/history', async (req: AuthRequest, res: Response) => {
+router.get('/:id/history', validateUUID(), debugRequest, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const storeId = req.storeId!;

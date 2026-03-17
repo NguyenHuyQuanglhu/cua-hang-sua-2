@@ -224,6 +224,61 @@ class NotificationGeneratorService {
       console.error('[NotificationGenerator] Error checking shift ending:', error);
     }
   }
+
+  /**
+   * Create notification when customer tier is upgraded
+   */
+  async createTierUpgradeNotification(
+    customerId: string,
+    customerName: string,
+    storeId: string,
+    oldTier: string,
+    newTier: string,
+    lifetimePoints: number
+  ) {
+    try {
+      const pool = await getConnection();
+
+      const tierNames = {
+        bronze: 'Đồng',
+        silver: 'Bạc', 
+        gold: 'Vàng',
+        diamond: 'Kim Cương'
+      };
+
+      const oldTierName = tierNames[oldTier as keyof typeof tierNames] || oldTier;
+      const newTierName = tierNames[newTier as keyof typeof tierNames] || newTier;
+
+      // Create notification
+      await pool
+        .request()
+        .input('id', sql.UniqueIdentifier, uuidv4())
+        .input('storeId', sql.UniqueIdentifier, storeId)
+        .input('type', sql.NVarChar(50), 'tier_upgrade')
+        .input('title', sql.NVarChar(255), 'Chúc mừng! Khách hàng lên hạng')
+        .input('message', sql.NVarChar(sql.MAX), `Khách hàng "${customerName}" đã lên hạng từ ${oldTierName} lên ${newTierName} với ${lifetimePoints.toLocaleString('vi-VN')} điểm tích lũy`)
+        .input('data', sql.NVarChar(sql.MAX), JSON.stringify({
+          customerId,
+          customerName,
+          oldTier,
+          newTier,
+          lifetimePoints,
+        }))
+        .input('priority', sql.NVarChar(20), 'normal')
+        .input('actionUrl', sql.NVarChar(500), `/customers`)
+        .query(`
+          INSERT INTO Notifications (
+            id, store_id, user_id, type, title, message, data, priority, action_url
+          ) VALUES (
+            @id, @storeId, NULL, @type, @title, @message, @data, @priority, @actionUrl
+          )
+        `);
+
+      console.log(`[NotificationGenerator] Created tier upgrade notification for ${customerName}: ${oldTier} -> ${newTier}`);
+    } catch (error) {
+      console.error('[NotificationGenerator] Error creating tier upgrade notification:', error);
+    }
+  }
 }
 
 export const notificationGeneratorService = new NotificationGeneratorService();

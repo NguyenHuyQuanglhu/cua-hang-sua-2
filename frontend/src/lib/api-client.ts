@@ -1,5 +1,5 @@
-// Hardcode API URL for now - env var not loading properly
-const API_URL = 'http://localhost:3001/api';
+// Use Next.js API proxy to avoid CORS and network access issues
+const API_URL = '/api/proxy';
 
 // Debug: log API URL
 if (typeof window !== 'undefined') {

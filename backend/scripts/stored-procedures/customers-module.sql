@@ -120,7 +120,15 @@ CREATE PROCEDURE sp_Customers_Update
     @status NVARCHAR(20) = NULL,
     @lifetimePoints INT = NULL,
     @loyaltyTier NVARCHAR(50) = NULL,
-    @notes NVARCHAR(MAX) = NULL
+    @notes NVARCHAR(MAX) = NULL,
+    @gender NVARCHAR(10) = NULL,
+    @birthday DATE = NULL,
+    @zalo NVARCHAR(50) = NULL,
+    @bankName NVARCHAR(255) = NULL,
+    @bankAccountNumber NVARCHAR(50) = NULL,
+    @bankBranch NVARCHAR(255) = NULL,
+    @creditLimit DECIMAL(18,2) = NULL,
+    @loyaltyPoints INT = NULL
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -144,6 +152,14 @@ BEGIN
         lifetime_points = COALESCE(@lifetimePoints, lifetime_points),
         loyalty_tier = COALESCE(@loyaltyTier, loyalty_tier),
         notes = COALESCE(@notes, notes),
+        gender = COALESCE(@gender, gender),
+        birthday = COALESCE(@birthday, birthday),
+        zalo = COALESCE(@zalo, zalo),
+        bank_name = COALESCE(@bankName, bank_name),
+        bank_account_number = COALESCE(@bankAccountNumber, bank_account_number),
+        bank_branch = COALESCE(@bankBranch, bank_branch),
+        credit_limit = COALESCE(@creditLimit, credit_limit),
+        loyalty_points = COALESCE(@loyaltyPoints, loyalty_points),
         updated_at = GETDATE()
     WHERE id = @id AND store_id = @storeId;
     
@@ -161,6 +177,14 @@ BEGIN
         lifetime_points AS lifetimePoints,
         loyalty_tier AS loyaltyTier,
         notes,
+        gender,
+        birthday,
+        zalo,
+        bank_name AS bankName,
+        bank_account_number AS bankAccountNumber,
+        bank_branch AS bankBranch,
+        credit_limit AS creditLimit,
+        loyalty_points AS loyaltyPoints,
         ISNULL(total_debt, 0) AS totalDebt,
         ISNULL(total_paid, 0) AS totalPaid,
         created_at AS createdAt,

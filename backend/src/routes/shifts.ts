@@ -90,10 +90,10 @@ router.get('/active', async (req: AuthRequest, res: Response) => {
     const cashPayments = paymentsResult?.total || 0;
     
     // Calculate hours worked
-    const startTime = new Date(shift.start_time).getTime();
+    const startTime = new Date(shift.start_time as string).getTime();
     const now = Date.now();
     const hoursWorked = (now - startTime) / (1000 * 60 * 60);
-    const maxShiftHours = shift.max_shift_hours || 8.0;
+    const maxShiftHours = (shift.max_shift_hours as number) || 8.0;
     const isOvertime = hoursWorked >= maxShiftHours;
 
     res.json({
@@ -108,7 +108,7 @@ router.get('/active', async (req: AuthRequest, res: Response) => {
       endingCash: shift.ending_cash,
       cashSales: cashSales, // Real-time calculation
       cashPayments: cashPayments, // Real-time calculation
-      totalCashInDrawer: shift.starting_cash + cashSales + cashPayments,
+      totalCashInDrawer: (shift.starting_cash as number) + cashSales + cashPayments,
       cashDifference: shift.cash_difference,
       totalRevenue: totalRevenue, // Real-time calculation
       salesCount: salesCount, // Real-time calculation

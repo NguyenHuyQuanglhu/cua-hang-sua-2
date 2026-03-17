@@ -61,19 +61,13 @@ console.log('Database config:', {
 
 // Middleware
 // More permissive CORS for development
-const corsOptions = process.env.NODE_ENV === 'development' 
-  ? {
-      origin: true, // Allow all origins in development
-      credentials: true,
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-Store-Id'],
-    }
-  : {
-      origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
-      credentials: true,
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-Store-Id'],
-    };
+const corsOptions = {
+  origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Store-Id'],
+  optionsSuccessStatus: 200 // some legacy browsers (IE11, various SmartTVs) choke on 204
+};
 
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
