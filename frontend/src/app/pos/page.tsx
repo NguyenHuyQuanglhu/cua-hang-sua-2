@@ -1102,6 +1102,11 @@ export default function POSPage() {
   // Auto-focus barcode input
   useEffect(() => {
     barcodeInputRef.current?.focus();
+    // Fallback focus with timeout for when the component first mounts
+    const timer = setTimeout(() => {
+      barcodeInputRef.current?.focus();
+    }, 300);
+    return () => clearTimeout(timer);
   }, [cart]);
 
   // Redirect if not logged in
@@ -1206,6 +1211,7 @@ export default function POSPage() {
               onChange={(e) => setBarcode(e.target.value)}
               onKeyDown={handleBarcodeScan}
               disabled={isSubmitting || isLocked}
+              autoFocus
             />
           </div>
           <Button

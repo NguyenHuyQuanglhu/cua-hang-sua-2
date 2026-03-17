@@ -132,38 +132,38 @@ export function BulkImportDialog({
         headers['Authorization'] = `Bearer ${token}`;
       }
 
-      // Nhập tuần tự từng sản phẩm được chọn
-      for (const product of products) {
-        const payload = {
-          supplierId: selectedSupplierId,
-          productId: product.id,
-          quantity: defaultQuantity,
-          cost: product.costPrice || 0,
-          unitId: product.unitId,
-          importDate: new Date().toISOString().split('T')[0],
-          // Calculate base quantity (Assuming they are already base units for quick import simplification)
-          baseQuantity: defaultQuantity,
-          baseCost: product.costPrice || 0,
-          baseUnitId: product.unitId,
-          paidAmount: 0,
-          paymentMethod: "cash",
-        };
+      // Tạo mảng items gộp tất cả sản phẩm
+      const items = products.map(product => ({
+        productId: product.id,
+        quantity: defaultQuantity,
+        cost: product.costPrice || 0,
+        unitId: product.unitId,
+        baseQuantity: defaultQuantity,
+        baseCost: product.costPrice || 0,
+        baseUnitId: product.unitId,
+      }));
 
-        const response = await fetch('/api/purchases/quick', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(payload),
-        });
+      const payload = {
+        supplierId: selectedSupplierId,
+        importDate: new Date().toISOString().split('T')[0],
+        notes: "Nhập hàng hàng loạt (Bulk Import)",
+        items: items
+      };
 
-        if (response.ok) {
-          successCount++;
-        }
+      const response = await fetch('/api/purchases', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      });
+
+      if (response.ok) {
+        successCount = products.length;
       }
 
       if (successCount > 0) {
         toast({
           title: "Thành công!",
-          description: `Đã nhập hàng tự động cho ${successCount}/${products.length} sản phẩm`,
+          description: `Đã nhập hàng thành công chung 1 mã phiếu nhập cho ${successCount} sản phẩm`,
         });
         onSuccess(successCount);
         onOpenChange(false);
@@ -239,7 +239,7 @@ export function BulkImportDialog({
               <span className="font-bold text-primary">{formatCurrency(totalCost)}</span>
             </div>
             <p className="text-xs text-muted-foreground italic mt-2">
-              *Hệ thống sẽ dùng giá nhập gần nhất của từng sản phẩm. Chi tiết hóa đơn sẽ được tạo riêng lẻ.
+              *Hệ thống sẽ tạo ra DUY NHẤT 1 phiếu nhập hàng gom nhóm cho tất cả sản phẩm được chọn trên đây.
             </p>
           </div>
         </div>

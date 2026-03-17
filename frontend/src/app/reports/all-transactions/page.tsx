@@ -113,11 +113,11 @@ export default function AllTransactionsPage() {
         id: `sale-${sale.id}`,
         date: new Date(sale.transactionDate),
         type: 'sale',
-        partnerName: sale.customerName || 'Khách lẻ',
+        partnerName: (sale as any).customerName || 'Khách lẻ',
         partnerId: sale.customerId || '',
         reference: sale.invoiceNumber || '',
         amount: sale.finalAmount || 0,
-        notes: sale.notes,
+        notes: (sale as any).notes,
         originalData: sale,
       });
     });
@@ -151,7 +151,7 @@ export default function AllTransactionsPage() {
         id: `customer-payment-${payment.id}`,
         date: new Date(payment.paymentDate),
         type: 'customer_payment',
-        partnerName: payment.customerName || 'Không rõ',
+        partnerName: (payment as any).customerName || 'Không rõ',
         partnerId: payment.customerId || '',
         reference: payment.notes || 'Thanh toán công nợ',
         amount: payment.amount || 0,
@@ -297,16 +297,33 @@ export default function AllTransactionsPage() {
       switch (tx.type) {
         case 'sale':
           acc.totalSales += tx.amount;
-          acc.totalRevenue += tx.amount; // Tổng thu từ bán hàng
+          
+          const saleData = tx.originalData as any;
+          const saleCustomerId = saleData.customerId || null;
+          
+          // Khách lẻ (không có customerId) không sinh ra phiếu 'customer_payment'.
+          // Đối với khách lẻ, ta cộng thẳng vào doanh thu.
+          // Đối với khách có tài khoản, tiền mặt thu được ĐÃ sinh ra phiếu 'customer_payment'
+          // nên nếu cộng ở đây sẽ bị double count (nhân đôi số tiền thu được).
+          if (!saleCustomerId) {
+            acc.totalRevenue += tx.amount; 
+          }
           break;
         case 'purchase':
           acc.totalPurchases += tx.amount;
-          // Tính tổng tiền nhập hàng (để tính nợ NCC)
+          // Tính tổng tiền nhập hàng (để tính nợ NCC) - Khắc phục lỗi double tính thanh toán
           const purchase = tx.originalData as any;
           const totalAmount = purchase.totalAmount || 0;
           const paidAmount = purchase.paidAmount || 0;
+          const supplierId = purchase.supplierId || null;
+          
           acc.totalPurchaseAmount += totalAmount;
-          acc.totalPurchasePaid += paidAmount;
+          
+          // Nếu có NCC, paidAmount đã tự động tạo thành 1 phiếu supplier_payment.
+          // Để tránh trừ 2 lần (double-count), ta chỉ cộng paidAmount nếu KHÔNG có NCC.
+          if (!supplierId) {
+            acc.totalPurchasePaid += paidAmount;
+          }
           break;
         case 'customer_payment':
           acc.totalCustomerPayments += tx.amount;
