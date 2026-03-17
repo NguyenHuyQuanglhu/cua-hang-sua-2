@@ -733,7 +733,15 @@ router.delete('/:id', requireModulePermission('users', 'delete'), async (req: Au
     const currentUserRole = currentUser.role as UserRole;
     const currentStoreId = req.headers['x-store-id'] as string;
 
+    console.log('[DELETE USER] Request received:', {
+      targetUserId: id,
+      currentUserId: currentUser.id,
+      currentUserRole,
+      currentStoreId
+    });
+
     if (id === currentUser.id) {
+      console.log('[DELETE USER] Error: Cannot delete self');
       res.status(400).json({ error: 'Không thể xóa tài khoản của chính mình' });
       return;
     }
@@ -743,17 +751,34 @@ router.delete('/:id', requireModulePermission('users', 'delete'), async (req: Au
     }>('SELECT id, email, display_name, role, status FROM Users WHERE id = @id', { id });
 
     if (!user) {
+      console.log('[DELETE USER] Error: User not found');
       res.status(404).json({ error: 'Không tìm thấy người dùng' });
       return;
     }
 
+    console.log('[DELETE USER] Target user found:', {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      status: user.status
+    });
+
     // Check role hierarchy - Requirements: 4.1, 4.2
-    if (!canManageRole(currentUserRole, user.role as UserRole)) {
+    const canManage = canManageRole(currentUserRole, user.role as UserRole);
+    console.log('[DELETE USER] Role hierarchy check:', {
+      currentUserRole,
+      targetUserRole: user.role,
+      canManage
+    });
+
+    if (!canManage) {
+      console.log('[DELETE USER] Error: Cannot manage role');
       res.status(403).json({ error: 'Bạn không có quyền xóa người dùng này', errorCode: 'PERM001' });
       return;
     }
 
     // Soft delete - Requirements: 4.4
+    console.log('[DELETE USER] Performing soft delete...');
     await query(`UPDATE Users SET status = 'inactive', updated_at = GETDATE() WHERE id = @id`, { id });
     invalidateUserPermissionCache(id);
     await query('DELETE FROM Sessions WHERE user_id = @userId', { userId: id });
@@ -775,6 +800,7 @@ router.delete('/:id', requireModulePermission('users', 'delete'), async (req: Au
       console.error('Audit log error (non-blocking):', auditError);
     }
 
+    console.log('[DELETE USER] Success');
     res.json({ success: true });
   } catch (error) {
     console.error('Delete user error:', error);

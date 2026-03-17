@@ -44,6 +44,7 @@ export function requireModulePermission(
   ): Promise<void> => {
     try {
       if (!req.user) {
+        console.log('[PERMISSION] No user in request');
         res.status(401).json({ 
           error: 'Chưa xác thực',
           errorCode: 'AUTH001',
@@ -54,6 +55,15 @@ export function requireModulePermission(
       const userId = req.user.id;
       const tenantId = req.tenantId;
       const storeId = options.checkStoreAccess ? req.storeId : undefined;
+
+      console.log('[PERMISSION] Checking permission:', {
+        userId,
+        module,
+        action,
+        userRole: req.user.role,
+        storeId,
+        tenantId
+      });
 
       // Check permission using PermissionService
       const result = await permissionService.checkPermission(
@@ -69,7 +79,10 @@ export function requireModulePermission(
         } : undefined
       );
 
+      console.log('[PERMISSION] Permission check result:', result);
+
       if (!result.allowed) {
+        console.log('[PERMISSION] Access denied:', result.reason);
         res.status(403).json({
           error: result.reason || 'Không đủ quyền hạn',
           errorCode: result.errorCode || 'PERM001',
@@ -77,6 +90,7 @@ export function requireModulePermission(
         return;
       }
 
+      console.log('[PERMISSION] Access granted');
       next();
     } catch (error) {
       console.error('Permission middleware error:', error);

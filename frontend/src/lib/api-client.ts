@@ -585,7 +585,18 @@ class ApiClient {
   }
 
   async deleteUser(id: string) {
-    return this.request<{ success: boolean }>(`/users/${id}`, { method: 'DELETE' });
+    console.log('API Client: deleteUser called with id:', id);
+    console.log('API Client: token:', this.getToken() ? 'present' : 'missing');
+    console.log('API Client: storeId:', this.getStoreId());
+    
+    try {
+      const result = await this.request<{ success: boolean }>(`/users/${id}`, { method: 'DELETE' });
+      console.log('API Client: deleteUser success:', result);
+      return result;
+    } catch (error) {
+      console.error('API Client: deleteUser error:', error);
+      throw error;
+    }
   }
 
   async assignUserStores(userId: string, storeIds: string[]) {

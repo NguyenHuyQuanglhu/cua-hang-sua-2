@@ -69,6 +69,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { DebugUserPermissions } from "@/components/debug-user-permissions"
 
 interface UserStoreAssignment {
   storeId: string;
@@ -140,7 +141,7 @@ export default function UsersPage() {
     setIsLoading(true);
     const result = await getUsers();
     if (result.success && result.users) {
-      setUsers(result.users as UserWithStores[]);
+      setUsers(result.users as unknown as UserWithStores[]);
     } else {
       toast({
         variant: "destructive",
@@ -239,7 +240,22 @@ export default function UsersPage() {
   const handleDeleteUser = async () => {
     if (!userToDelete) return;
     setIsDeleting(true);
+    
+    // Debug logging
+    console.log('Attempting to delete user:', {
+      userId: userToDelete.id,
+      userEmail: userToDelete.email,
+      userRole: userToDelete.role,
+      currentUserRole,
+      canDelete,
+      canManage: canManageRole(currentUserRole as UserRole, userToDelete.role)
+    });
+    
     const result = await deleteUser(userToDelete.id);
+    
+    // Debug logging
+    console.log('Delete result:', result);
+    
     if (result.success) {
       toast({
         title: "Thành công!",
@@ -250,8 +266,11 @@ export default function UsersPage() {
       toast({
         variant: "destructive",
         title: "Lỗi",
-        description: result.error,
+        description: result.error || "Không thể xóa người dùng",
       });
+      
+      // Debug logging
+      console.error('Delete failed:', result.error);
     }
     setIsDeleting(false);
     setUserToDelete(null);
@@ -654,6 +673,13 @@ export default function UsersPage() {
             Hiển thị <strong>{filteredUsers?.length || 0}</strong> trên <strong>{users?.length || 0}</strong> người dùng
           </div>
         </CardFooter>
+        
+        {/* Debug component - chỉ hiển thị trong development */}
+        {process.env.NODE_ENV === 'development' && filteredUsers && filteredUsers.length > 0 && (
+          <div className="p-4 border-t">
+            <DebugUserPermissions targetUser={filteredUsers[0]} />
+          </div>
+        )}
       </Card>
     </div>
   )

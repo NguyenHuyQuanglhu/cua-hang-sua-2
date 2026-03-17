@@ -83,10 +83,19 @@ export async function updateUser(userId: string, data: Record<string, unknown>):
  */
 export async function deleteUser(userId: string): Promise<{ success: boolean; error?: string }> {
   try {
+    console.log('Calling deleteUser API for userId:', userId);
     await apiClient.deleteUser(userId);
+    console.log('deleteUser API call successful');
     return { success: true };
   } catch (error: unknown) {
     console.error('Error deleting user:', error);
+    
+    // Enhanced error logging
+    if (error instanceof Error) {
+      console.error('Error message:', error.message);
+      console.error('Error stack:', error.stack);
+    }
+    
     return { 
       success: false, 
       error: error instanceof Error ? error.message : 'Không thể xóa người dùng' 
