@@ -569,6 +569,12 @@ class ApiClient {
 
   // ==================== Users ====================
   async getUsers() {
+    // Check if we have a valid token before making the request
+    const token = this.getToken();
+    if (!token) {
+      throw new Error('Chưa đăng nhập. Vui lòng đăng nhập lại.');
+    }
+    
     return this.request<Array<Record<string, unknown>>>('/users');
   }
 

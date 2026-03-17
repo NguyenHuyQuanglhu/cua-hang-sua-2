@@ -11,13 +11,31 @@ export async function getUsers(): Promise<{
   error?: string;
 }> {
   try {
+    console.log('[getUsers] Starting request...');
     const users = await apiClient.getUsers();
+    console.log('[getUsers] Success, got', users.length, 'users');
     return { success: true, users };
   } catch (error: unknown) {
-    console.error('Error fetching users:', error);
+    console.error('[getUsers] Error:', error);
+    
+    // Provide more specific error messages
+    let errorMessage = 'Đã xảy ra lỗi khi lấy danh sách người dùng';
+    
+    if (error instanceof Error) {
+      if (error.message.includes('Chưa đăng nhập')) {
+        errorMessage = 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.';
+      } else if (error.message.includes('Không tìm thấy thông tin người dùng')) {
+        errorMessage = 'Không có quyền truy cập. Vui lòng liên hệ quản trị viên.';
+      } else if (error.message.includes('403')) {
+        errorMessage = 'Bạn không có quyền xem danh sách người dùng.';
+      } else {
+        errorMessage = error.message;
+      }
+    }
+    
     return { 
       success: false, 
-      error: error instanceof Error ? error.message : 'Đã xảy ra lỗi khi lấy danh sách người dùng' 
+      error: errorMessage
     };
   }
 }

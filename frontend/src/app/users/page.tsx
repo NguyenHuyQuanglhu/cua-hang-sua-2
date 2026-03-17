@@ -138,25 +138,48 @@ export default function UsersPage() {
   }, [currentUserRole]);
 
   const fetchUsers = useCallback(async () => {
+    // Don't fetch if still loading role information
+    if (isRoleLoading) {
+      console.log('[UsersPage] Skipping fetch - role still loading');
+      return;
+    }
+
+    // Don't fetch if no current user role
+    if (!currentUserRole) {
+      console.log('[UsersPage] Skipping fetch - no current user role');
+      return;
+    }
+
     setIsLoading(true);
-    const result = await getUsers();
-    if (result.success && result.users) {
-      setUsers(result.users as unknown as UserWithStores[]);
-    } else {
+    try {
+      const result = await getUsers();
+      if (result.success && result.users) {
+        setUsers(result.users as unknown as UserWithStores[]);
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Lỗi",
+          description: result.error || "Không thể tải danh sách người dùng",
+        });
+      }
+    } catch (error) {
+      console.error('[UsersPage] Fetch error:', error);
       toast({
         variant: "destructive",
         title: "Lỗi",
-        description: result.error || "Không thể tải danh sách người dùng",
+        description: "Đã xảy ra lỗi khi tải danh sách người dùng",
       });
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
-  }, [toast]);
+  }, [isRoleLoading, currentUserRole, toast]);
 
   useEffect(() => {
-    if (!isRoleLoading) {
+    // Only fetch users when role loading is complete and we have a valid role
+    if (!isRoleLoading && currentUserRole) {
       fetchUsers();
     }
-  }, [isRoleLoading, fetchUsers]);
+  }, [isRoleLoading, currentUserRole, fetchUsers]);
 
   // Filter users based on role hierarchy and search/filter criteria
   const filteredUsers = useMemo(() => {

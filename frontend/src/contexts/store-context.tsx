@@ -240,10 +240,12 @@ export function StoreProvider({ children }: StoreProviderProps) {
         err.message.includes('401') ||
         err.message.includes('hết hạn') ||
         err.message.includes('không hợp lệ') ||
+        err.message.includes('Chưa đăng nhập') ||
         (err as { status?: number }).status === 401
       );
       
       if (isAuthError) {
+        console.log('[StoreContext] Authentication error detected, clearing state');
         // Clear invalid token and auth state silently
         apiClient.setToken(null);
         apiClient.setStoreId(null);
@@ -261,6 +263,7 @@ export function StoreProvider({ children }: StoreProviderProps) {
         setAccessibleStoreIds(new Set());
       } else {
         // For non-auth errors, set error but don't clear user state
+        console.error('[StoreContext] Non-auth error:', err);
         setError(err instanceof Error ? err.message : 'An error occurred');
       }
     } finally {
