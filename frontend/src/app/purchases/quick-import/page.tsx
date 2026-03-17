@@ -27,6 +27,7 @@ import { formatCurrency } from "@/lib/utils"
 import { useToast } from "@/hooks/use-toast"
 import { useStore } from "@/contexts/store-context"
 import { QuickImportDialog } from "../components/quick-import-dialog"
+import { BulkImportDialog } from "../components/bulk-import-dialog"
 
 interface LowStockProduct {
   id: string;
@@ -237,6 +238,18 @@ export default function QuickImportPage() {
           onOpenChange={setDialogOpen}
           product={selectedProduct}
           onSuccess={handleImportSuccess}
+        />
+      )}
+
+      {showBulkImportDialog && (
+        <BulkImportDialog
+          open={showBulkImportDialog}
+          onOpenChange={setShowBulkImportDialog}
+          products={Array.from(selectedProducts).map(id => products.find(p => p.id === id)!).filter(Boolean)}
+          onSuccess={(count) => {
+            fetchLowStockProducts();
+            clearSelection();
+          }}
         />
       )}
 

@@ -24,6 +24,7 @@ export interface AuthUser {
   id: string;
   email: string;
   displayName?: string;
+  photoURL?: string;
   role: string;
   storeId?: string;
   // Multi-tenant fields
@@ -105,6 +106,7 @@ interface UserRecord {
   role: string;
   permissions: string | null;
   status: string;
+  photo_url: string | null;
 }
 
 /**
@@ -223,7 +225,7 @@ async function authenticateMultiTenant(
     const userResult = await tenantPool.request()
       .input('userId', sql.UniqueIdentifier, decoded.userId)
       .query(`
-        SELECT id, email, display_name, role, permissions, status 
+        SELECT id, email, display_name, role, permissions, status, photo_url 
         FROM Users 
         WHERE id = @userId
       `);
@@ -245,6 +247,7 @@ async function authenticateMultiTenant(
       id: user.id,
       email: user.email,
       displayName: user.display_name || undefined,
+      photoURL: user.photo_url || undefined,
       role: user.role,
       tenantId: decoded.tenantId,
       tenantUserId: decoded.tenantUserId,
@@ -283,7 +286,7 @@ async function authenticateLegacy(
 
   // Get user
   const user = await queryOne<UserRecord>(
-    'SELECT id, email, display_name, role, permissions, status FROM Users WHERE id = @userId',
+    'SELECT id, email, display_name, role, permissions, status, photo_url FROM Users WHERE id = @userId',
     { userId: decoded.userId }
   );
 
@@ -296,6 +299,7 @@ async function authenticateLegacy(
     id: user.id,
     email: user.email,
     displayName: user.display_name || undefined,
+    photoURL: user.photo_url || undefined,
     role: user.role,
     permissions: user.permissions ? JSON.parse(user.permissions) : undefined,
   };

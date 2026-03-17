@@ -326,7 +326,7 @@ router.get('/', requireModulePermission('users', 'view'), async (req: AuthReques
     }
 
     const users = await query(
-      `SELECT id, email, display_name, role, permissions, status, created_at FROM Users WHERE ${whereClause} ORDER BY created_at DESC`
+      `SELECT id, email, display_name, role, permissions, status, created_at, photo_url FROM Users WHERE ${whereClause} ORDER BY created_at DESC`
     );
 
     const usersWithStores = await Promise.all(
@@ -340,7 +340,7 @@ router.get('/', requireModulePermission('users', 'view'), async (req: AuthReques
         return {
           id: u.id, email: u.email, displayName: u.display_name, role: u.role, 
           permissions: u.permissions ? JSON.parse(u.permissions as string) : undefined,
-          status: u.status, createdAt: u.created_at,
+          status: u.status, createdAt: u.created_at, photoURL: u.photo_url || undefined,
           stores: stores.map((s: Record<string, unknown>) => ({
             storeId: s.storeId, storeName: s.storeName, storeCode: s.storeCode,
           })),
@@ -366,8 +366,8 @@ router.get('/:id', requireModulePermission('users', 'view'), async (req: AuthReq
 
     const user = await queryOne<{
       id: string; email: string; display_name: string | null; role: string;
-      permissions: string | null; status: string; created_at: Date;
-    }>('SELECT id, email, display_name, role, permissions, status, created_at FROM Users WHERE id = @id', { id });
+      permissions: string | null; status: string; created_at: Date; photo_url: string | null;
+    }>('SELECT id, email, display_name, role, permissions, status, created_at, photo_url FROM Users WHERE id = @id', { id });
 
     if (!user) {
       res.status(404).json({ error: 'Không tìm thấy người dùng' });
@@ -388,7 +388,7 @@ router.get('/:id', requireModulePermission('users', 'view'), async (req: AuthReq
     res.json({
       id: user.id, email: user.email, displayName: user.display_name, role: user.role,
       permissions: user.permissions ? JSON.parse(user.permissions) : null,
-      status: user.status, createdAt: user.created_at,
+      status: user.status, createdAt: user.created_at, photoURL: user.photo_url || undefined,
       stores: stores.map((s: Record<string, unknown>) => ({
         storeId: s.storeId, storeName: s.storeName, storeCode: s.storeCode,
       })),
@@ -407,12 +407,12 @@ router.get('/:id', requireModulePermission('users', 'view'), async (req: AuthReq
 router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { displayName, role, status, storeIds, permissions, password } = req.body;
+    const { displayName, role, status, storeIds, permissions, password, photoURL } = req.body;
     const currentUser = req.user!;
     const currentUserRole = currentUser.role as UserRole;
     const currentStoreId = req.headers['x-store-id'] as string;
 
-    console.log('[PUT /api/users/:id] Request body:', JSON.stringify({ displayName, role, status, storeIds, permissions: permissions ? 'provided' : 'undefined', password: password ? 'provided' : 'undefined' }));
+    console.log('[PUT /api/users/:id] Request body:', JSON.stringify({ displayName, role, status, storeIds, permissions: permissions ? 'provided' : 'undefined', password: password ? 'provided' : 'undefined', photoURL: photoURL ? 'provided' : 'undefined' }));
     console.log('[PUT /api/users/:id] Current user:', currentUser.email, 'Role:', currentUserRole);
 
     const user = await queryOne<{ 
@@ -439,10 +439,10 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
       return;
     }
 
-    // Non-owner editing self can only change displayName and password
+    // Non-owner editing self can only change displayName, password, and photoURL
     if (isEditingSelf && currentUserRole !== 'owner') {
       if (role || status || storeIds || permissions) {
-        res.status(403).json({ error: 'Bạn chỉ có thể thay đổi tên hiển thị và mật khẩu của mình', errorCode: 'PERM001' });
+        res.status(403).json({ error: 'Bạn chỉ có thể thay đổi tên hiển thị, mật khẩu và ảnh đại diện của mình', errorCode: 'PERM001' });
         return;
       }
     }
@@ -477,6 +477,12 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
       const passwordHash = await bcrypt.hash(password, 10);
       updateFields += `, password_hash = @passwordHash`;
       params.passwordHash = passwordHash;
+    }
+
+    if (photoURL !== undefined) {
+      updateFields += `, photo_url = @photoURL`;
+      params.photoURL = photoURL;
+      console.log('[PUT /api/users/:id] Updating photo URL');
     }
 
     await query(`UPDATE Users SET ${updateFields} WHERE id = @id`, params);
@@ -596,6 +602,10 @@ router.post('/:id/reset-password', requireModulePermission('users', 'edit'), asy
 
     console.log('[RESET PASSWORD] Password updated successfully');
 
+    // Delete all sessions for this user (force re-login with new password)
+    await query('DELETE FROM Sessions WHERE user_id = @userId', { userId: id });
+    console.log('[RESET PASSWORD] All sessions deleted for user');
+
     // Invalidate user's permission cache
     try {
       invalidateUserPermissionCache(id);
@@ -628,10 +638,10 @@ router.post('/:id/reset-password', requireModulePermission('users', 'edit'), asy
 
     res.json({ 
       success: true, 
-      message: 'Mật khẩu đã được đặt lại thành công',
+      message: 'Mật khẩu đã được đặt lại thành công. Người dùng cần đăng nhập lại với mật khẩu mới.',
       // TODO: Remove this in production - send via email instead
       tempPassword: tempPassword,
-      note: 'Mật khẩu tạm thời đã được tạo. Trong môi trường production, mật khẩu này sẽ được gửi qua email.'
+      note: 'Mật khẩu tạm thời đã được tạo. Vui lòng gửi mật khẩu này cho người dùng. Họ sẽ cần đăng nhập lại và nên đổi mật khẩu ngay sau đó.'
     });
   } catch (error) {
     console.error('[RESET PASSWORD] Error:', error);

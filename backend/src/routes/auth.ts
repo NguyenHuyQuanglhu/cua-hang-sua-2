@@ -27,6 +27,7 @@ interface UserRecord {
   status: string;
   failed_login_attempts: number;
   locked_until: Date | null;
+  photo_url: string | null;
 }
 
 interface UserStoreRecord {
@@ -165,6 +166,7 @@ router.post('/login', async (req: Request, res: Response) => {
           displayName: user.display_name,
           role: user.role,
           permissions: user.permissions ? JSON.parse(user.permissions) : null,
+          photoURL: user.photo_url || undefined,
         },
         stores: stores.map((s) => s.store_id),
         token,
@@ -263,6 +265,7 @@ router.post('/login-legacy', async (req: Request, res: Response) => {
         displayName: user.display_name,
         role: user.role,
         permissions: user.permissions ? JSON.parse(user.permissions) : null,
+        photoURL: user.photo_url || undefined,
       },
       stores: stores.map((s) => s.store_id),
       token,

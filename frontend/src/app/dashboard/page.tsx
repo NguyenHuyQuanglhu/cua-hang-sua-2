@@ -21,6 +21,7 @@ import { apiClient } from "@/lib/api-client"
 import { RevenueChart } from "./components/revenue-chart"
 import { TopProductsTable } from "./components/top-products-table"
 import { LowStockAlert } from "./components/low-stock-alert"
+import { TopProductsChart } from "./components/top-products-chart"
 
 interface DashboardStats {
   revenue: {
@@ -377,7 +378,10 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid gap-6 md:grid-cols-2">
-        <div className="transform transition-all duration-300 hover:scale-[1.02]">
+        <div className="transform transition-all duration-300 hover:scale-[1.02] h-full">
+          <TopProductsChart timeRange={timeRange} />
+        </div>
+        <div className="transform transition-all duration-300 hover:scale-[1.02] h-full">
           <LowStockAlert />
         </div>
       </div>

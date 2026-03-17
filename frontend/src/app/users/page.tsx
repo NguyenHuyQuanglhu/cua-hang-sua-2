@@ -288,13 +288,13 @@ export default function UsersPage() {
                   <p className="text-sm font-semibold mb-1">Mật khẩu tạm thời:</p>
                   <p className="text-lg font-mono font-bold select-all">{data.tempPassword}</p>
                   <p className="text-xs text-muted-foreground mt-2">
-                    Vui lòng sao chép và gửi cho người dùng. Họ nên đổi mật khẩu sau khi đăng nhập.
+                    ⚠️ Người dùng đã bị đăng xuất và cần đăng nhập lại với mật khẩu này. Sau đó họ nên đổi mật khẩu trong phần Cài đặt.
                   </p>
                 </div>
               )}
             </div>
           ),
-          duration: 10000, // Show for 10 seconds
+          duration: 15000, // Show for 15 seconds
         });
       } else {
         const error = await response.json();
