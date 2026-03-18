@@ -273,14 +273,14 @@ export function MainNav() {
                       {hasPermission('reports_transactions', 'view') && (
                         <SidebarMenuSubItem>
                             <SidebarMenuSubButton asChild isActive={isActive('/reports/transactions')}>
-                                <Link href="/reports/transactions" className='flex items-center gap-2'><History className="h-4 w-4" />Lịch sử GD Khách hàng</Link>
+                                <Link href="/reports/transactions" className='flex items-center gap-2'><History className="h-4 w-4" /><span className="whitespace-nowrap">Lịch sử GD Khách hàng</span></Link>
                             </SidebarMenuSubButton>
                         </SidebarMenuSubItem>
                       )}
                       {hasPermission('reports_supplier_debt_tracking', 'view') && (
                         <SidebarMenuSubItem>
                             <SidebarMenuSubButton asChild isActive={isActive('/reports/supplier-debt-tracking')}>
-                                <Link href="/reports/supplier-debt-tracking" className='flex items-center gap-2'><History className="h-4 w-4" />Đối soát Công nợ NCC</Link>
+                                <Link href="/reports/supplier-debt-tracking" className='flex items-center gap-2'><History className="h-4 w-4" /><span className="whitespace-nowrap">Đối soát Công nợ NCC</span></Link>
                             </SidebarMenuSubButton>
                         </SidebarMenuSubItem>
                       )}
