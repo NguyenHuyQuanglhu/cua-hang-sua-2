@@ -478,6 +478,17 @@ export async function getCustomerSegments(
       'Không hoạt động': 0,
     };
 
+    // Helper function to format money
+    const formatMoney = (amount: number): string => {
+      if (amount >= 1000000) {
+        return `${(amount / 1000000).toFixed(0)}tr ${((amount % 1000000) / 1000).toFixed(0)}k`.replace(' 0k', '');
+      } else if (amount >= 1000) {
+        return `${(amount / 1000).toFixed(0)}k`;
+      } else {
+        return `${amount.toFixed(0)}đ`;
+      }
+    };
+
     customers.forEach(customer => {
       const rfm = customerRFM.get(customer.id);
       if (!rfm) return;
@@ -489,36 +500,36 @@ export async function getCustomerSegments(
       if (rfm.frequency === 0) {
         // No purchases yet
         segment = 'Mới';
-        reason = 'Chưa có giao dịch nào';
+        reason = 'Chưa có giao dịch nào (0đ)';
         suggestedAction = 'Gửi ưu đãi chào mừng, giới thiệu sản phẩm bán chạy';
       } else if (rfm.recency > inactiveDays) {
         // Inactive customer
         segment = 'Không hoạt động';
-        reason = `Không giao dịch trong ${rfm.recency} ngày, ${rfm.frequency} lần mua với tổng ${(rfm.monetary / 1000000).toFixed(1)}tr`;
+        reason = `Không giao dịch trong ${rfm.recency} ngày, ${rfm.frequency} lần mua với tổng ${formatMoney(rfm.monetary)}`;
         suggestedAction = 'Gửi email/SMS kích hoạt, ưu đãi đặc biệt để quay lại';
       } else if (rfm.recency > atRiskDays) {
         // At risk customer
         segment = 'Nguy cơ rời bỏ';
-        reason = `${rfm.recency} ngày chưa quay lại, từng mua ${rfm.frequency} lần`;
+        reason = `${rfm.recency} ngày chưa quay lại, từng mua ${rfm.frequency} lần với tổng ${formatMoney(rfm.monetary)}`;
         suggestedAction = 'Liên hệ trực tiếp, tìm hiểu lý do và đề xuất ưu đãi';
       } else if (rfm.monetary >= vipMonetary && rfm.frequency >= 5) {
         // VIP customer
         segment = 'VIP';
-        reason = `Tổng chi tiêu ${(rfm.monetary / 1000000).toFixed(1)}tr, ${rfm.frequency} lần mua, mua gần nhất ${rfm.recency} ngày trước`;
+        reason = `Tổng chi tiêu ${formatMoney(rfm.monetary)}, ${rfm.frequency} lần mua, mua gần nhất ${rfm.recency} ngày trước`;
         suggestedAction = 'Ưu tiên chăm sóc, gửi thông báo sản phẩm mới đầu tiên';
       } else if (rfm.monetary >= loyalMonetary || rfm.frequency >= 3) {
         // Loyal customer
         segment = 'Trung thành';
-        reason = `${rfm.frequency} lần mua, chi tiêu ${(rfm.monetary / 1000000).toFixed(1)}tr`;
+        reason = `${rfm.frequency} lần mua, chi tiêu ${formatMoney(rfm.monetary)}`;
         suggestedAction = 'Tặng điểm thưởng, mời tham gia chương trình VIP';
       } else if (rfm.recency <= recentDays && rfm.frequency <= 2) {
         // Potential customer
         segment = 'Tiềm năng';
-        reason = `Khách hàng mới (${rfm.frequency} lần mua trong ${rfm.recency} ngày gần đây)`;
+        reason = `Khách hàng mới (${rfm.frequency} lần mua trong ${rfm.recency} ngày gần đây), chi tiêu ${formatMoney(rfm.monetary)}`;
         suggestedAction = 'Gửi ưu đãi lần mua tiếp theo, giới thiệu sản phẩm liên quan';
       } else {
         segment = 'Tiềm năng';
-        reason = `${rfm.frequency} lần mua, chi tiêu ${(rfm.monetary / 1000000).toFixed(1)}tr`;
+        reason = `${rfm.frequency} lần mua, chi tiêu ${formatMoney(rfm.monetary)}`;
         suggestedAction = 'Tăng cường marketing, gửi ưu đãi định kỳ';
       }
 

@@ -456,17 +456,24 @@ export class SalesService {
     productId: string,
     storeId: string
   ): Promise<string> {
-    const product = await queryOne<{ unit_id: string }>(
-      `SELECT unit_id FROM Products 
+    const product = await queryOne<{ default_sales_unit_id: string; unit_id: string }>(
+      `SELECT default_sales_unit_id, unit_id FROM Products 
        WHERE id = @productId AND store_id = @storeId`,
       { productId, storeId }
     );
 
-    if (!product?.unit_id) {
+    if (!product) {
+      throw new Error(`Product ${productId} not found`);
+    }
+
+    // Ưu tiên sử dụng default_sales_unit_id, fallback về unit_id
+    const unitId = product.default_sales_unit_id || product.unit_id;
+    
+    if (!unitId) {
       throw new Error(`Product ${productId} does not have a unit_id configured`);
     }
 
-    return product.unit_id;
+    return unitId;
   }
 
   /**

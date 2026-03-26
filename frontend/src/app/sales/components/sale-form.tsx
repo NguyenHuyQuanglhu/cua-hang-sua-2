@@ -457,6 +457,7 @@ export function SaleForm({ isOpen, onOpenChange, customers, products, units, all
           productId: product.id, 
           quantity: 1, 
           price: product.sellingPrice || 0,
+          unitId: product.defaultSalesUnitId || product.unitId, // Ưu tiên default sales unit
         });
       }
     }
