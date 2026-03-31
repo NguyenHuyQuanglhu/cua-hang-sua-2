@@ -481,11 +481,17 @@ export async function getCustomerSegments(
     // Helper function to format money
     const formatMoney = (amount: number): string => {
       if (amount >= 1000000) {
-        return `${(amount / 1000000).toFixed(0)}tr ${((amount % 1000000) / 1000).toFixed(0)}k`.replace(' 0k', '');
+        const millions = Math.floor(amount / 1000000);
+        const thousands = Math.floor((amount % 1000000) / 1000);
+        if (thousands > 0) {
+          return `${millions}tr ${thousands}k`;
+        } else {
+          return `${millions}tr`;
+        }
       } else if (amount >= 1000) {
-        return `${(amount / 1000).toFixed(0)}k`;
+        return `${Math.floor(amount / 1000)}k`;
       } else {
-        return `${amount.toFixed(0)}đ`;
+        return `${Math.floor(amount)}đ`;
       }
     };
 

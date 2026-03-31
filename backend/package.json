@@ -17,7 +17,8 @@
     "migrate": "npx tsx scripts/run-migration.ts",
     "migrate:base-units": "npx tsx scripts/run-migration.ts add-base-unit-columns.sql",
     "migrate:order-status": "npx tsx scripts/migrate-order-status.ts",
-    "rollback:order-status": "npx tsx scripts/rollback-order-status.ts"
+    "rollback:order-status": "npx tsx scripts/rollback-order-status.ts",
+    "test:email": "npx tsx scripts/test-email.ts"
   },
   "dependencies": {
     "axios": "^1.13.6",
