@@ -32,6 +32,7 @@ const tenants_1 = __importDefault(require("./routes/tenants"));
 const sync_data_1 = __importDefault(require("./routes/sync-data"));
 const loyalty_points_1 = __importDefault(require("./routes/loyalty-points"));
 const subscription_1 = __importDefault(require("./routes/subscription"));
+const subscription_transactions_1 = __importDefault(require("./routes/admin/subscription-transactions"));
 const unit_conversion_1 = __importDefault(require("./routes/unit-conversion"));
 const upload_1 = __importDefault(require("./routes/upload"));
 const bulk_import_1 = __importDefault(require("./routes/bulk-import"));
@@ -46,6 +47,7 @@ const devices_1 = __importDefault(require("./routes/devices"));
 // Import auto-close shift service
 const auto_close_shift_service_1 = require("./services/auto-close-shift.service");
 const notification_generator_service_1 = require("./services/notification-generator.service");
+const scheduled_auto_renewal_service_1 = require("./services/scheduled-auto-renewal.service");
 // Import error handling middleware
 const errorHandler_1 = require("./middleware/errorHandler");
 const app = (0, express_1.default)();
@@ -108,6 +110,7 @@ app.use('/api/tenants', tenants_1.default);
 app.use('/api/sync-data', sync_data_1.default);
 app.use('/api/loyalty-points', loyalty_points_1.default);
 app.use('/api/subscription', subscription_1.default);
+app.use('/api/admin/subscription-transactions', subscription_transactions_1.default);
 app.use('/api', unit_conversion_1.default);
 app.use('/api/upload', upload_1.default);
 app.use('/api/bulk', bulk_import_1.default);
@@ -133,18 +136,22 @@ app.listen(PORT, () => {
     auto_close_shift_service_1.autoCloseShiftService.start();
     // Khởi động service tạo thông báo tự động
     notification_generator_service_1.notificationGeneratorService.start();
+    // Khởi động service tự động gia hạn gói dịch vụ
+    scheduled_auto_renewal_service_1.scheduledAutoRenewalService.start();
 });
 // Graceful shutdown
 process.on('SIGTERM', () => {
     console.log('SIGTERM signal received: closing HTTP server');
     auto_close_shift_service_1.autoCloseShiftService.stop();
     notification_generator_service_1.notificationGeneratorService.stop();
+    scheduled_auto_renewal_service_1.scheduledAutoRenewalService.stop();
     process.exit(0);
 });
 process.on('SIGINT', () => {
     console.log('SIGINT signal received: closing HTTP server');
     auto_close_shift_service_1.autoCloseShiftService.stop();
     notification_generator_service_1.notificationGeneratorService.stop();
+    scheduled_auto_renewal_service_1.scheduledAutoRenewalService.stop();
     process.exit(0);
 });
 exports.default = app;

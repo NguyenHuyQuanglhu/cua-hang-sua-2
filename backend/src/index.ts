@@ -29,6 +29,7 @@ import tenantsRoutes from './routes/tenants';
 import syncDataRoutes from './routes/sync-data';
 import loyaltyPointsRoutes from './routes/loyalty-points';
 import subscriptionRoutes from './routes/subscription';
+import subscriptionTransactionsRoutes from './routes/admin/subscription-transactions';
 import unitConversionRoutes from './routes/unit-conversion';
 import uploadRoutes from './routes/upload';
 import bulkImportRoutes from './routes/bulk-import';
@@ -44,6 +45,7 @@ import devicesRoutes from './routes/devices';
 // Import auto-close shift service
 import { autoCloseShiftService } from './services/auto-close-shift.service';
 import { notificationGeneratorService } from './services/notification-generator.service';
+import { scheduledAutoRenewalService } from './services/scheduled-auto-renewal.service';
 
 // Import error handling middleware
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
@@ -115,6 +117,7 @@ app.use('/api/tenants', tenantsRoutes);
 app.use('/api/sync-data', syncDataRoutes);
 app.use('/api/loyalty-points', loyaltyPointsRoutes);
 app.use('/api/subscription', subscriptionRoutes);
+app.use('/api/admin/subscription-transactions', subscriptionTransactionsRoutes);
 app.use('/api', unitConversionRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/bulk', bulkImportRoutes);
@@ -145,6 +148,9 @@ app.listen(PORT, () => {
   
   // Khởi động service tạo thông báo tự động
   notificationGeneratorService.start();
+  
+  // Khởi động service tự động gia hạn gói dịch vụ
+  scheduledAutoRenewalService.start();
 });
 
 // Graceful shutdown
@@ -152,6 +158,7 @@ process.on('SIGTERM', () => {
   console.log('SIGTERM signal received: closing HTTP server');
   autoCloseShiftService.stop();
   notificationGeneratorService.stop();
+  scheduledAutoRenewalService.stop();
   process.exit(0);
 });
 
@@ -159,6 +166,7 @@ process.on('SIGINT', () => {
   console.log('SIGINT signal received: closing HTTP server');
   autoCloseShiftService.stop();
   notificationGeneratorService.stop();
+  scheduledAutoRenewalService.stop();
   process.exit(0);
 });
 

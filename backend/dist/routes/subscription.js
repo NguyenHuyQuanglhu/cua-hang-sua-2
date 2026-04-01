@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const db_1 = require("../db");
 const auth_1 = require("../middleware/auth");
+const subscription_transaction_service_1 = require("../services/subscription-transaction-service");
 const router = (0, express_1.Router)();
 router.use(auth_1.authenticate);
 // GET /api/subscription/current - Get current subscription plan
@@ -84,6 +85,8 @@ router.post('/upgrade', async (req, res) => {
             return;
         }
         console.log(`[Subscription] User ${userId} upgrading to plan ${planId} (${maxStores} stores) via ${paymentMethod}`);
+        // Get current plan for comparison
+        const currentUser = await (0, db_1.queryOne)('SELECT subscription_plan_id, max_stores FROM Users WHERE id = @userId', { userId });
         // For bank transfer, update immediately
         const now = new Date();
         const startDate = now;
@@ -118,6 +121,28 @@ router.post('/upgrade', async (req, res) => {
             paymentMethod: paymentMethod || 'direct',
             startDate,
             endDate,
+        });
+        // Lưu lịch sử giao dịch để Admin/Quản lý theo dõi
+        await subscription_transaction_service_1.subscriptionTransactionService.createTransaction({
+            userId,
+            transactionType: 'manual_upgrade',
+            planId,
+            previousPlanId: currentUser?.subscription_plan_id || undefined,
+            maxStores,
+            amount: planPrice,
+            paymentMethod: paymentMethod === 'bank_transfer' ? 'bank_transfer' : 'cash',
+            paymentStatus: 'completed',
+            startDate,
+            endDate,
+            autoRenewal: true,
+            processedByRole: 'system',
+            notes: `Nâng cấp gói ${planId} (${maxStores} cửa hàng) qua ${paymentMethod}`,
+            metadata: {
+                upgradeSource: 'manual',
+                previousMaxStores: currentUser?.max_stores || 0,
+                ipAddress: req.ip,
+                userAgent: req.get('User-Agent'),
+            }
         });
         // Log the subscription change
         await (0, db_1.query)(`INSERT INTO AuditLogs (id, user_id, action, entity_type, entity_id, details, created_at)

@@ -297,8 +297,15 @@ router.post('/', validateStatus_1.validateAndNormalizeStatus, async (req, res) =
         const previousDebtAmount = previousDebt ? Number(previousDebt) : 0;
         const customerPaymentAmount = customerPayment ? Number(customerPayment) : 0;
         const totalAmountValue = totalAmount ? Number(totalAmount) : 0;
-        // Set default status to "pending" if not provided (Requirement 2.2)
-        const orderStatus = status || 'pending';
+        // Smart status determination (Requirement 2.2 + Auto-fix)
+        let orderStatus = status || 'pending';
+        // Auto-fix: If customer has paid in full, automatically set to 'processed'
+        // This works regardless of whether status was provided or not
+        if (customerPaymentAmount > 0 && finalAmount > 0 && customerPaymentAmount >= finalAmount) {
+            orderStatus = 'processed';
+            console.log('[POST /api/sales] Auto-fixing status: paid in full -> processed');
+            console.log(`[POST /api/sales] Payment: ${customerPaymentAmount}, Final: ${finalAmount}`);
+        }
         console.log('[POST /api/sales] Creating sale:', {
             storeId, userId, customerId, shiftId,
             itemsCount: items?.length,

@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { query, queryOne } from '../db';
 import { authenticate, storeContext, AuthRequest } from '../middleware/auth';
+import { subscriptionTransactionService } from '../services/subscription-transaction-service';
 
 const router = Router();
 
@@ -96,6 +97,12 @@ router.post('/upgrade', async (req: AuthRequest, res: Response) => {
 
     console.log(`[Subscription] User ${userId} upgrading to plan ${planId} (${maxStores} stores) via ${paymentMethod}`);
 
+    // Get current plan for comparison
+    const currentUser = await queryOne(
+      'SELECT subscription_plan_id, max_stores FROM Users WHERE id = @userId',
+      { userId }
+    );
+
     // For bank transfer, update immediately
     const now = new Date();
     const startDate = now;
@@ -137,6 +144,29 @@ router.post('/upgrade', async (req: AuthRequest, res: Response) => {
         endDate,
       }
     );
+
+    // Lưu lịch sử giao dịch để Admin/Quản lý theo dõi
+    await subscriptionTransactionService.createTransaction({
+      userId,
+      transactionType: 'manual_upgrade',
+      planId,
+      previousPlanId: currentUser?.subscription_plan_id as string || undefined,
+      maxStores,
+      amount: planPrice,
+      paymentMethod: paymentMethod === 'bank_transfer' ? 'bank_transfer' : 'cash',
+      paymentStatus: 'completed',
+      startDate,
+      endDate,
+      autoRenewal: true,
+      processedByRole: 'system',
+      notes: `Nâng cấp gói ${planId} (${maxStores} cửa hàng) qua ${paymentMethod}`,
+      metadata: {
+        upgradeSource: 'manual',
+        previousMaxStores: currentUser?.max_stores || 0,
+        ipAddress: req.ip,
+        userAgent: req.get('User-Agent'),
+      }
+    });
 
     // Log the subscription change
     await query(
