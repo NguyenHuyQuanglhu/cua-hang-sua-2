@@ -14,7 +14,6 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/hooks/use-toast'
-import { downloadCustomerTemplate, importCustomersFromExcel } from '../import-export-actions'
 import { useRouter } from 'next/navigation'
 
 export function ImportCustomers() {
@@ -34,21 +33,43 @@ export function ImportCustomers() {
   const handleDownloadTemplate = async () => {
     setIsDownloading(true)
     try {
-      const result = await downloadCustomerTemplate()
-      if (result.success && result.data) {
-        // Create download link
-        const link = document.createElement('a')
-        link.href = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${result.data}`
-        link.download = 'customer-import-template.xlsx'
-        link.click()
-        
-        toast({
-          title: "Thành công!",
-          description: "Đã tải template thành công.",
-        })
-      } else {
-        throw new Error(result.error)
+      // Use client-side fetch instead of server action
+      const token = localStorage.getItem('auth_token')
+      if (!token) {
+        throw new Error('Chưa đăng nhập')
       }
+
+      const response = await fetch('/api/proxy/bulk/customers/template', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to download template')
+      }
+
+      // Use arrayBuffer instead of blob for better compatibility
+      const arrayBuffer = await response.arrayBuffer()
+      const blob = new Blob([arrayBuffer], { 
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+      })
+      
+      // Create download link
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = 'customer-import-template.xlsx'
+      document.body.appendChild(link) // Add to DOM for better compatibility
+      link.click()
+      document.body.removeChild(link) // Clean up
+      
+      // Clean up
+      URL.revokeObjectURL(link.href)
+      
+      toast({
+        title: "Thành công!",
+        description: "Đã tải template thành công.",
+      })
     } catch (error) {
       toast({
         variant: "destructive",
@@ -71,12 +92,39 @@ export function ImportCustomers() {
     }
 
     startTransition(async () => {
-      const reader = new FileReader()
-      reader.readAsDataURL(file)
-      reader.onload = async () => {
-        const base64 = (reader.result as string).split(',')[1]
-        const result = await importCustomersFromExcel(base64)
-        if (result.success) {
+      try {
+        // Get token and store ID from localStorage
+        const token = localStorage.getItem('auth_token')
+        const storeId = localStorage.getItem('store_id')
+
+        if (!token) {
+          throw new Error('Chưa đăng nhập')
+        }
+
+        if (!storeId) {
+          throw new Error('Chưa chọn cửa hàng')
+        }
+
+        // Create FormData
+        const formData = new FormData()
+        formData.append('file', file)
+
+        const response = await fetch('/api/proxy/bulk/customers/import', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'X-Store-Id': storeId,
+          },
+          body: formData,
+        })
+
+        const result = await response.json()
+
+        if (!response.ok) {
+          throw new Error(result.error || 'Failed to import customers')
+        }
+
+        if (result.success !== false) {
           toast({
             title: "Thành công!",
             description: `Đã nhập thành công ${result.imported} khách hàng${result.failed ? `, ${result.failed} thất bại` : ''}.`,
@@ -91,6 +139,12 @@ export function ImportCustomers() {
             description: result.error || 'Không thể import khách hàng',
           })
         }
+      } catch (error) {
+        toast({
+          variant: "destructive",
+          title: "Ôi! Đã có lỗi xảy ra.",
+          description: error instanceof Error ? error.message : 'Không thể import khách hàng',
+        })
       }
     })
   }

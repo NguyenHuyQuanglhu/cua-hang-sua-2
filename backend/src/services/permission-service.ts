@@ -324,7 +324,7 @@ export class PermissionService {
       console.error('[PermissionService] Error loading permission context:', {
         userId,
         tenantId,
-        error: error.message,
+        error: error instanceof Error ? error.message : String(error),
         timestamp: new Date().toISOString()
       });
       return null;

@@ -60,10 +60,10 @@ async function proxyRequest(
     });
 
     // Get body for non-GET requests
-    let body: string | undefined;
-    if (method !== 'GET') {
+    let body: ArrayBuffer | undefined;
+    if (method !== 'GET' && method !== 'HEAD') {
       try {
-        body = await request.text();
+        body = await request.arrayBuffer();
       } catch (error) {
         // Body might be empty
       }
@@ -75,11 +75,8 @@ async function proxyRequest(
       body,
     });
 
-    // Get response data
-    const responseData = await response.text();
-    
     // Create response with same status and headers
-    const nextResponse = new NextResponse(responseData, {
+    const nextResponse = new NextResponse(response.body, {
       status: response.status,
       statusText: response.statusText,
     });

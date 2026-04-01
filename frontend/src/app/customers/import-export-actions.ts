@@ -1,6 +1,6 @@
 'use server'
 
-import { apiClient } from '@/lib/api-client'
+import { cookies } from 'next/headers'
 
 /**
  * Download customer import template
@@ -11,9 +11,20 @@ export async function downloadCustomerTemplate(): Promise<{
   error?: string
 }> {
   try {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/bulk-import/customers/template`, {
+    // Get token from cookies instead of apiClient
+    const cookieStore = cookies()
+    const token = cookieStore.get('auth_token')?.value
+
+    if (!token) {
+      return {
+        success: false,
+        error: 'Chưa đăng nhập',
+      }
+    }
+
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/bulk/customers/template`, {
       headers: {
-        'Authorization': `Bearer ${apiClient.getToken()}`,
+        'Authorization': `Bearer ${token}`,
       },
     })
 
@@ -45,6 +56,25 @@ export async function importCustomersFromExcel(base64File: string): Promise<{
   error?: string
 }> {
   try {
+    // Get token and store ID from cookies
+    const cookieStore = cookies()
+    const token = cookieStore.get('auth_token')?.value
+    const storeId = cookieStore.get('store_id')?.value
+
+    if (!token) {
+      return {
+        success: false,
+        error: 'Chưa đăng nhập',
+      }
+    }
+
+    if (!storeId) {
+      return {
+        success: false,
+        error: 'Chưa chọn cửa hàng',
+      }
+    }
+
     // Convert base64 to blob
     const blob = base64ToBlob(base64File, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     
@@ -52,11 +82,11 @@ export async function importCustomersFromExcel(base64File: string): Promise<{
     const formData = new FormData()
     formData.append('file', blob, 'customers.xlsx')
 
-    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/bulk-import/customers/import`, {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/bulk/customers/import`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${apiClient.getToken()}`,
-        'X-Store-Id': apiClient.getStoreId() || '',
+        'Authorization': `Bearer ${token}`,
+        'X-Store-Id': storeId,
       },
       body: formData,
     })
@@ -91,10 +121,29 @@ export async function exportCustomersToExcel(): Promise<{
   error?: string
 }> {
   try {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/bulk-import/customers/export`, {
+    // Get token and store ID from cookies
+    const cookieStore = cookies()
+    const token = cookieStore.get('auth_token')?.value
+    const storeId = cookieStore.get('store_id')?.value
+
+    if (!token) {
+      return {
+        success: false,
+        error: 'Chưa đăng nhập',
+      }
+    }
+
+    if (!storeId) {
+      return {
+        success: false,
+        error: 'Chưa chọn cửa hàng',
+      }
+    }
+
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/bulk/customers/export`, {
       headers: {
-        'Authorization': `Bearer ${apiClient.getToken()}`,
-        'X-Store-Id': apiClient.getStoreId() || '',
+        'Authorization': `Bearer ${token}`,
+        'X-Store-Id': storeId,
       },
     })
 

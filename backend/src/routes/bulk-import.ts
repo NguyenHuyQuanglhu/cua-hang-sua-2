@@ -146,6 +146,7 @@ router.get('/customers/template', authenticate, async (req: Request, res: Respon
       'Content-Disposition',
       'attachment; filename=customer-import-template.xlsx'
     );
+    res.setHeader('Content-Length', buffer.length.toString());
     res.send(buffer);
   } catch (error) {
     console.error('Error generating customer template:', error);

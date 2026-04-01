@@ -601,10 +601,10 @@ export default function CustomersPage() {
             <TableHeader>
               <TableRow>
                 <TableHead className="w-16 hidden md:table-cell">STT</TableHead>
-                <SortableHeader sortKey="name">Tên</SortableHeader>
+                <SortableHeader sortKey="name" className="min-w-[150px]">Tên</SortableHeader>
                 <SortableHeader sortKey="status">Trạng thái</SortableHeader>
                 <SortableHeader sortKey="loyaltyTier">Hạng</SortableHeader>
-                <SortableHeader sortKey="debt">Công nợ (Trả/Nợ)</SortableHeader>
+                <SortableHeader sortKey="debt" className="text-right">Công nợ (Trả/Nợ)</SortableHeader>
                 <SortableHeader sortKey="customerType" className="hidden md:table-cell">Loại</SortableHeader>
                 <SortableHeader sortKey="customerGroup" className="hidden md:table-cell">Nhóm</SortableHeader>
                 <TableHead className="hidden lg:table-cell">Email</TableHead>
@@ -623,10 +623,10 @@ export default function CustomersPage() {
                 return (
                   <TableRow key={customer.id}>
                     <TableCell className="font-medium hidden md:table-cell">{index + 1}</TableCell>
-                    <TableCell className="font-medium">
-                      <Link href={`/customers/${customer.id}`} className="hover:underline flex items-center gap-1">
-                        {customer.name}
-                        {isOverLimit && <AlertTriangle className="h-4 w-4 text-destructive" aria-label="Vượt hạn mức tín dụng" />}
+                    <TableCell className="font-medium min-w-0">
+                      <Link href={`/customers/${customer.id}`} className="hover:underline flex items-center gap-1 whitespace-nowrap overflow-hidden">
+                        <span className="truncate">{customer.name}</span>
+                        {isOverLimit && <AlertTriangle className="h-4 w-4 text-destructive flex-shrink-0" aria-label="Vượt hạn mức tín dụng" />}
                       </Link>
                     </TableCell>
                     <TableCell>
@@ -664,14 +664,14 @@ export default function CustomersPage() {
                       </Badge>
                     </TableCell>
                      <TableCell>
-                      <div className="text-left">
+                      <div className="flex flex-col items-end space-y-1">
                         <button 
-                          className="underline cursor-pointer text-green-600" 
+                          className="underline cursor-pointer text-green-600 text-sm" 
                           onClick={() => setViewingPaymentsFor(customer)}
                         >
                           {formatCurrency(paid)}
                         </button>
-                        <div className={`block w-full text-left ${debt > 0 ? "text-destructive" : ""}`}>
+                        <div className={`text-sm font-medium ${debt > 0 ? "text-destructive" : "text-muted-foreground"}`}>
                           {formatCurrency(debt)}
                         </div>
                       </div>

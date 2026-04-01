@@ -71,6 +71,10 @@ export function UserNav() {
   const performLogout = async () => {
     await logout();
     router.push('/login');
+    // Auto reload page after logout redirect
+    setTimeout(() => {
+      window.location.reload();
+    }, 100);
   };
   
   const canViewSettings = permissions?.settings?.includes('view');

@@ -15,6 +15,7 @@ import { useStore } from '@/contexts/store-context';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useState } from 'react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { useToast } from '@/hooks/use-toast';
 
 interface StoreSelectorProps {
   className?: string;
@@ -23,6 +24,7 @@ interface StoreSelectorProps {
 export function StoreSelector({ className }: StoreSelectorProps) {
   const { currentStore, stores, user, tenant, isLoading, switchStore, canAccessStore, error } = useStore();
   const [switchError, setSwitchError] = useState<string | null>(null);
+  const { toast } = useToast();
   const router = useRouter();
   
   // Check if user can manage stores (owner or admin)
@@ -39,10 +41,27 @@ export function StoreSelector({ className }: StoreSelectorProps) {
 
     const success = await switchStore(storeId);
     if (success) {
+      // Show success notification only if switch was actually successful
+      const selectedStore = stores.find(s => s.id === storeId);
+      toast({
+        title: '✅ Chuyển cửa hàng thành công',
+        description: `Đã chuyển sang cửa hàng: ${selectedStore?.name}`,
+        duration: 3000,
+      });
       // Refresh the current page data without full reload
       router.refresh();
     } else {
-      setSwitchError('Không thể chuyển đến cửa hàng này');
+      // Check if it's a shift-related error
+      if (error && error.includes('ca hiện tại')) {
+        toast({
+          variant: 'destructive',
+          title: '⚠️ Bạn đang có ca làm việc đang mở!',
+          description: 'Vui lòng đóng ca tại cửa hàng hiện tại trước khi chuyển sang cửa hàng khác.',
+          duration: 5000,
+        });
+      } else {
+        setSwitchError('Không thể chuyển đến cửa hàng này');
+      }
     }
   };
 
@@ -140,8 +159,9 @@ export function StoreSelector({ className }: StoreSelectorProps) {
 }
 
 export function StoreSelectorCompact() {
-  const { currentStore, stores, user, isLoading, switchStore, canAccessStore } = useStore();
+  const { currentStore, stores, user, isLoading, switchStore, canAccessStore, error: storeError } = useStore();
   const [switchError, setSwitchError] = useState<string | null>(null);
+  const { toast } = useToast();
   const router = useRouter();
   
   // Check if user can manage stores (owner or admin)
@@ -159,11 +179,28 @@ export function StoreSelectorCompact() {
 
     const success = await switchStore(storeId);
     if (success) {
+      // Show success notification only if switch was actually successful
+      const selectedStore = stores.find(s => s.id === storeId);
+      toast({
+        title: '✅ Chuyển cửa hàng thành công',
+        description: `Đã chuyển sang: ${selectedStore?.name}`,
+        duration: 3000,
+      });
       // Refresh the current page data without full reload
       router.refresh();
     } else {
-      setSwitchError('Lỗi chuyển cửa hàng');
-      setTimeout(() => setSwitchError(null), 3000);
+      // Check if it's a shift-related error from store context
+      if (storeError && storeError.includes('ca hiện tại')) {
+        toast({
+          variant: 'destructive',
+          title: '⚠️ Có ca làm việc đang mở',
+          description: 'Vui lòng đóng ca hiện tại trước khi chuyển cửa hàng',
+          duration: 5000,
+        });
+      } else {
+        setSwitchError('Lỗi chuyển cửa hàng');
+        setTimeout(() => setSwitchError(null), 3000);
+      }
     }
   };
 
@@ -221,10 +258,7 @@ export function StoreSelectorCompact() {
         </DropdownMenuContent>
       </DropdownMenu>
       
-      {/* Show brief error tooltip */}
-      {switchError && (
-        <span className="text-xs text-destructive">{switchError}</span>
-      )}
+      {/* Error handling is now done via toast notifications only */}
     </div>
   );
 }

@@ -126,6 +126,14 @@ export function StartShiftDialog({ userId, userName, userRole, onShiftStarted, u
           })
           setIsStarting(false)
           return
+        } else {
+          // Show success notification for store switch
+          const selectedStore = stores.find(s => s.id === selectedStoreId);
+          toast({
+            title: '✅ Chuyển cửa hàng thành công',
+            description: `Đã chuyển sang cửa hàng: ${selectedStore?.name}`,
+            duration: 3000,
+          });
         }
       }
 
@@ -164,6 +172,10 @@ export function StartShiftDialog({ userId, userName, userRole, onShiftStarted, u
         description: 'Bạn đã đăng xuất thành công.',
       })
       router.push('/login')
+      // Auto reload page after logout redirect
+      setTimeout(() => {
+        window.location.reload();
+      }, 100);
     } catch (error) {
       toast({
         variant: 'destructive',

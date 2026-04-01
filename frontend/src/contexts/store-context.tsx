@@ -286,10 +286,6 @@ export function StoreProvider({ children }: StoreProviderProps) {
         const activeShiftResponse = await apiClient.getActiveShift();
         if (activeShiftResponse) {
           setError('Vui lòng đóng ca hiện tại trước khi chuyển sang cửa hàng khác');
-          // Show a more prominent error
-          if (typeof window !== 'undefined') {
-            alert('⚠️ Bạn đang có ca làm việc đang mở!\n\nVui lòng đóng ca tại cửa hàng hiện tại trước khi chuyển sang cửa hàng khác.');
-          }
           return false;
         }
       } catch (error) {

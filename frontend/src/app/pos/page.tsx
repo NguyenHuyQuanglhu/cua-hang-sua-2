@@ -874,7 +874,7 @@ export default function POSPage() {
         previousDebt: previousDebt, // The debt being paid
         remainingDebt: 0, // After payment, debt should be 0
         paymentMethod: paymentMethod,
-        status: 'printed', // Mark as printed since it's a debt payment
+        status: 'completed', // Mark as completed since payment is done
         isChangeReturned: customerPayment > previousDebt ? true : false,
         items: [], // Empty items array
       };
@@ -957,7 +957,7 @@ export default function POSPage() {
       previousDebt: includeDebtPayment ? previousDebt : 0, // Only include debt if checkbox is checked
       remainingDebt: remainingDebt,
       paymentMethod: paymentMethod,
-      status: 'printed', // Mark as printed after payment
+      status: 'completed', // Mark as completed after payment
       isChangeReturned: isChangeReturned,
       items: itemsData,
     }

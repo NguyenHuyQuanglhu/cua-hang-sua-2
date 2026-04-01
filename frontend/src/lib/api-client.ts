@@ -56,13 +56,25 @@ class ApiClient {
   private token: string | null = null;
   private storeId: string | null = null;
 
+  constructor() {
+    // Initialize from localStorage if available
+    if (typeof window !== 'undefined') {
+      this.token = localStorage.getItem('auth_token');
+      this.storeId = localStorage.getItem('store_id');
+    }
+  }
+
   setToken(token: string | null) {
     this.token = token;
     if (typeof window !== 'undefined') {
       if (token) {
         localStorage.setItem('auth_token', token);
+        // Also set cookie for server actions
+        document.cookie = `auth_token=${token}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax`;
       } else {
         localStorage.removeItem('auth_token');
+        // Remove cookie
+        document.cookie = 'auth_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
       }
     }
   }
@@ -72,8 +84,12 @@ class ApiClient {
     if (typeof window !== 'undefined') {
       if (storeId) {
         localStorage.setItem('store_id', storeId);
+        // Also set cookie for server actions
+        document.cookie = `store_id=${storeId}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax`;
       } else {
         localStorage.removeItem('store_id');
+        // Remove cookie
+        document.cookie = 'store_id=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
       }
     }
   }
