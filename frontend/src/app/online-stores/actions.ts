@@ -359,6 +359,7 @@ export interface OnlineOrder {
   discount: number;
   discountAmount?: number;
   total: number;
+  customerNote?: string;
   note?: string;
   internalNote?: string;
   items: OnlineOrderItem[];
@@ -369,16 +370,56 @@ export interface OnlineOrder {
 /**
  * Get all orders for an online store
  */
-export async function getOnlineOrders(onlineStoreId: string): Promise<{
+export async function getOnlineOrders(
+  onlineStoreId: string,
+  params?: {
+    status?: string;
+    search?: string;
+    startDate?: string;
+    endDate?: string;
+  }
+): Promise<{
   success: boolean;
   data?: OnlineOrder[];
+  statistics?: {
+    statusCounts: Record<string, number>;
+    total: number;
+  };
   error?: string;
 }> {
   try {
-    const orders = await apiClient.request<OnlineOrder[]>(
-      `/online-stores/${onlineStoreId}/orders`
-    );
-    return { success: true, data: orders };
+    const queryParams = new URLSearchParams();
+    if (params?.status) queryParams.set('status', params.status);
+    if (params?.search) queryParams.set('search', params.search);
+    if (params?.startDate) queryParams.set('startDate', params.startDate);
+    if (params?.endDate) queryParams.set('endDate', params.endDate);
+
+    const query = queryParams.toString();
+    const path = `/online-stores/${onlineStoreId}/orders${query ? `?${query}` : ''}`;
+
+    const result = await apiClient.request<{
+      success?: boolean;
+      data?: OnlineOrder[];
+      orders?: OnlineOrder[];
+      statistics?: {
+        statusCounts: Record<string, number>;
+        total: number;
+      };
+      total?: number;
+    }>(path);
+
+    const data = Array.isArray(result?.data)
+      ? result.data
+      : Array.isArray(result?.orders)
+        ? result.orders
+        : [];
+
+    const statistics = result?.statistics || {
+      statusCounts: {},
+      total: Number(result?.total || data.length),
+    };
+
+    return { success: true, data, statistics };
   } catch (error: unknown) {
     console.error('Error fetching online orders:', error);
     return {
@@ -465,14 +506,28 @@ export async function getShippingZones(onlineStoreId: string): Promise<{
  */
 export async function createShippingZone(
   onlineStoreId: string,
-  data: Omit<ShippingZone, 'id' | 'onlineStoreId' | 'createdAt' | 'updatedAt'>
+  data: {
+    name: string;
+    provinces: string[];
+    isActive: boolean;
+    flatRate?: number;
+    shippingFee?: number;
+    freeShippingThreshold?: number;
+    estimatedDays?: string;
+  }
 ): Promise<{ success: boolean; data?: ShippingZone; error?: string }> {
   try {
+    const payload = {
+      ...data,
+      shippingFee: Number(data.shippingFee ?? data.flatRate ?? 0),
+      estimatedDays: data.estimatedDays || '1-3 ngày',
+    };
+
     const zone = await apiClient.request<ShippingZone>(
       `/online-stores/${onlineStoreId}/shipping-zones`,
       {
         method: 'POST',
-        body: data,
+        body: payload,
       }
     );
     return { success: true, data: zone };

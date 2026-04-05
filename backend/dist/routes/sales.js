@@ -43,6 +43,219 @@ const validateStatus_1 = require("../middleware/validateStatus");
 const router = (0, express_1.Router)();
 router.use(auth_1.authenticate);
 router.use(auth_1.storeContext);
+async function resolveStoreColumnName(tableName) {
+    const row = await (0, db_1.queryOne)(`SELECT TOP 1 c.name AS store_column
+         FROM sys.columns c
+         INNER JOIN sys.objects o ON o.object_id = c.object_id
+         WHERE o.type = 'U'
+           AND o.name = @tableName
+           AND c.name IN ('store_id', 'StoreId', 'StoreID')
+         ORDER BY CASE c.name
+           WHEN 'store_id' THEN 1
+           WHEN 'StoreId' THEN 2
+           WHEN 'StoreID' THEN 3
+           ELSE 4
+         END`, { tableName });
+    if (row?.store_column === 'StoreID') {
+        return 'StoreID';
+    }
+    if (row?.store_column === 'StoreId') {
+        return 'StoreId';
+    }
+    return 'store_id';
+}
+async function ensureCustomerDiscountInfra() {
+    await (0, db_1.query)(`
+        IF OBJECT_ID('CustomerDiscountProfiles', 'U') IS NULL
+        BEGIN
+          CREATE TABLE CustomerDiscountProfiles (
+            id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+            customer_id UNIQUEIDENTIFIER NOT NULL,
+            store_id UNIQUEIDENTIFIER NOT NULL,
+            customer_segment NVARCHAR(50) NOT NULL DEFAULT 'personal',
+            discount_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+            created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+            updated_at DATETIME2 NOT NULL DEFAULT GETDATE()
+          );
+          CREATE UNIQUE INDEX UX_CustomerDiscountProfiles_CustomerStore
+          ON CustomerDiscountProfiles(customer_id, store_id);
+        END
+      `);
+    await (0, db_1.query)(`
+        IF OBJECT_ID('CustomerDiscountTransactions', 'U') IS NULL
+        BEGIN
+          CREATE TABLE CustomerDiscountTransactions (
+            id UNIQUEIDENTIFIER PRIMARY KEY,
+            customer_id UNIQUEIDENTIFIER NOT NULL,
+            store_id UNIQUEIDENTIFIER NOT NULL,
+            amount DECIMAL(18,2) NOT NULL,
+            description NVARCHAR(500) NULL,
+            status NVARCHAR(20) NOT NULL DEFAULT 'pending',
+            paid_at DATETIME2 NULL,
+            payment_note NVARCHAR(500) NULL,
+            created_by UNIQUEIDENTIFIER NULL,
+            source_sale_id UNIQUEIDENTIFIER NULL,
+            created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+            updated_at DATETIME2 NOT NULL DEFAULT GETDATE()
+          );
+          CREATE INDEX IX_CustomerDiscountTransactions_CustomerStore
+          ON CustomerDiscountTransactions(customer_id, store_id, status, created_at DESC);
+        END
+      `);
+    await (0, db_1.query)(`
+        IF COL_LENGTH('CustomerDiscountTransactions', 'source_sale_id') IS NULL
+        BEGIN
+          ALTER TABLE CustomerDiscountTransactions
+          ADD source_sale_id UNIQUEIDENTIFIER NULL;
+        END
+      `);
+    await (0, db_1.query)(`
+        IF COL_LENGTH('CustomerDiscountTransactions', 'invoice_number') IS NULL
+        BEGIN
+          ALTER TABLE CustomerDiscountTransactions ADD invoice_number NVARCHAR(50) NULL;
+        END
+        IF COL_LENGTH('CustomerDiscountTransactions', 'invoice_date') IS NULL
+        BEGIN
+          ALTER TABLE CustomerDiscountTransactions ADD invoice_date DATETIME2 NULL;
+        END
+        IF COL_LENGTH('CustomerDiscountTransactions', 'invoice_total_amount') IS NULL
+        BEGIN
+          ALTER TABLE CustomerDiscountTransactions ADD invoice_total_amount DECIMAL(18,2) NULL;
+        END
+        IF COL_LENGTH('CustomerDiscountTransactions', 'invoice_final_amount') IS NULL
+        BEGIN
+          ALTER TABLE CustomerDiscountTransactions ADD invoice_final_amount DECIMAL(18,2) NULL;
+        END
+        IF COL_LENGTH('CustomerDiscountTransactions', 'discount_rate') IS NULL
+        BEGIN
+          ALTER TABLE CustomerDiscountTransactions ADD discount_rate DECIMAL(7,4) NULL;
+        END
+        IF COL_LENGTH('CustomerDiscountTransactions', 'discount_percent_of_invoice') IS NULL
+        BEGIN
+          ALTER TABLE CustomerDiscountTransactions ADD discount_percent_of_invoice DECIMAL(7,4) NULL;
+        END
+      `);
+    await (0, db_1.query)(`
+        IF NOT EXISTS (
+          SELECT * FROM sys.indexes WHERE name = 'UX_CustomerDiscountTransactions_SourceSale'
+        )
+        BEGIN
+          CREATE UNIQUE INDEX UX_CustomerDiscountTransactions_SourceSale
+          ON CustomerDiscountTransactions(source_sale_id)
+          WHERE source_sale_id IS NOT NULL;
+        END
+      `);
+    await (0, db_1.query)(`
+        IF OBJECT_ID('CustomerDiscountDefaultRates', 'U') IS NULL
+        BEGIN
+          CREATE TABLE CustomerDiscountDefaultRates (
+            customer_segment NVARCHAR(50) PRIMARY KEY,
+            bronze_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+            silver_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+            gold_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+            diamond_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+            updated_at DATETIME2 NOT NULL DEFAULT GETDATE()
+          );
+        END
+      `);
+    const defaultRateSeeds = [
+        { segment: 'personal', bronze: 0, silver: 0, gold: 0, diamond: 0 },
+        { segment: 'worker', bronze: 5, silver: 6, gold: 7, diamond: 8 },
+        { segment: 'business', bronze: 10, silver: 11, gold: 12, diamond: 13 },
+        { segment: 'wholesaler', bronze: 12, silver: 13, gold: 14, diamond: 15 },
+        { segment: 'agency', bronze: 15, silver: 16, gold: 17, diamond: 18 },
+        { segment: 'vip', bronze: 8, silver: 9, gold: 10, diamond: 12 },
+    ];
+    for (const rate of defaultRateSeeds) {
+        await (0, db_1.query)(`IF NOT EXISTS (SELECT 1 FROM CustomerDiscountDefaultRates WHERE customer_segment = @segment)
+           BEGIN
+             INSERT INTO CustomerDiscountDefaultRates
+               (customer_segment, bronze_rate, silver_rate, gold_rate, diamond_rate, updated_at)
+             VALUES
+               (@segment, @bronze, @silver, @gold, @diamond, GETDATE())
+           END`, {
+            segment: rate.segment,
+            bronze: rate.bronze,
+            silver: rate.silver,
+            gold: rate.gold,
+            diamond: rate.diamond,
+        });
+    }
+}
+async function getCustomerCommissionRate(customerId, storeId) {
+    await ensureCustomerDiscountInfra();
+    const discountProfileStoreColumn = await resolveStoreColumnName('CustomerDiscountProfiles');
+    const customerStoreColumn = await resolveStoreColumnName('Customers');
+    const profile = await (0, db_1.queryOne)(`SELECT customer_segment, discount_rate
+         FROM CustomerDiscountProfiles
+         WHERE customer_id = @customerId AND ${discountProfileStoreColumn} = @storeId`, { customerId, storeId });
+    let customerSegment = String(profile?.customer_segment || 'personal').toLowerCase();
+    if (!profile) {
+        const hasCustomerType = await (0, db_1.queryOne)(`SELECT CASE WHEN COL_LENGTH('Customers', 'customer_type') IS NOT NULL THEN 1 ELSE 0 END AS has_column`);
+        if ((hasCustomerType?.has_column || 0) === 1) {
+            const customerTypeRow = await (0, db_1.queryOne)(`SELECT customer_type FROM Customers WHERE id = @customerId AND ${customerStoreColumn} = @storeId`, { customerId, storeId });
+            customerSegment = String(customerTypeRow?.customer_type || customerSegment).toLowerCase();
+        }
+    }
+    let loyaltyTier = 'bronze';
+    const hasLoyaltyTier = await (0, db_1.queryOne)(`SELECT CASE WHEN COL_LENGTH('Customers', 'loyalty_tier') IS NOT NULL THEN 1 ELSE 0 END AS has_column`);
+    if ((hasLoyaltyTier?.has_column || 0) === 1) {
+        const tierRow = await (0, db_1.queryOne)(`SELECT loyalty_tier FROM Customers WHERE id = @customerId AND ${customerStoreColumn} = @storeId`, { customerId, storeId });
+        loyaltyTier = String(tierRow?.loyalty_tier || 'bronze').toLowerCase();
+    }
+    const defaultRate = await (0, db_1.queryOne)(`SELECT bronze_rate, silver_rate, gold_rate, diamond_rate
+         FROM CustomerDiscountDefaultRates
+         WHERE customer_segment = @segment`, { segment: customerSegment });
+    const tierRate = loyaltyTier === 'diamond'
+        ? Number(defaultRate?.diamond_rate || 0)
+        : loyaltyTier === 'gold'
+            ? Number(defaultRate?.gold_rate || 0)
+            : loyaltyTier === 'silver'
+                ? Number(defaultRate?.silver_rate || 0)
+                : Number(defaultRate?.bronze_rate || 0);
+    return profile ? Number(profile.discount_rate || tierRate || 0) : tierRate;
+}
+async function createAutoCustomerCommission(params) {
+    if (!params.customerId || params.saleFinalAmount <= 0) {
+        return;
+    }
+    const rate = await getCustomerCommissionRate(params.customerId, params.storeId);
+    if (!Number.isFinite(rate) || rate <= 0) {
+        return;
+    }
+    const commissionAmount = Math.round(((Number(params.saleFinalAmount) * rate) / 100) * 100) / 100;
+    if (commissionAmount <= 0) {
+        return;
+    }
+    await (0, db_1.query)(`IF @discountPercentOfInvoice > 0
+           AND @amount > 0
+           AND NOT EXISTS (SELECT 1 FROM CustomerDiscountTransactions WHERE source_sale_id = @saleId)
+         BEGIN
+           INSERT INTO CustomerDiscountTransactions
+             (id, customer_id, store_id, amount, description, status, created_by,
+              source_sale_id, invoice_number, invoice_date, invoice_total_amount, invoice_final_amount,
+              discount_rate, discount_percent_of_invoice,
+              created_at, updated_at)
+           VALUES
+             (NEWID(), @customerId, @storeId, @amount, @description, 'pending', @createdBy,
+              @saleId, @invoiceNumber, @invoiceDate, @invoiceTotalAmount, @invoiceFinalAmount,
+              @discountRate, @discountPercentOfInvoice,
+              GETDATE(), GETDATE())
+         END`, {
+        saleId: params.saleId,
+        customerId: params.customerId,
+        storeId: params.storeId,
+        amount: commissionAmount,
+        createdBy: params.userId,
+        invoiceNumber: params.invoiceNumber,
+        invoiceDate: params.saleDate || new Date(),
+        invoiceTotalAmount: Number(params.saleTotalAmount || 0),
+        invoiceFinalAmount: Number(params.saleFinalAmount || 0),
+        discountRate: Number(rate || 0),
+        discountPercentOfInvoice: Number(rate || 0),
+        description: `Hoa hong tu dong ${rate}% tu hoa don ${params.invoiceNumber}`,
+    });
+}
 // Helper function to generate invoice number
 async function generateInvoiceNumber(storeId) {
     const today = new Date();
@@ -451,6 +664,22 @@ router.post('/', validateStatus_1.validateAndNormalizeStatus, async (req, res) =
         console.log('[POST /api/sales] Sale created:', result.sale.id, result.sale.invoiceNumber);
         if (result.conversions.length > 0) {
             console.log('[POST /api/sales] Auto conversions:', result.conversions.length);
+        }
+        // Commission-style discount ledger: record separately, do not affect invoice totals.
+        try {
+            await createAutoCustomerCommission({
+                saleId: result.sale.id,
+                invoiceNumber: result.sale.invoiceNumber,
+                customerId,
+                storeId,
+                userId,
+                saleDate: result.sale.transactionDate ? new Date(result.sale.transactionDate) : undefined,
+                saleTotalAmount: Number(result.sale.totalAmount || 0),
+                saleFinalAmount: Number(result.sale.finalAmount || 0),
+            });
+        }
+        catch (commissionError) {
+            console.error('[POST /api/sales] Commission logging failed (non-blocking):', commissionError);
         }
         res.status(201).json({
             id: result.sale.id,

@@ -51,7 +51,7 @@ export async function getThemeSettings(): Promise<ThemeSettings | null> {
   try {
     const result = await getSettings();
     if (result.success && result.settings) {
-      return result.settings as ThemeSettings;
+      return result.settings as unknown as ThemeSettings;
     }
     return null;
   } catch {

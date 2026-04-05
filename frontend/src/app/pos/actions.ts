@@ -23,6 +23,27 @@ export async function getPOSProducts(): Promise<{
   }
 }
 
+export async function getPOSProductsByStore(storeId?: string): Promise<{
+  success: boolean;
+  products?: Array<Record<string, unknown>>;
+  error?: string;
+}> {
+  try {
+    const response = await apiClient.getProducts();
+    const products = ((response as any).data || response || []) as Array<Record<string, unknown>>;
+    const filtered = storeId
+      ? products.filter((p) => String((p as any).storeId || '') === String(storeId))
+      : products;
+    return { success: true, products: filtered };
+  } catch (error: unknown) {
+    console.error('Error fetching POS products by store:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Đã xảy ra lỗi khi lấy danh sách sản phẩm'
+    };
+  }
+}
+
 /**
  * Get customers for POS
  */
@@ -88,19 +109,19 @@ export async function getPOSActiveShift(): Promise<{
 /**
  * Get products for POS (alias)
  */
-export async function getProducts(params?: { pageSize?: number }): Promise<{
+export async function getProducts(params?: { pageSize?: number; storeId?: string }): Promise<{
   success: boolean;
   data?: Array<Record<string, unknown>>;
   error?: string;
 }> {
-  const result = await getPOSProducts();
+  const result = await getPOSProductsByStore(params?.storeId);
   return { success: result.success, data: result.products, error: result.error };
 }
 
 /**
  * Get product by barcode
  */
-export async function getProductByBarcode(barcode: string): Promise<{
+export async function getProductByBarcode(barcode: string, storeId?: string): Promise<{
   success: boolean;
   product?: Record<string, unknown>;
   error?: string;
@@ -108,7 +129,10 @@ export async function getProductByBarcode(barcode: string): Promise<{
   try {
     const response = await apiClient.getProducts();
     const products = ((response as any).data || response || []) as Array<Record<string, unknown>>;
-    const product = products.find(p => p.barcode === barcode || p.sku === barcode);
+    const product = products.find(p => {
+      const inStore = !storeId || String((p as any).storeId || '') === String(storeId);
+      return inStore && (p.barcode === barcode || p.sku === barcode);
+    });
     if (product) {
       return { success: true, product };
     }

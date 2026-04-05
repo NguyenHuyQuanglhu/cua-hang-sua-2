@@ -52,9 +52,10 @@ export function EditStoreDialog({
   // Pre-fill form when store changes
   useEffect(() => {
     if (store) {
+      const storeWithDescription = store as unknown as { description?: string };
       setFormData({
         name: store.name || '',
-        description: (store as Record<string, unknown>).description as string || '',
+        description: storeWithDescription.description || '',
         address: store.address || '',
         phone: store.phone || '',
       });

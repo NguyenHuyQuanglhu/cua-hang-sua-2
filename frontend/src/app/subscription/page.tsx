@@ -4,28 +4,59 @@ import { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Check, Store, Zap, Crown } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { Check, Store, Zap, Crown, Plus, Edit, Trash2, History } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { apiClient } from '@/lib/api-client';
 import { PaymentDialog } from './components/payment-dialog';
+import { useStore } from '@/contexts/store-context';
+import { formatCurrency } from '@/lib/utils';
 
 interface SubscriptionPlan {
   id: string;
   name: string;
+  description?: string | null;
   maxStores: number;
   price: number;
   features: string[];
-  icon: React.ReactNode;
+  isActive?: boolean;
+  sortOrder?: number;
   popular?: boolean;
 }
 
-  const plans: SubscriptionPlan[] = [
+interface PlanFormState {
+  id: string;
+  name: string;
+  description: string;
+  maxStores: string;
+  price: string;
+  featuresText: string;
+  sortOrder: string;
+  isActive: boolean;
+}
+
+interface PurchaseHistoryItem {
+  id: string;
+  planId: string;
+  planName: string;
+  amount: number;
+  paymentMethod: string;
+  paymentStatus: string;
+  startDate: string | null;
+  endDate: string | null;
+  createdAt: string | null;
+}
+
+const fallbackPlans: SubscriptionPlan[] = [
   {
     id: 'basic',
     name: 'Gói Cơ Bản',
+    description: 'Phù hợp cửa hàng nhỏ mới bắt đầu',
     maxStores: 1,
     price: 199000,
-    icon: <Store className="h-6 w-6" />,
     features: [
       '1 cửa hàng',
       'Quản lý sản phẩm không giới hạn',
@@ -38,9 +69,9 @@ interface SubscriptionPlan {
   {
     id: 'pro',
     name: 'Gói Chuyên Nghiệp',
+    description: 'Phù hợp chuỗi cửa hàng vừa và nhỏ',
     maxStores: 5,
     price: 499000,
-    icon: <Zap className="h-6 w-6" />,
     popular: true,
     features: [
       'Tối đa 5 cửa hàng',
@@ -55,9 +86,9 @@ interface SubscriptionPlan {
   {
     id: 'enterprise',
     name: 'Gói Doanh Nghiệp',
+    description: 'Phù hợp doanh nghiệp lớn, nhiều chi nhánh',
     maxStores: 999,
     price: 1999000,
-    icon: <Crown className="h-6 w-6" />,
     features: [
       'Không giới hạn cửa hàng',
       'Tất cả tính năng Gói Chuyên Nghiệp',
@@ -71,8 +102,35 @@ interface SubscriptionPlan {
   },
 ];
 
+const emptyPlanForm: PlanFormState = {
+  id: '',
+  name: '',
+  description: '',
+  maxStores: '',
+  price: '',
+  featuresText: '',
+  sortOrder: '0',
+  isActive: true,
+};
+
+const getPlanIcon = (planId: string) => {
+  if (planId === 'basic') return <Store className="h-6 w-6" />;
+  if (planId === 'pro') return <Zap className="h-6 w-6" />;
+  if (planId === 'enterprise') return <Crown className="h-6 w-6" />;
+  return <Store className="h-6 w-6" />;
+};
+
+const getStatusBadgeVariant = (status: string) => {
+  if (status === 'completed') return 'default';
+  if (status === 'pending') return 'secondary';
+  return 'destructive';
+};
+
 export default function SubscriptionPage() {
   const { toast } = useToast();
+  const { user } = useStore();
+  const canManagePlans = user?.role === 'owner' || user?.role === 'admin' || user?.role === 'company_manager';
+
   const [currentPlan, setCurrentPlan] = useState<{
     maxStores: number;
     currentStores: number;
@@ -84,15 +142,28 @@ export default function SubscriptionPage() {
     autoRenewal: boolean;
     status: string;
   } | null>(null);
+  const [plans, setPlans] = useState<SubscriptionPlan[]>(fallbackPlans);
+  const [history, setHistory] = useState<PurchaseHistoryItem[]>([]);
+
   const [loading, setLoading] = useState(true);
+  const [plansLoading, setPlansLoading] = useState(true);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const [upgrading, setUpgrading] = useState<string | null>(null);
   const [togglingAutoRenewal, setTogglingAutoRenewal] = useState(false);
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlan | null>(null);
 
+  const [planDialogOpen, setPlanDialogOpen] = useState(false);
+  const [editingPlan, setEditingPlan] = useState<SubscriptionPlan | null>(null);
+  const [planForm, setPlanForm] = useState<PlanFormState>(emptyPlanForm);
+  const [savingPlan, setSavingPlan] = useState(false);
+  const [deletingPlanId, setDeletingPlanId] = useState<string | null>(null);
+
   useEffect(() => {
-    fetchCurrentPlan();
-  }, []);
+    fetchCurrentPlan().finally(() => setLoading(false));
+    fetchPlans();
+    fetchHistory();
+  }, [canManagePlans]);
 
   const fetchCurrentPlan = async () => {
     try {
@@ -111,8 +182,146 @@ export default function SubscriptionPage() {
       setCurrentPlan(response);
     } catch (error) {
       console.error('Fetch current plan error:', error);
+    }
+  };
+
+  const fetchPlans = async () => {
+    setPlansLoading(true);
+    try {
+      const response = await apiClient.request<{ plans: SubscriptionPlan[] }>(
+        `/subscription/plans${canManagePlans ? '?includeInactive=true' : ''}`
+      );
+      const mappedPlans = (response.plans || []).map((plan) => ({
+        ...plan,
+        popular: plan.id === 'pro',
+      }));
+      setPlans(mappedPlans.length > 0 ? mappedPlans : fallbackPlans);
+    } catch (error) {
+      console.error('Fetch subscription plans error:', error);
+      setPlans(fallbackPlans);
     } finally {
-      setLoading(false);
+      setPlansLoading(false);
+    }
+  };
+
+  const fetchHistory = async () => {
+    setHistoryLoading(true);
+    try {
+      const response = await apiClient.request<{ history: PurchaseHistoryItem[] }>('/subscription/history?limit=20');
+      setHistory(response.history || []);
+    } catch (error) {
+      console.error('Fetch subscription history error:', error);
+      setHistory([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const openCreatePlanDialog = () => {
+    setEditingPlan(null);
+    setPlanForm(emptyPlanForm);
+    setPlanDialogOpen(true);
+  };
+
+  const openEditPlanDialog = (plan: SubscriptionPlan) => {
+    setEditingPlan(plan);
+    setPlanForm({
+      id: plan.id,
+      name: plan.name,
+      description: plan.description || '',
+      maxStores: String(plan.maxStores),
+      price: String(plan.price),
+      featuresText: (plan.features || []).join('\n'),
+      sortOrder: String(plan.sortOrder ?? 0),
+      isActive: plan.isActive !== false,
+    });
+    setPlanDialogOpen(true);
+  };
+
+  const handleSavePlan = async () => {
+    const maxStores = Number(planForm.maxStores);
+    const price = Number(planForm.price);
+    const sortOrder = Number(planForm.sortOrder || '0');
+    const features = planForm.featuresText
+      .split('\n')
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (!planForm.name.trim()) {
+      toast({ title: 'Thiếu dữ liệu', description: 'Tên gói dịch vụ là bắt buộc', variant: 'destructive' });
+      return;
+    }
+
+    if (!Number.isFinite(maxStores) || maxStores <= 0) {
+      toast({ title: 'Dữ liệu không hợp lệ', description: 'Số cửa hàng tối đa phải lớn hơn 0', variant: 'destructive' });
+      return;
+    }
+
+    if (!Number.isFinite(price) || price < 0) {
+      toast({ title: 'Dữ liệu không hợp lệ', description: 'Giá gói phải lớn hơn hoặc bằng 0', variant: 'destructive' });
+      return;
+    }
+
+    setSavingPlan(true);
+    try {
+      const payload = {
+        id: planForm.id.trim() || undefined,
+        name: planForm.name.trim(),
+        description: planForm.description.trim() || null,
+        maxStores,
+        price,
+        features,
+        sortOrder,
+        isActive: planForm.isActive,
+      };
+
+      if (editingPlan) {
+        await apiClient.request(`/subscription/plans/${editingPlan.id}`, {
+          method: 'PUT',
+          body: payload,
+        });
+        toast({ title: 'Đã cập nhật', description: 'Đã cập nhật gói dịch vụ thành công' });
+      } else {
+        await apiClient.request('/subscription/plans', {
+          method: 'POST',
+          body: payload,
+        });
+        toast({ title: 'Đã tạo gói mới', description: 'Đã thêm gói dịch vụ mới thành công' });
+      }
+
+      setPlanDialogOpen(false);
+      await fetchPlans();
+    } catch (error: any) {
+      toast({
+        title: 'Lỗi lưu gói',
+        description: error.message || 'Không thể lưu gói dịch vụ',
+        variant: 'destructive',
+      });
+    } finally {
+      setSavingPlan(false);
+    }
+  };
+
+  const handleDeletePlan = async (plan: SubscriptionPlan) => {
+    if (!confirm(`Bạn có chắc muốn xóa gói ${plan.name}?`)) {
+      return;
+    }
+
+    setDeletingPlanId(plan.id);
+    try {
+      await apiClient.request(`/subscription/plans/${plan.id}`, {
+        method: 'DELETE',
+      });
+      toast({ title: 'Đã xóa gói', description: `Đã xóa gói ${plan.name}` });
+      await fetchPlans();
+    } catch (error: any) {
+      toast({
+        title: 'Không thể xóa gói',
+        description: error.message || 'Gói đang được sử dụng hoặc đã phát sinh lỗi hệ thống',
+        variant: 'destructive',
+      });
+    } finally {
+      setDeletingPlanId(null);
     }
   };
 
@@ -249,6 +458,7 @@ export default function SubscriptionPage() {
       
       setPaymentDialogOpen(false);
       await fetchCurrentPlan();
+      await fetchHistory();
     } catch (error: any) {
       toast({
         title: 'Lỗi thanh toán',
@@ -268,8 +478,118 @@ export default function SubscriptionPage() {
     );
   }
 
+  const visiblePlans = plans.filter((plan) => plan.isActive !== false);
+
   return (
     <div className="container mx-auto p-6">
+      <Dialog open={planDialogOpen} onOpenChange={setPlanDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{editingPlan ? 'Cập nhật gói dịch vụ' : 'Thêm gói dịch vụ mới'}</DialogTitle>
+            <DialogDescription>
+              {editingPlan
+                ? 'Chỉnh sửa thông tin gói dịch vụ hiện có.'
+                : 'Tạo gói dịch vụ mới để người dùng có thể mua.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid md:grid-cols-2 gap-4">
+            {!editingPlan && (
+              <div className="space-y-2">
+                <Label htmlFor="plan-id">Mã gói (không bắt buộc)</Label>
+                <Input
+                  id="plan-id"
+                  placeholder="vd: starter"
+                  value={planForm.id}
+                  onChange={(e) => setPlanForm((prev) => ({ ...prev, id: e.target.value }))}
+                />
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label htmlFor="plan-name">Tên gói</Label>
+              <Input
+                id="plan-name"
+                value={planForm.name}
+                onChange={(e) => setPlanForm((prev) => ({ ...prev, name: e.target.value }))}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="plan-max-stores">Số cửa hàng tối đa</Label>
+              <Input
+                id="plan-max-stores"
+                type="number"
+                min={1}
+                value={planForm.maxStores}
+                onChange={(e) => setPlanForm((prev) => ({ ...prev, maxStores: e.target.value }))}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="plan-price">Giá/tháng (VNĐ)</Label>
+              <Input
+                id="plan-price"
+                type="number"
+                min={0}
+                value={planForm.price}
+                onChange={(e) => setPlanForm((prev) => ({ ...prev, price: e.target.value }))}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="plan-sort-order">Thứ tự hiển thị</Label>
+              <Input
+                id="plan-sort-order"
+                type="number"
+                value={planForm.sortOrder}
+                onChange={(e) => setPlanForm((prev) => ({ ...prev, sortOrder: e.target.value }))}
+              />
+            </div>
+
+            <div className="space-y-2 md:col-span-2">
+              <Label htmlFor="plan-description">Mô tả</Label>
+              <Input
+                id="plan-description"
+                value={planForm.description}
+                onChange={(e) => setPlanForm((prev) => ({ ...prev, description: e.target.value }))}
+              />
+            </div>
+
+            <div className="space-y-2 md:col-span-2">
+              <Label htmlFor="plan-features">Tính năng (mỗi dòng 1 tính năng)</Label>
+              <Textarea
+                id="plan-features"
+                rows={6}
+                value={planForm.featuresText}
+                onChange={(e) => setPlanForm((prev) => ({ ...prev, featuresText: e.target.value }))}
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between rounded-lg border p-3 text-sm">
+            <span>Trạng thái gói</span>
+            <Button
+              type="button"
+              variant={planForm.isActive ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setPlanForm((prev) => ({ ...prev, isActive: !prev.isActive }))}
+            >
+              {planForm.isActive ? 'Đang hoạt động' : 'Đã tắt'}
+            </Button>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPlanDialogOpen(false)} disabled={savingPlan}>
+              Hủy
+            </Button>
+            <Button onClick={handleSavePlan} disabled={savingPlan}>
+              {savingPlan ? 'Đang lưu...' : editingPlan ? 'Cập nhật' : 'Tạo gói'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <PaymentDialog
         isOpen={paymentDialogOpen}
         onOpenChange={setPaymentDialogOpen}
@@ -280,10 +600,20 @@ export default function SubscriptionPage() {
       />
       
       <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">Quản Lý Gói Dịch Vụ</h1>
-        <p className="text-muted-foreground">
-          Nâng cấp gói để tạo thêm cửa hàng và mở khóa nhiều tính năng hơn
-        </p>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold mb-2">Quản Lý Gói Dịch Vụ</h1>
+            <p className="text-muted-foreground">
+              Nâng cấp gói để tạo thêm cửa hàng và mở khóa nhiều tính năng hơn
+            </p>
+          </div>
+          {canManagePlans && (
+            <Button onClick={openCreatePlanDialog}>
+              <Plus className="h-4 w-4 mr-2" />
+              Thêm gói
+            </Button>
+          )}
+        </div>
       </div>
 
       {currentPlan && (
@@ -476,22 +806,11 @@ export default function SubscriptionPage() {
       )}
 
       <div className="grid md:grid-cols-3 gap-6">
-        {plans.map((plan) => {
+        {visiblePlans.map((plan) => {
           const isCurrentPlan = currentPlan?.planId === plan.id;
-          
-          // Determine if user can upgrade to this plan
-          // Can upgrade if:
-          // 1. Plan has more stores than current plan (higher tier)
-          // 2. Current plan is expired
-          // 3. Current plan is cancelled
-          const canUpgrade = currentPlan && (
-            currentPlan.maxStores < plan.maxStores || 
-            currentPlan.isExpired ||
-            currentPlan.status === 'cancelled'
-          );
-          
-          // Check if this is a lower tier plan (should hide upgrade button)
-          const isLowerTier = currentPlan && currentPlan.maxStores > plan.maxStores;
+          const isPlanExpiredOrCancelled = Boolean(currentPlan?.isExpired || currentPlan?.status === 'cancelled');
+          const isLowerTier = Boolean(currentPlan && currentPlan.maxStores > plan.maxStores);
+          const canPurchasePlan = Boolean(currentPlan) && (!isCurrentPlan || isPlanExpiredOrCancelled);
 
           return (
             <Card
@@ -499,7 +818,7 @@ export default function SubscriptionPage() {
               id={`plan-${plan.id}`}
               className={`relative ${
                 plan.popular ? 'border-primary shadow-lg' : ''
-              } ${isCurrentPlan ? 'border-green-500' : ''}`}
+              } ${isCurrentPlan ? 'border-green-500' : ''} flex h-full flex-col`}
             >
               {plan.popular && (
                 <div className="absolute -top-3 left-1/2 -translate-x-1/2">
@@ -513,11 +832,28 @@ export default function SubscriptionPage() {
               )}
 
               <CardHeader>
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="p-2 bg-primary/10 rounded-lg text-primary">
-                    {plan.icon}
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-primary/10 rounded-lg text-primary">
+                      {getPlanIcon(plan.id)}
+                    </div>
+                    <CardTitle>{plan.name}</CardTitle>
                   </div>
-                  <CardTitle>{plan.name}</CardTitle>
+                  {canManagePlans && (
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={() => openEditPlanDialog(plan)}>
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => handleDeletePlan(plan)}
+                        disabled={deletingPlanId === plan.id}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-baseline gap-1">
                   <span className="text-3xl font-bold">
@@ -527,8 +863,8 @@ export default function SubscriptionPage() {
                 </div>
               </CardHeader>
 
-              <CardContent className="space-y-4">
-                <ul className="space-y-2">
+              <CardContent className="flex flex-1 flex-col gap-4">
+                <ul className="space-y-2 flex-1">
                   {plan.features.map((feature, index) => (
                     <li key={index} className="flex items-start gap-2">
                       <Check className="h-5 w-5 text-green-500 shrink-0 mt-0.5" />
@@ -537,37 +873,74 @@ export default function SubscriptionPage() {
                   ))}
                 </ul>
 
-                {/* Only show button if not a lower tier plan */}
-                {!isLowerTier && (
+                {isLowerTier && !isCurrentPlan ? (
+                  <div className="text-sm text-muted-foreground text-center p-3 bg-muted/50 rounded mt-auto">
+                    Bạn đang sử dụng gói cao hơn
+                  </div>
+                ) : (
                   <Button
-                    className="w-full"
-                    variant={plan.popular ? 'default' : 'outline'}
-                    disabled={isCurrentPlan || !canUpgrade || upgrading !== null}
+                    className="w-full h-11 mt-auto"
+                    variant={canPurchasePlan ? 'default' : 'secondary'}
+                    disabled={!canPurchasePlan || upgrading !== null}
                     onClick={() => handleUpgrade(plan.id, plan.maxStores)}
                   >
                     {upgrading === plan.id ? (
                       'Đang xử lý...'
+                    ) : isCurrentPlan && isPlanExpiredOrCancelled ? (
+                      'Mua lại gói này'
                     ) : isCurrentPlan ? (
                       'Gói hiện tại'
-                    ) : canUpgrade ? (
-                      'Nâng cấp ngay'
                     ) : (
-                      'Không khả dụng'
+                      'Mua gói này'
                     )}
                   </Button>
-                )}
-                
-                {/* Show message for lower tier plans */}
-                {isLowerTier && !isCurrentPlan && (
-                  <div className="text-sm text-muted-foreground text-center p-3 bg-muted/50 rounded">
-                    Bạn đang sử dụng gói cao hơn
-                  </div>
                 )}
               </CardContent>
             </Card>
           );
         })}
       </div>
+
+      <Card className="mt-8">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <History className="h-5 w-5" />
+            Lịch sử mua gói dịch vụ
+          </CardTitle>
+          <CardDescription>Lưu lại toàn bộ giao dịch mua/gia hạn gói dịch vụ của tài khoản.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {historyLoading ? (
+            <div className="text-sm text-muted-foreground">Đang tải lịch sử mua...</div>
+          ) : history.length === 0 ? (
+            <div className="text-sm text-muted-foreground">Chưa có giao dịch mua gói dịch vụ.</div>
+          ) : (
+            <div className="space-y-3">
+              {history.map((item) => (
+                <div key={item.id} className="border rounded-lg p-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <div className="font-semibold">{item.planName}</div>
+                      <div className="text-sm text-muted-foreground">
+                        {item.createdAt ? new Date(item.createdAt).toLocaleString('vi-VN') : 'N/A'}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-semibold">{formatCurrency(item.amount)}</div>
+                      <Badge variant={getStatusBadgeVariant(item.paymentStatus)}>{item.paymentStatus}</Badge>
+                    </div>
+                  </div>
+                  <div className="text-sm text-muted-foreground mt-2">
+                    Thanh toán: {item.paymentMethod} | Thời hạn:{' '}
+                    {item.startDate ? new Date(item.startDate).toLocaleDateString('vi-VN') : 'N/A'} -{' '}
+                    {item.endDate ? new Date(item.endDate).toLocaleDateString('vi-VN') : 'N/A'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="mt-8 p-6 bg-muted rounded-lg">
         <h3 className="font-semibold mb-3 text-lg">📋 Lưu ý quan trọng:</h3>

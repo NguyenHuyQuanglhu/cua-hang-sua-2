@@ -50,6 +50,46 @@ export interface CreateSaleResult {
  * Handles sales transactions with automatic inventory deduction and unit conversion
  */
 export class SalesService {
+  private async resolvePreferredColumnName(
+    tableName: string,
+    candidates: string[]
+  ): Promise<string | null> {
+    if (!candidates.length) {
+      return null;
+    }
+
+    const quotedCandidates = candidates
+      .map((name) => `'${name.replace(/'/g, "''")}'`)
+      .join(', ');
+
+    const priorityCase = candidates
+      .map((name, idx) => `WHEN '${name.replace(/'/g, "''")}' THEN ${idx + 1}`)
+      .join(' ');
+
+    const row = await queryOne<{ column_name: string }>(
+      `SELECT TOP 1 c.name AS column_name
+       FROM sys.columns c
+       INNER JOIN sys.objects o ON o.object_id = c.object_id
+       WHERE o.type = 'U'
+         AND o.name = @tableName
+         AND c.name IN (${quotedCandidates})
+       ORDER BY CASE c.name ${priorityCase} ELSE 999 END`,
+      { tableName }
+    );
+
+    return row?.column_name || null;
+  }
+
+  private async resolveStoreColumnName(tableName: string): Promise<'store_id' | 'StoreId' | 'StoreID' | null> {
+    const row = await this.resolvePreferredColumnName(tableName, ['store_id', 'StoreId', 'StoreID']);
+
+    if (row === 'store_id' || row === 'StoreId' || row === 'StoreID') {
+      return row;
+    }
+
+    return null;
+  }
+
   /**
    * Generate a unique invoice number
    */
@@ -101,6 +141,7 @@ export class SalesService {
       // Check inventory availability for all items first
       // Accumulate requested quantities by product and unit
       const requestedQuantities = new Map<string, number>();
+      let attemptedInventorySync = false;
 
       for (const item of saleData.items) {
         const unitId = item.unitId || await this.getDefaultUnitId(item.productId, storeId);
@@ -119,11 +160,33 @@ export class SalesService {
           requestedQty: totalQty
         });
 
-        const available = await inventoryService.checkAvailableQuantity(
+        let available = await inventoryService.checkAvailableQuantity(
           productId,
           storeId,
           unitId
         );
+
+        // Legacy data can have stock in Products.stock_quantity but missing ProductInventory rows.
+        // Sync once and re-check before failing the sale.
+        if (available < totalQty && !attemptedInventorySync) {
+          attemptedInventorySync = true;
+          try {
+            await inventoryService.syncAllInventory(storeId);
+            available = await inventoryService.checkAvailableQuantity(
+              productId,
+              storeId,
+              unitId
+            );
+            console.log('[SalesService] Stock recheck after sync:', {
+              productId,
+              unitId,
+              available,
+              requestedQty: totalQty,
+            });
+          } catch (syncError) {
+            console.error('[SalesService] Inventory sync before stock check failed:', syncError);
+          }
+        }
 
         console.log('[SalesService] Available stock:', available);
 
@@ -219,6 +282,19 @@ export class SalesService {
       const items: SalesItem[] = [];
       const allConversions: UnitConversionLog[] = [];
 
+      const salesItemsTransactionColumn =
+        (await this.resolvePreferredColumnName('SalesItems', ['sales_transaction_id', 'SalesTransactionId', 'SalesTransactionID'])) ||
+        'sales_transaction_id';
+      const salesItemsProductColumn =
+        (await this.resolvePreferredColumnName('SalesItems', ['product_id', 'ProductId', 'ProductID'])) ||
+        'product_id';
+      const salesItemsUnitColumn =
+        (await this.resolvePreferredColumnName('SalesItems', ['unit_id', 'UnitId', 'UnitID'])) ||
+        'unit_id';
+      const salesItemsCreatedAtColumn =
+        (await this.resolvePreferredColumnName('SalesItems', ['created_at', 'CreatedAt'])) ||
+        'created_at';
+
       for (const itemData of saleData.items) {
         const itemId = crypto.randomUUID();
         const unitId = itemData.unitId || await this.getDefaultUnitId(itemData.productId, storeId);
@@ -226,7 +302,7 @@ export class SalesService {
         // Create sale item
         await query(
           `INSERT INTO SalesItems 
-           (id, sales_transaction_id, product_id, quantity, price, unit_id, created_at)
+           (id, ${salesItemsTransactionColumn}, ${salesItemsProductColumn}, quantity, price, ${salesItemsUnitColumn}, ${salesItemsCreatedAtColumn})
            VALUES (@id, @salesTransactionId, @productId, @quantity, @price, @unitId, @createdAt)`,
           {
             id: itemId,
@@ -400,16 +476,22 @@ export class SalesService {
       }
 
       // Get sale items
+      const salesItemsTransactionColumn =
+        (await this.resolvePreferredColumnName('SalesItems', ['sales_transaction_id', 'SalesTransactionId', 'SalesTransactionID'])) ||
+        'sales_transaction_id';
+
       const items = await query<any>(
-        `SELECT * FROM SalesItems WHERE sales_transaction_id = @salesTransactionId`,
+        `SELECT * FROM SalesItems WHERE ${salesItemsTransactionColumn} = @salesTransactionId`,
         { salesTransactionId: saleId }
       );
 
       // Restore inventory for each item
       for (const item of items) {
-        const unitId = item.unit_id || await this.getDefaultUnitId(item.product_id, storeId);
+        const itemProductId = item.product_id || item.ProductId || item.ProductID;
+        const itemUnitId = item.unit_id || item.UnitId || item.UnitID;
+        const unitId = itemUnitId || await this.getDefaultUnitId(itemProductId, storeId);
         await inventoryService.restoreInventory(
-          item.product_id,
+          itemProductId,
           storeId,
           item.quantity,
           unitId
@@ -456,24 +538,114 @@ export class SalesService {
     productId: string,
     storeId: string
   ): Promise<string> {
-    const product = await queryOne<{ default_sales_unit_id: string; unit_id: string }>(
-      `SELECT default_sales_unit_id, unit_id FROM Products 
-       WHERE id = @productId AND store_id = @storeId`,
+    const productsIdColumn =
+      (await this.resolvePreferredColumnName('Products', ['id', 'Id', 'ID', 'ProductId', 'ProductID', 'product_id'])) ||
+      'id';
+    const productsDefaultSalesUnitColumn = await this.resolvePreferredColumnName('Products', [
+      'default_sales_unit_id',
+      'defaultSalesUnitId',
+      'DefaultSalesUnitId',
+      'DefaultSalesUnitID'
+    ]);
+    const productsUnitColumn = await this.resolvePreferredColumnName('Products', ['unit_id', 'unitId', 'UnitId', 'UnitID']);
+
+    const defaultSalesUnitSelect = productsDefaultSalesUnitColumn
+      ? `p.${productsDefaultSalesUnitColumn} AS default_sales_unit_id`
+      : 'NULL AS default_sales_unit_id';
+    const unitSelect = productsUnitColumn
+      ? `p.${productsUnitColumn} AS unit_id`
+      : 'NULL AS unit_id';
+
+    const productStoreColumn = await this.resolveStoreColumnName('Products');
+    const productStoreSelect = productStoreColumn ? `p.${productStoreColumn} AS store_id` : 'NULL AS store_id';
+
+    const product = await queryOne<{ default_sales_unit_id: string | null; unit_id: string | null; store_id: string | null }>(
+      `SELECT TOP 1 ${defaultSalesUnitSelect}, ${unitSelect}
+      , ${productStoreSelect}
+       FROM Products p
+       WHERE (
+         p.${productsIdColumn} = @productId
+         OR CONVERT(NVARCHAR(36), p.${productsIdColumn}) = @productId
+         OR LOWER(CONVERT(NVARCHAR(36), p.${productsIdColumn})) = LOWER(@productId)
+       )
+       ORDER BY CASE WHEN ${productStoreColumn ? `p.${productStoreColumn}` : 'NULL'} = @storeId THEN 0 ELSE 1 END`,
       { productId, storeId }
     );
 
-    if (!product) {
-      throw new Error(`Product ${productId} not found`);
+    const directUnitId = product?.default_sales_unit_id || product?.unit_id;
+    if (directUnitId) {
+      return directUnitId;
     }
 
-    // Ưu tiên sử dụng default_sales_unit_id, fallback về unit_id
-    const unitId = product.default_sales_unit_id || product.unit_id;
-    
-    if (!unitId) {
-      throw new Error(`Product ${productId} does not have a unit_id configured`);
+    if (product) {
+      const unitsIdColumn = (await this.resolvePreferredColumnName('Units', ['id', 'Id', 'ID'])) || 'id';
+      const unitsStoreColumn = await this.resolveStoreColumnName('Units');
+
+      const fallbackUnit = await queryOne<{ unit_id: string }>(
+        `SELECT TOP 1 u.${unitsIdColumn} AS unit_id
+         FROM Units u
+         ${unitsStoreColumn ? `WHERE u.${unitsStoreColumn} = @storeId` : ''}
+         ORDER BY u.${unitsIdColumn}`,
+        unitsStoreColumn ? { storeId } : {}
+      );
+
+      if (fallbackUnit?.unit_id) {
+        const updateFragments: string[] = [];
+        if (productsUnitColumn) {
+          updateFragments.push(`${productsUnitColumn} = COALESCE(${productsUnitColumn}, @fallbackUnitId)`);
+        }
+        if (productsDefaultSalesUnitColumn) {
+          updateFragments.push(`${productsDefaultSalesUnitColumn} = COALESCE(${productsDefaultSalesUnitColumn}, @fallbackUnitId)`);
+        }
+
+        if (updateFragments.length > 0) {
+          await query(
+            `UPDATE Products
+             SET ${updateFragments.join(', ')}
+             WHERE ${productsIdColumn} = @productId`,
+            { productId, fallbackUnitId: fallbackUnit.unit_id }
+          );
+        }
+
+        return fallbackUnit.unit_id;
+      }
+
+      throw new Error(`Product ${productId} is missing unit configuration for store ${storeId}`);
     }
 
-    return unitId;
+    const productUnitsProductColumn = await this.resolvePreferredColumnName('ProductUnits', ['product_id', 'ProductId', 'ProductID']);
+    const productUnitsStoreColumn = await this.resolveStoreColumnName('ProductUnits');
+    const productUnitsConversionUnitColumn = await this.resolvePreferredColumnName('ProductUnits', ['conversion_unit_id', 'ConversionUnitId', 'ConversionUnitID']);
+    const productUnitsBaseUnitColumn = await this.resolvePreferredColumnName('ProductUnits', ['base_unit_id', 'BaseUnitId', 'BaseUnitID']);
+    const productUnitsActiveColumn = await this.resolvePreferredColumnName('ProductUnits', ['is_active', 'IsActive']);
+
+    if (productUnitsProductColumn && (productUnitsConversionUnitColumn || productUnitsBaseUnitColumn)) {
+      const activeFilter = productUnitsActiveColumn ? `AND (pu.${productUnitsActiveColumn} = 1 OR pu.${productUnitsActiveColumn} IS NULL)` : '';
+      const storeFilter = productUnitsStoreColumn ? `AND pu.${productUnitsStoreColumn} = @storeId` : '';
+      const conversionSelect = productUnitsConversionUnitColumn
+        ? `pu.${productUnitsConversionUnitColumn} AS conversion_unit_id`
+        : 'NULL AS conversion_unit_id';
+      const baseSelect = productUnitsBaseUnitColumn
+        ? `pu.${productUnitsBaseUnitColumn} AS base_unit_id`
+        : 'NULL AS base_unit_id';
+
+      const productUnitRow = await queryOne<{ conversion_unit_id: string | null; base_unit_id: string | null }>(
+        `SELECT TOP 1 ${conversionSelect}, ${baseSelect}
+         FROM ProductUnits pu
+         WHERE pu.${productUnitsProductColumn} = @productId
+           ${storeFilter}
+           ${activeFilter}
+         ORDER BY CASE WHEN ${productUnitsConversionUnitColumn ? `pu.${productUnitsConversionUnitColumn}` : 'NULL'} IS NOT NULL THEN 0 ELSE 1 END`,
+        { productId, storeId }
+      );
+
+      const unitFromProductUnits = productUnitRow?.conversion_unit_id || productUnitRow?.base_unit_id;
+      if (unitFromProductUnits) {
+        return unitFromProductUnits;
+      }
+    }
+
+    throw new Error(`Product ${productId} not found for store ${storeId}`);
   }
 
   /**

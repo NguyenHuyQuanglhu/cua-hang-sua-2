@@ -89,6 +89,11 @@ interface UserWithStores {
   stores: UserStoreAssignment[];
   createdAt: string;
   updatedAt?: string;
+  subscriptionPlanId?: string;
+  subscriptionMonths?: number;
+  autoRenewal?: boolean;
+  subscriptionStartDate?: string;
+  subscriptionEndDate?: string;
 }
 
 type StatusFilter = 'all' | 'active' | 'inactive';
@@ -134,7 +139,8 @@ export default function UsersPage() {
   // Get manageable roles for current user
   const manageableRoles = useMemo(() => {
     if (!currentUserRole) return [];
-    return getManageableRoles(currentUserRole as UserRole);
+    const normalizedRole = currentUserRole === 'admin' ? 'owner' : currentUserRole;
+    return getManageableRoles(normalizedRole as UserRole);
   }, [currentUserRole]);
 
   const fetchUsers = useCallback(async () => {

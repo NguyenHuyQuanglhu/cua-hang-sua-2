@@ -204,7 +204,7 @@ export function ProductForm({ isOpen, onOpenChange, product, categories, units }
 
   useEffect(() => {
     if (isOpen) {
-        const formData = product
+        const formData: ProductFormValues = product
                 ? {
                     name: product.name,
                     barcode: product.barcode || '',

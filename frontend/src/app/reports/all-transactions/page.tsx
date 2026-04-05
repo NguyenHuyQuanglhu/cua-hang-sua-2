@@ -3,7 +3,7 @@
 import * as React from "react"
 import { useState, useMemo, useEffect } from "react"
 import Link from "next/link"
-import { Search, ArrowUp, ArrowDown, File, Calendar as CalendarIcon, TrendingUp, TrendingDown, DollarSign, Package } from "lucide-react"
+import { Search, ArrowUp, ArrowDown, File, Calendar as CalendarIcon, TrendingUp, TrendingDown, DollarSign, Package, Sparkles } from "lucide-react"
 import * as xlsx from 'xlsx';
 import { DateRange } from "react-day-picker"
 import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, startOfYear, endOfYear, startOfQuarter, endOfQuarter } from "date-fns"
@@ -41,7 +41,19 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
-type TransactionType = 'sale' | 'purchase' | 'customer_payment' | 'supplier_payment';
+type TransactionType = 'sale' | 'purchase' | 'customer_payment' | 'supplier_payment' | 'subscription_purchase';
+
+interface SubscriptionHistoryItem {
+  id: string;
+  planId: string;
+  planName: string;
+  amount: number;
+  paymentMethod: string;
+  paymentStatus: string;
+  startDate: string | null;
+  endDate: string | null;
+  createdAt: string | null;
+}
 
 interface UnifiedTransaction {
   id: string;
@@ -73,6 +85,7 @@ export default function AllTransactionsPage() {
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [customerPayments, setCustomerPayments] = useState<Payment[]>([]);
   const [supplierPayments, setSupplierPayments] = useState<any[]>([]);
+  const [subscriptionPurchases, setSubscriptionPurchases] = useState<SubscriptionHistoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -82,17 +95,19 @@ export default function AllTransactionsPage() {
       try {
         setIsLoading(true);
         
-        const [salesData, purchasesData, paymentsData, supplierPaymentsData] = await Promise.all([
+        const [salesData, purchasesData, paymentsData, supplierPaymentsData, subscriptionHistoryData] = await Promise.all([
           apiClient.getSales(),
           apiClient.getPurchases(),
           apiClient.getPayments(),
           apiClient.getSupplierPayments(),
+          apiClient.request<{ history: SubscriptionHistoryItem[] }>('/subscription/history?limit=200'),
         ]);
 
         setSales(Array.isArray(salesData) ? salesData : (salesData as any).data || []);
         setPurchases(Array.isArray(purchasesData) ? purchasesData : (purchasesData as any).data || []);
         setCustomerPayments(Array.isArray(paymentsData) ? paymentsData : (paymentsData as any).data || []);
         setSupplierPayments(Array.isArray(supplierPaymentsData) ? supplierPaymentsData : (supplierPaymentsData as any).data || []);
+        setSubscriptionPurchases(subscriptionHistoryData?.history || []);
         
         setIsLoading(false);
       } catch (error) {
@@ -175,8 +190,23 @@ export default function AllTransactionsPage() {
       });
     });
 
+    // Add subscription purchases
+    subscriptionPurchases.forEach(subscription => {
+      transactions.push({
+        id: `subscription-purchase-${subscription.id}`,
+        date: new Date(subscription.createdAt || subscription.startDate || new Date().toISOString()),
+        type: 'subscription_purchase',
+        partnerName: subscription.planName || subscription.planId || 'Gói dịch vụ',
+        partnerId: subscription.planId || '',
+        reference: `Mua gói ${subscription.planName || subscription.planId}`,
+        amount: subscription.amount || 0,
+        notes: `Thanh toán: ${subscription.paymentMethod || 'N/A'} | Trạng thái: ${subscription.paymentStatus || 'N/A'}`,
+        originalData: subscription,
+      });
+    });
+
     return transactions;
-  }, [sales, purchases, customerPayments, supplierPayments]);
+  }, [sales, purchases, customerPayments, supplierPayments, subscriptionPurchases]);
 
   const filteredTransactions = useMemo(() => {
     let filtered = unifiedTransactions;
@@ -271,6 +301,7 @@ export default function AllTransactionsPage() {
       case 'purchase': return 'Nhập hàng';
       case 'customer_payment': return 'Thu tiền KH';
       case 'supplier_payment': return 'Trả tiền NCC';
+      case 'subscription_purchase': return 'Mua gói dịch vụ';
     }
   };
 
@@ -280,6 +311,7 @@ export default function AllTransactionsPage() {
       case 'purchase': return <Package className="h-4 w-4" />;
       case 'customer_payment': return <DollarSign className="h-4 w-4" />;
       case 'supplier_payment': return <TrendingDown className="h-4 w-4" />;
+      case 'subscription_purchase': return <Sparkles className="h-4 w-4" />;
     }
   };
 
@@ -289,6 +321,7 @@ export default function AllTransactionsPage() {
       case 'purchase': return 'secondary';
       case 'customer_payment': return 'outline';
       case 'supplier_payment': return 'destructive';
+      case 'subscription_purchase': return 'outline';
     }
   };
 
@@ -332,6 +365,9 @@ export default function AllTransactionsPage() {
         case 'supplier_payment':
           acc.totalSupplierPayments += tx.amount;
           break;
+        case 'subscription_purchase':
+          acc.totalSubscriptionPurchases += tx.amount;
+          break;
       }
       return acc;
     }, {
@@ -342,6 +378,7 @@ export default function AllTransactionsPage() {
       totalRevenue: 0, // Tổng thu = bán hàng + thanh toán công nợ
       totalPurchaseAmount: 0, // Tổng tiền nhập hàng
       totalPurchasePaid: 0, // Tổng tiền đã trả NCC khi nhập
+      totalSubscriptionPurchases: 0, // Tổng tiền mua gói dịch vụ
     });
   }, [sortedTransactions]);
 
@@ -456,6 +493,7 @@ export default function AllTransactionsPage() {
                 <SelectItem value="purchase">Nhập hàng</SelectItem>
                 <SelectItem value="customer_payment">Thu tiền KH</SelectItem>
                 <SelectItem value="supplier_payment">Trả tiền NCC</SelectItem>
+                <SelectItem value="subscription_purchase">Mua gói dịch vụ</SelectItem>
               </SelectContent>
             </Select>
 

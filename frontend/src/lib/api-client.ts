@@ -16,6 +16,15 @@ interface ApiError extends Error {
   status?: number;
 }
 
+export interface StoreCustomerSegment {
+  segmentKey: string;
+  segmentLabel: string;
+  baseCustomerType: 'personal' | 'business';
+  defaultDiscountRate: number;
+  isActive: boolean;
+  isSystem: boolean;
+}
+
 // Store types
 export interface Store {
   id: string;
@@ -359,6 +368,26 @@ class ApiClient {
 
   async deleteCustomer(id: string) {
     return this.request<{ success: boolean }>(`/customers/${id}`, { method: 'DELETE' });
+  }
+
+  async getCustomerDebtHistory(id: string) {
+    return this.request<{ success: boolean; customerId: string; history: Array<Record<string, unknown>> }>(`/customers/${id}/history`);
+  }
+
+  async getCustomerSegments() {
+    return this.request<{ success: boolean; data: StoreCustomerSegment[] }>('/customers/segment-types');
+  }
+
+  async createCustomerSegment(data: {
+    segmentLabel: string;
+    segmentKey?: string;
+    baseCustomerType?: 'personal' | 'business';
+    defaultDiscountRate?: number;
+  }) {
+    return this.request<{ success: boolean; data: StoreCustomerSegment }>('/customers/segment-types', {
+      method: 'POST',
+      body: data,
+    });
   }
 
   // ==================== Suppliers ====================

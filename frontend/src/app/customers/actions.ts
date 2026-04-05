@@ -2,6 +2,17 @@
 
 import { apiClient } from '@/lib/api-client';
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export interface StoreCustomerSegment {
+  segmentKey: string;
+  segmentLabel: string;
+  baseCustomerType: 'personal' | 'business';
+  defaultDiscountRate: number;
+  isActive: boolean;
+  isSystem: boolean;
+}
+
 /**
  * Fetch all customers for the current store
  */
@@ -54,6 +65,51 @@ export async function getCustomer(
     return { 
       success: false, 
       error: error instanceof Error ? error.message : 'Đã xảy ra lỗi khi lấy thông tin khách hàng' 
+    };
+  }
+}
+
+export async function getStoreCustomerSegments(): Promise<{
+  success: boolean;
+  data?: StoreCustomerSegment[];
+  error?: string;
+}> {
+  try {
+    const response = await apiClient.getCustomerSegments();
+    return {
+      success: true,
+      data: Array.isArray(response.data) ? response.data : [],
+    };
+  } catch (error: unknown) {
+    console.error('Error fetching customer segments:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Không thể lấy loại khách hàng của cửa hàng',
+    };
+  }
+}
+
+export async function createStoreCustomerSegment(input: {
+  segmentLabel: string;
+  segmentKey?: string;
+  baseCustomerType?: 'personal' | 'business';
+  defaultDiscountRate?: number;
+}): Promise<{
+  success: boolean;
+  data?: StoreCustomerSegment;
+  error?: string;
+}> {
+  try {
+    const response = await apiClient.createCustomerSegment(input);
+    return {
+      success: true,
+      data: response.data,
+    };
+  } catch (error: unknown) {
+    console.error('Error creating customer segment:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Không thể tạo loại khách hàng',
     };
   }
 }
@@ -112,6 +168,179 @@ export async function updateCustomerStatus(
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Không thể cập nhật trạng thái khách hàng',
+    };
+  }
+}
+
+export interface CustomerDiscountItem {
+  id: string;
+  amount: number;
+  description?: string | null;
+  status: 'pending' | 'paid';
+  paid_at?: string | null;
+  paid_amount?: number | null;
+  discount_rate?: number | null;
+  discount_percent_of_invoice?: number | null;
+  source_sale_id?: string | null;
+  invoice_number?: string | null;
+  invoice_date?: string | null;
+  invoice_total_amount?: number | null;
+  invoice_final_amount?: number | null;
+  payout_id?: string | null;
+  payment_note?: string | null;
+  created_at: string;
+}
+
+export interface CustomerDiscountPayoutItem {
+  id: string;
+  total_amount: number;
+  transaction_count: number;
+  payout_method: string;
+  transfer_reference?: string | null;
+  transfer_note?: string | null;
+  transfer_account_name?: string | null;
+  transfer_account_number?: string | null;
+  transfer_bank_name?: string | null;
+  customer_bank_name?: string | null;
+  customer_bank_account_number?: string | null;
+  customer_bank_branch?: string | null;
+  paid_at: string;
+  created_at: string;
+  created_by?: string | null;
+}
+
+export async function getCustomerDiscounts(customerId: string): Promise<{
+  success: boolean;
+  items?: CustomerDiscountItem[];
+  error?: string;
+}> {
+  try {
+    const response = await apiClient.request<{ success: boolean; data: CustomerDiscountItem[] }>(`/customers/${customerId}/discounts`);
+    return { success: true, items: response.data || [] };
+  } catch (error: unknown) {
+    console.error('Error fetching customer discounts:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Không thể lấy chi tiết chiết khấu',
+    };
+  }
+}
+
+export async function getCustomerDiscountPayouts(customerId: string): Promise<{
+  success: boolean;
+  items?: CustomerDiscountPayoutItem[];
+  error?: string;
+}> {
+  try {
+    const response = await apiClient.request<{ success: boolean; data: CustomerDiscountPayoutItem[] }>(`/customers/${customerId}/discounts/payouts`);
+    return { success: true, items: response.data || [] };
+  } catch (error: unknown) {
+    console.error('Error fetching customer discount payouts:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Không thể lấy lịch sử thanh toán chiết khấu',
+    };
+  }
+}
+
+export async function createCustomerDiscount(customerId: string, amount: number, description?: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    await apiClient.request(`/customers/${customerId}/discounts`, {
+      method: 'POST',
+      body: { amount, description },
+    });
+    return { success: true };
+  } catch (error: unknown) {
+    console.error('Error creating customer discount:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Không thể thêm chiết khấu',
+    };
+  }
+}
+
+export async function updateCustomerDiscount(
+  customerId: string,
+  discountId: string,
+  amount: number,
+  description?: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    await apiClient.request(`/customers/${customerId}/discounts/${discountId}`, {
+      method: 'PUT',
+      body: { amount, description },
+    });
+    return { success: true };
+  } catch (error: unknown) {
+    console.error('Error updating customer discount:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Không thể cập nhật chiết khấu',
+    };
+  }
+}
+
+export async function deleteCustomerDiscount(customerId: string, discountId: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    await apiClient.request(`/customers/${customerId}/discounts/${discountId}`, { method: 'DELETE' });
+    return { success: true };
+  } catch (error: unknown) {
+    console.error('Error deleting customer discount:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Không thể xóa chiết khấu',
+    };
+  }
+}
+
+export async function payCustomerDiscounts(
+  customerId: string,
+  paymentInput?:
+    | string
+    | {
+        paymentNote?: string;
+        payoutMethod?: string;
+        transferReference?: string;
+        transferAccountName?: string;
+        transferAccountNumber?: string;
+        transferBankName?: string;
+      }
+): Promise<{ success: boolean; paidAmount?: number; payoutId?: string; error?: string }> {
+  try {
+    const normalizedCustomerId = String(customerId || '').trim();
+    if (!UUID_REGEX.test(normalizedCustomerId)) {
+      return {
+        success: false,
+        error: 'ID khách hàng không hợp lệ (cần UUID).',
+      };
+    }
+
+    const body =
+      typeof paymentInput === 'string'
+        ? { paymentNote: paymentInput }
+        : {
+            paymentNote: paymentInput?.paymentNote,
+            payoutMethod: paymentInput?.payoutMethod,
+            transferReference: paymentInput?.transferReference,
+            transferAccountName: paymentInput?.transferAccountName,
+            transferAccountNumber: paymentInput?.transferAccountNumber,
+            transferBankName: paymentInput?.transferBankName,
+          };
+
+    const response = await apiClient.request<{ success: boolean; paidAmount: number; payoutId?: string }>(`/customers/${normalizedCustomerId}/discounts/pay`, {
+      method: 'POST',
+      body,
+    });
+    return {
+      success: true,
+      paidAmount: Number(response.paidAmount || 0),
+      payoutId: response.payoutId,
+    };
+  } catch (error: unknown) {
+    console.error('Error paying customer discounts:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Không thể thanh toán chiết khấu',
     };
   }
 }
@@ -259,7 +488,7 @@ export async function getCustomerDebt(
       try {
         const historyResponse = await apiClient.getCustomerDebtHistory(customerId);
         if (historyResponse.success && historyResponse.history) {
-          history = historyResponse.history;
+          history = historyResponse.history as unknown as CustomerDebtHistory[];
         }
       } catch (historyError) {
         console.warn('Could not fetch debt history:', historyError);
@@ -343,7 +572,13 @@ export interface CustomerWithDebt {
   email?: string;
   phone?: string;
   address?: string;
-  customerType: 'personal' | 'business';
+  customerType: string;
+  customerSegment?: string;
+  customerSegmentLabel?: string;
+  discountRate?: number;
+  totalDiscountPending?: number;
+  totalDiscountPaid?: number;
+  totalDiscountAll?: number;
   customerGroup?: string;
   gender?: 'male' | 'female' | 'other';
   birthday?: string;
@@ -401,7 +636,7 @@ export async function getCustomerDebtWithHistory(
       try {
         const historyResponse = await apiClient.getCustomerDebtHistory(customerId);
         if (historyResponse.success && historyResponse.history) {
-          history = historyResponse.history;
+          history = historyResponse.history as unknown as CustomerDebtHistory[];
         }
       } catch (historyError) {
         console.warn('Could not fetch debt history:', historyError);

@@ -49,7 +49,7 @@ export class AutoRenewalService {
         u.subscription_end_date as endDate,
         u.auto_renewal as autoRenewal,
         u.email,
-        u.full_name as fullName
+        u.display_name as fullName
       FROM Users u
       WHERE u.subscription_end_date IS NOT NULL
         AND u.subscription_end_date <= DATEADD(HOUR, 24, GETDATE())
@@ -283,7 +283,7 @@ export class AutoRenewalService {
         u.subscription_end_date as endDate,
         u.auto_renewal as autoRenewal,
         u.email,
-        u.full_name as fullName
+        u.display_name as fullName
       FROM Users u
       WHERE u.subscription_end_date IS NOT NULL
         AND u.subscription_end_date < GETDATE()

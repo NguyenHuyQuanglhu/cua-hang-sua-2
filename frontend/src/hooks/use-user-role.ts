@@ -165,7 +165,7 @@ export function useUserRole() {
     return stores.map(store => ({
       storeId: store.id,
       storeName: store.name,
-      storeCode: store.code,
+      storeCode: store.code || '',
     }));
   }, [stores]);
 

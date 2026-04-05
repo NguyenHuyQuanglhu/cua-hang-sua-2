@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from "react"
-import { notFound, useParams } from "next/navigation"
+import { useParams } from "next/navigation"
 import { ChevronLeft, Phone, Mail, MapPin, Cake, User, Landmark, Trophy, Gem, Star, Shield, AlertTriangle } from "lucide-react"
 
 import Link from "next/link"
@@ -121,8 +121,23 @@ export default function CustomerDetailPage() {
   }
 
   if (error || !customer) {
-    notFound();
-    return null;
+    return (
+      <div className="grid gap-4 md:gap-8">
+        <Card>
+          <CardHeader>
+            <CardTitle>Không thể truy cập chi tiết khách hàng</CardTitle>
+            <CardDescription>
+              Dữ liệu khách hàng không tồn tại hoặc đã có lỗi khi tải dữ liệu.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button asChild>
+              <Link href="/customers">Quay lại danh sách khách hàng</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
 
   // Separate sales and payments from history

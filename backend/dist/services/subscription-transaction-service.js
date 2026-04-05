@@ -237,17 +237,97 @@ class SubscriptionTransactionService {
      * Lấy thông tin user
      */
     async getUserInfo(userId) {
+        if (!userId) {
+            return null;
+        }
         const userQuery = `
-      SELECT full_name, email, phone 
-      FROM Users 
-      WHERE id = @userId
+      DECLARE @userIdText NVARCHAR(64) = LTRIM(RTRIM(@userId));
+
+      IF EXISTS (
+        SELECT 1
+        FROM Users
+        WHERE CAST(id AS NVARCHAR(64)) = @userIdText
+           OR LEFT(CAST(id AS NVARCHAR(64)), 8) = @userIdText
+      )
+      BEGIN
+        IF COL_LENGTH('Users', 'phone') IS NOT NULL
+          SELECT TOP 1
+            COALESCE(NULLIF(display_name, ''), NULLIF(email, ''), @userIdText) AS full_name,
+            email,
+            phone
+          FROM Users
+          WHERE CAST(id AS NVARCHAR(64)) = @userIdText
+             OR LEFT(CAST(id AS NVARCHAR(64)), 8) = @userIdText
+          ORDER BY CASE WHEN CAST(id AS NVARCHAR(64)) = @userIdText THEN 0 ELSE 1 END
+        ELSE
+          SELECT TOP 1
+            COALESCE(NULLIF(display_name, ''), NULLIF(email, ''), @userIdText) AS full_name,
+            email,
+            CAST(NULL AS NVARCHAR(50)) AS phone
+          FROM Users
+          WHERE CAST(id AS NVARCHAR(64)) = @userIdText
+             OR LEFT(CAST(id AS NVARCHAR(64)), 8) = @userIdText
+          ORDER BY CASE WHEN CAST(id AS NVARCHAR(64)) = @userIdText THEN 0 ELSE 1 END
+      END
+      ELSE IF OBJECT_ID('TenantUsers', 'U') IS NOT NULL
+      BEGIN
+        IF COL_LENGTH('Users', 'phone') IS NOT NULL
+          SELECT TOP 1
+            COALESCE(NULLIF(u.display_name, ''), NULLIF(u.email, ''), @userIdText) AS full_name,
+            u.email,
+            u.phone
+          FROM TenantUsers tu
+          JOIN Users u ON LOWER(u.email) = LOWER(tu.email)
+          WHERE CAST(tu.id AS NVARCHAR(64)) = @userIdText
+             OR LEFT(CAST(tu.id AS NVARCHAR(64)), 8) = @userIdText
+          ORDER BY CASE WHEN CAST(tu.id AS NVARCHAR(64)) = @userIdText THEN 0 ELSE 1 END
+        ELSE
+          SELECT TOP 1
+            COALESCE(NULLIF(u.display_name, ''), NULLIF(u.email, ''), @userIdText) AS full_name,
+            u.email,
+            CAST(NULL AS NVARCHAR(50)) AS phone
+          FROM TenantUsers tu
+          JOIN Users u ON LOWER(u.email) = LOWER(tu.email)
+          WHERE CAST(tu.id AS NVARCHAR(64)) = @userIdText
+             OR LEFT(CAST(tu.id AS NVARCHAR(64)), 8) = @userIdText
+          ORDER BY CASE WHEN CAST(tu.id AS NVARCHAR(64)) = @userIdText THEN 0 ELSE 1 END
+      END
+      ELSE IF OBJECT_ID('Tenants', 'U') IS NOT NULL
+      BEGIN
+        IF COL_LENGTH('Users', 'phone') IS NOT NULL
+          SELECT TOP 1
+            COALESCE(NULLIF(u.display_name, ''), NULLIF(u.email, ''), @userIdText) AS full_name,
+            u.email,
+            u.phone
+          FROM Tenants t
+          JOIN Users u ON LOWER(u.email) = LOWER(t.email)
+          WHERE CAST(t.id AS NVARCHAR(64)) = @userIdText
+             OR LEFT(CAST(t.id AS NVARCHAR(64)), 8) = @userIdText
+          ORDER BY CASE WHEN CAST(t.id AS NVARCHAR(64)) = @userIdText THEN 0 ELSE 1 END
+        ELSE
+          SELECT TOP 1
+            COALESCE(NULLIF(u.display_name, ''), NULLIF(u.email, ''), @userIdText) AS full_name,
+            u.email,
+            CAST(NULL AS NVARCHAR(50)) AS phone
+          FROM Tenants t
+          JOIN Users u ON LOWER(u.email) = LOWER(t.email)
+          WHERE CAST(t.id AS NVARCHAR(64)) = @userIdText
+             OR LEFT(CAST(t.id AS NVARCHAR(64)), 8) = @userIdText
+          ORDER BY CASE WHEN CAST(t.id AS NVARCHAR(64)) = @userIdText THEN 0 ELSE 1 END
+      END
     `;
         const result = await (0, db_1.queryOne)(userQuery, { userId });
-        return result ? {
-            fullName: result.full_name,
-            email: result.email,
+        if (!result) {
+            return null;
+        }
+        const email = String(result.email || '').trim();
+        const fullName = String(result.full_name || '').trim();
+        const accountNameFromEmail = email.includes('@') ? email.split('@')[0] : email;
+        return {
+            fullName: fullName || accountNameFromEmail,
+            email,
             phone: result.phone,
-        } : null;
+        };
     }
     /**
      * Map database record to entity
@@ -255,26 +335,26 @@ class SubscriptionTransactionService {
     mapToEntity(record) {
         return {
             id: record.id,
-            userId: record.user_id,
-            tenantId: record.tenant_id,
-            transactionType: record.transaction_type,
-            planId: record.plan_id,
-            previousPlanId: record.previous_plan_id,
-            maxStores: record.max_stores,
-            amount: record.amount,
-            currency: record.currency,
-            paymentMethod: record.payment_method,
-            paymentStatus: record.payment_status,
-            transactionReference: record.transaction_reference,
-            startDate: new Date(record.start_date),
-            endDate: new Date(record.end_date),
-            autoRenewal: Boolean(record.auto_renewal),
-            processedBy: record.processed_by,
-            processedByRole: record.processed_by_role,
+            userId: (record.user_id || record.UserId || ''),
+            tenantId: (record.tenant_id || record.TenantId),
+            transactionType: (record.transaction_type || record.TransactionType),
+            planId: (record.plan_id || record.PlanId || ''),
+            previousPlanId: (record.previous_plan_id || record.PreviousPlanId),
+            maxStores: Number(record.max_stores ?? record.MaxStores ?? 1),
+            amount: Number(record.amount ?? record.Amount ?? 0),
+            currency: (record.currency || record.Currency || 'VND'),
+            paymentMethod: (record.payment_method || record.PaymentMethod || 'cash'),
+            paymentStatus: (record.payment_status || record.PaymentStatus || 'completed'),
+            transactionReference: (record.transaction_reference || record.TransactionReference),
+            startDate: new Date(record.start_date || record.StartDate || record.created_at || record.CreatedAt || Date.now()),
+            endDate: new Date(record.end_date || record.EndDate || record.created_at || record.CreatedAt || Date.now()),
+            autoRenewal: Boolean(record.auto_renewal ?? record.AutoRenewal),
+            processedBy: (record.processed_by || record.ProcessedBy),
+            processedByRole: (record.processed_by_role || record.ProcessedByRole || 'system'),
             notes: record.notes,
             metadata: record.metadata ? JSON.parse(record.metadata) : undefined,
-            createdAt: new Date(record.created_at),
-            updatedAt: new Date(record.updated_at),
+            createdAt: new Date(record.created_at || record.CreatedAt || Date.now()),
+            updatedAt: new Date(record.updated_at || record.UpdatedAt || record.created_at || record.CreatedAt || Date.now()),
         };
     }
 }

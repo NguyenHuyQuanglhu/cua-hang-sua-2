@@ -103,6 +103,20 @@ interface Sale {
   totalAmount?: number;
 }
 
+const normalizeSale = (raw: Record<string, unknown>): Sale => ({
+  id: String(raw.id ?? ''),
+  invoiceNumber: String(raw.invoiceNumber ?? ''),
+  customerId: raw.customerId ? String(raw.customerId) : undefined,
+  customerName: raw.customerName ? String(raw.customerName) : undefined,
+  transactionDate: String(raw.transactionDate ?? new Date().toISOString()),
+  status: raw.status === 'pending' ? 'pending' : 'processed',
+  finalAmount: Number(raw.finalAmount ?? 0),
+  itemCount: Number(raw.itemCount ?? 0),
+  customerPayment: raw.customerPayment !== undefined ? Number(raw.customerPayment) : undefined,
+  previousDebt: raw.previousDebt !== undefined ? Number(raw.previousDebt) : undefined,
+  totalAmount: raw.totalAmount !== undefined ? Number(raw.totalAmount) : undefined,
+});
+
 
 export default function SalesPage() {
   const { currentStore } = useStore();
@@ -153,7 +167,7 @@ export default function SalesPage() {
       });
 
       if (result.success) {
-        setSales(result.data || []);
+        setSales((result.data || []).map(normalizeSale));
         setTotal(result.total || 0);
         setTotalPages(result.totalPages || 1);
         

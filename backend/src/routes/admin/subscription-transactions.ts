@@ -10,6 +10,7 @@ import { authenticate, AuthRequest } from '../../middleware/auth';
 import { requireModulePermission } from '../../middleware/permission';
 import { subscriptionTransactionService, type SubscriptionTransactionFilter } from '../../services/subscription-transaction-service';
 import { autoRenewalService } from '../../services/auto-renewal-service';
+import { query } from '../../db';
 
 const router = Router();
 
@@ -59,18 +60,93 @@ router.get('/', requireModulePermission('users', 'view'), async (req: AuthReques
     filter.limit = Math.min(parseInt(limit as string) || 50, 200); // Max 200 records
     filter.offset = parseInt(offset as string) || 0;
 
-    const transactions = await subscriptionTransactionService.getTransactions(filter);
+    let transactions: Awaited<ReturnType<typeof subscriptionTransactionService.getTransactions>> = [];
+    try {
+      transactions = await subscriptionTransactionService.getTransactions(filter);
+    } catch (transactionQueryError) {
+      console.warn('Primary query SubscriptionTransactions failed, fallback to SubscriptionHistory:', transactionQueryError);
+      transactions = [];
+    }
+
+    try {
+      const fallbackRows = await query(
+        `SELECT TOP (@limit)
+           h.id,
+           h.user_id,
+           h.plan_id,
+           h.max_stores,
+           h.amount,
+           h.payment_method,
+           h.status,
+           h.start_date,
+           h.end_date,
+           h.auto_renewal,
+           h.created_at
+         FROM SubscriptionHistory h
+         ORDER BY h.created_at DESC`,
+        { limit: filter.limit || 50 }
+      );
+
+      const fallbackTransactions = fallbackRows.map((row: Record<string, unknown>) => {
+        const rawStatus = String(row.status || '').toLowerCase();
+        const paymentStatus = ['pending', 'completed', 'failed', 'refunded'].includes(rawStatus)
+          ? (rawStatus as 'pending' | 'completed' | 'failed' | 'refunded')
+          : 'completed';
+
+        return ({
+        id: `history_${String(row.id)}`,
+        userId: row.user_id as string,
+        transactionType: 'manual_purchase' as const,
+        planId: row.plan_id as string,
+        maxStores: Number(row.max_stores || 1),
+        amount: Number(row.amount || 0),
+        currency: 'VND',
+        paymentMethod: (row.payment_method as 'auto_payment' | 'bank_transfer' | 'credit_card' | 'cash') || 'cash',
+        paymentStatus,
+        startDate: new Date(row.start_date as string),
+        endDate: new Date(row.end_date as string),
+        autoRenewal: Boolean(row.auto_renewal),
+        processedByRole: 'system' as const,
+        notes:
+          String(row.payment_method || '').toLowerCase() === 'admin_assign'
+            ? 'Cap goi (nguon SubscriptionHistory)'
+            : 'Nguon du lieu: SubscriptionHistory',
+        createdAt: new Date(row.created_at as string),
+        updatedAt: new Date(row.created_at as string),
+      });
+      });
+
+      const existingKeys = new Set(
+        transactions.map(
+          (t) => `${t.userId}|${t.planId}|${Number(t.amount || 0)}|${new Date(t.startDate).toISOString()}`
+        )
+      );
+
+      const missingFallbackTransactions = fallbackTransactions.filter((t) => {
+        const key = `${t.userId}|${t.planId}|${Number(t.amount || 0)}|${new Date(t.startDate).toISOString()}`;
+        return !existingKeys.has(key);
+      });
+
+      transactions = [...transactions, ...missingFallbackTransactions]
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, filter.limit || 50);
+    } catch (fallbackError) {
+      console.warn('Fallback query SubscriptionHistory failed:', fallbackError);
+    }
 
     // Lấy thông tin user cho mỗi giao dịch
     const transactionsWithUserInfo = await Promise.all(
       transactions.map(async (transaction) => {
+        const fallbackUserLabel = transaction.userId
+          ? `ID: ${String(transaction.userId).slice(0, 8)}`
+          : 'Nguoi dung khong xac dinh';
         try {
           const userInfo = await subscriptionTransactionService.getUserInfo(transaction.userId);
           return {
             ...transaction,
             userInfo: {
-              fullName: userInfo?.fullName || 'N/A',
-              email: userInfo?.email || 'N/A',
+              fullName: userInfo?.fullName || fallbackUserLabel,
+              email: userInfo?.email || '-',
               phone: userInfo?.phone || null,
             }
           };
@@ -79,8 +155,8 @@ router.get('/', requireModulePermission('users', 'view'), async (req: AuthReques
           return {
             ...transaction,
             userInfo: {
-              fullName: 'N/A',
-              email: 'N/A',
+              fullName: fallbackUserLabel,
+              email: '-',
               phone: null,
             }
           };

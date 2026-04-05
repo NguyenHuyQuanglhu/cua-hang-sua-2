@@ -60,7 +60,12 @@ router.post('/inventory', async (req: AuthRequest, res: Response) => {
     });
   } catch (error) {
     console.error('Sync inventory error:', error);
-    res.status(500).json({ error: 'Failed to sync inventory' });
+    // Non-critical for POS bootstrap; return graceful response so UI can continue.
+    res.json({
+      success: false,
+      warning: 'Failed to sync inventory',
+      syncedCount: 0,
+    });
   }
 });
 

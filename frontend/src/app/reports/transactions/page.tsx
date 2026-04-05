@@ -208,7 +208,9 @@ export default function TransactionHistoryPage() {
         if (typeof valA === 'string' && typeof valB === 'string') {
           return sortDirection === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
         }
-        return sortDirection === 'asc' ? valA - valB : valB - valA;
+        const numA = Number(valA || 0);
+        const numB = Number(valB || 0);
+        return sortDirection === 'asc' ? numA - numB : numB - numA;
       });
     return sortableItems;
   }, [filteredData, sortKey, sortDirection]);

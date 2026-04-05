@@ -24,6 +24,10 @@ const router = Router();
 
 router.use(authenticate);
 
+function normalizeUserRole(role: string): UserRole {
+  return role === 'admin' ? 'owner' : (role as UserRole);
+}
+
 /**
  * Check if current user can manage target role based on role hierarchy
  * - Owner can manage all roles including other owners
@@ -70,6 +74,36 @@ function buildUserVisibilityFilter(currentUserRole: UserRole): string {
   return `role IN (${roleList})`;
 }
 
+const PLAN_PRIORITY_FALLBACK: Record<string, number> = {
+  basic: 1,
+  pro: 2,
+  enterprise: 3,
+};
+
+async function getPlanPriority(planId: string): Promise<number> {
+  if (!planId) return 0;
+
+  try {
+    const plan = await queryOne<{ sort_order: number | null; max_stores: number | null }>(
+      `SELECT sort_order, max_stores FROM SubscriptionPlans WHERE id = @planId`,
+      { planId }
+    );
+
+    if (plan?.sort_order && Number(plan.sort_order) > 0) {
+      return Number(plan.sort_order);
+    }
+
+    if (plan?.max_stores && Number(plan.max_stores) > 0) {
+      return Number(plan.max_stores);
+    }
+  } catch (error) {
+    // Fallback mapping is used when SubscriptionPlans is unavailable in legacy schemas.
+    console.warn('Cannot read plan priority from SubscriptionPlans, fallback to default map:', error);
+  }
+
+  return PLAN_PRIORITY_FALLBACK[planId] || 0;
+}
+
 
 /**
  * GET /api/users/roles/assignable - Get roles that current user can assign
@@ -77,7 +111,7 @@ function buildUserVisibilityFilter(currentUserRole: UserRole): string {
 router.get('/roles/assignable', async (req: AuthRequest, res: Response) => {
   try {
     const currentUser = req.user!;
-    const currentUserRole = currentUser.role as UserRole;
+    const currentUserRole = normalizeUserRole(currentUser.role);
     const assignableRoles = getManageableRoles(currentUserRole);
     res.json({ roles: assignableRoles, currentRole: currentUserRole });
   } catch (error) {
@@ -202,8 +236,19 @@ router.get('/:id/audit-logs', requireModulePermission('users', 'view'), async (r
  */
 router.post('/', requireModulePermission('users', 'add'), storeContext, async (req: AuthRequest, res: Response) => {
   try {
-    const { email, password, displayName, role, status, storeIds } = req.body;
+    const {
+      email,
+      password,
+      displayName,
+      role,
+      status,
+      storeIds,
+      subscriptionPlanId,
+      subscriptionMonths,
+      autoRenewal,
+    } = req.body;
     const currentUser = req.user!;
+    const currentUserRole = normalizeUserRole(currentUser.role);
     const currentStoreId: string | undefined = req.storeId;
 
     if (!email || !password) {
@@ -218,13 +263,13 @@ router.post('/', requireModulePermission('users', 'add'), storeContext, async (r
     }
 
     // Check role hierarchy - Requirements: 4.1, 4.2
-    if (!canManageRole(currentUser.role as UserRole, targetRole)) {
+    if (!canManageRole(currentUserRole, targetRole)) {
       res.status(403).json({ error: 'Bạn không có quyền tạo người dùng với role này', errorCode: 'PERM001' });
       return;
     }
 
     // Store Manager can only create Salesperson - Requirements: 4.2
-    if (currentUser.role === 'store_manager' && targetRole !== 'salesperson') {
+    if (currentUserRole === 'store_manager' && targetRole !== 'salesperson') {
       res.status(403).json({ error: 'Store Manager chỉ có thể tạo tài khoản Salesperson', errorCode: 'PERM001' });
       return;
     }
@@ -237,11 +282,77 @@ router.post('/', requireModulePermission('users', 'add'), storeContext, async (r
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
+
+    let resolvedPlanId = 'basic';
+    let resolvedMaxStores = 1;
+    let resolvedStartDate: Date | null = null;
+    let resolvedEndDate: Date | null = null;
+    let resolvedSubscriptionStatus = 'active';
+    let resolvedAutoRenewal = false;
+    let resolvedPlanPrice = 0;
+
+    const shouldAssignSubscription =
+      typeof subscriptionPlanId === 'string' &&
+      subscriptionPlanId.trim().length > 0;
+
+    if (shouldAssignSubscription) {
+      const now = new Date();
+      const months = Number(subscriptionMonths) > 0 ? Math.min(Number(subscriptionMonths), 24) : 1;
+
+      let planFromDb: { id: string; max_stores: number; price: number } | null = null;
+      try {
+        planFromDb = await queryOne<{ id: string; max_stores: number; price: number }>(
+          `SELECT id, max_stores, price FROM SubscriptionPlans WHERE id = @planId AND is_active = 1`,
+          { planId: subscriptionPlanId }
+        );
+      } catch (planQueryError) {
+        console.warn('SubscriptionPlans table unavailable, using fallback plans:', planQueryError);
+      }
+
+      const fallbackPlans: Record<string, { maxStores: number; price: number }> = {
+        basic: { maxStores: 1, price: 199000 },
+        pro: { maxStores: 5, price: 499000 },
+        enterprise: { maxStores: 999, price: 1999000 },
+      };
+
+      const fallback = fallbackPlans[subscriptionPlanId as string];
+      if (planFromDb || fallback) {
+        resolvedPlanId = planFromDb?.id || (subscriptionPlanId as string);
+        resolvedMaxStores = Number(planFromDb?.max_stores || fallback?.maxStores || 1);
+        resolvedPlanPrice = Number(planFromDb?.price || fallback?.price || 0);
+        resolvedStartDate = now;
+        resolvedEndDate = new Date(now);
+        resolvedEndDate.setMonth(resolvedEndDate.getMonth() + months);
+        resolvedSubscriptionStatus = 'active';
+        resolvedAutoRenewal = autoRenewal === undefined ? true : Boolean(autoRenewal);
+      }
+    }
+
     const result = await query(
-      `INSERT INTO Users (id, email, password_hash, display_name, role, status, failed_login_attempts, created_at, updated_at)
+      `INSERT INTO Users (
+         id, email, password_hash, display_name, role, status, failed_login_attempts,
+         subscription_plan_id, max_stores, subscription_start_date, subscription_end_date, auto_renewal, subscription_status,
+         created_at, updated_at
+       )
        OUTPUT INSERTED.*
-       VALUES (NEWID(), @email, @passwordHash, @displayName, @role, @status, 0, GETDATE(), GETDATE())`,
-      { email, passwordHash, displayName: displayName || email.split('@')[0], role: targetRole, status: status || 'active' }
+       VALUES (
+         NEWID(), @email, @passwordHash, @displayName, @role, @status, 0,
+         @subscriptionPlanId, @maxStores, @subscriptionStartDate, @subscriptionEndDate, @autoRenewal, @subscriptionStatus,
+         GETDATE(), GETDATE()
+       )`,
+      {
+        email,
+        passwordHash,
+        displayName: displayName || email.split('@')[0],
+        role: targetRole,
+        status: status || 'active',
+        subscriptionPlanId: resolvedPlanId,
+        maxStores: resolvedMaxStores,
+        subscriptionStartDate: resolvedStartDate,
+        subscriptionEndDate: resolvedEndDate,
+        autoRenewal: resolvedAutoRenewal ? 1 : 0,
+        subscriptionStatus: resolvedSubscriptionStatus,
+      }
     );
 
     const newUser = result[0];
@@ -250,7 +361,7 @@ router.post('/', requireModulePermission('users', 'add'), storeContext, async (r
     if (storeIds && Array.isArray(storeIds) && storeIds.length > 0) {
       if (targetRole === 'store_manager' || targetRole === 'salesperson') {
         for (const storeId of storeIds) {
-          if (currentUser.role === 'store_manager') {
+          if (currentUserRole === 'store_manager') {
             const hasAccess = currentUser.stores?.includes(storeId);
             if (!hasAccess) continue;
           }
@@ -287,6 +398,52 @@ router.post('/', requireModulePermission('users', 'add'), storeContext, async (r
       console.error('Audit log error (non-blocking):', auditError);
     }
 
+    if (resolvedStartDate && resolvedEndDate) {
+      try {
+        await query(
+          `INSERT INTO SubscriptionHistory
+             (id, user_id, plan_id, max_stores, amount, payment_method, start_date, end_date, status, auto_renewal, created_at)
+           VALUES
+             (NEWID(), @userId, @planId, @maxStores, @amount, 'admin_assign', @startDate, @endDate, 'active', @autoRenewal, GETDATE())`,
+          {
+            userId: newUser.id,
+            planId: resolvedPlanId,
+            maxStores: resolvedMaxStores,
+            amount: resolvedPlanPrice,
+            startDate: resolvedStartDate,
+            endDate: resolvedEndDate,
+            autoRenewal: resolvedAutoRenewal ? 1 : 0,
+          }
+        );
+
+        await query(
+          `IF EXISTS (SELECT * FROM sysobjects WHERE name='SubscriptionTransactions' AND xtype='U')
+           BEGIN
+             INSERT INTO SubscriptionTransactions
+               (id, user_id, transaction_type, plan_id, max_stores, amount, currency, payment_method, payment_status,
+                start_date, end_date, auto_renewal, processed_by, processed_by_role, notes, created_at, updated_at)
+             VALUES
+               (NEWID(), @userId, 'manual_purchase', @planId, @maxStores, @amount, 'VND', 'cash', 'completed',
+                @startDate, @endDate, @autoRenewal, @processedBy, @processedByRole, @notes, GETDATE(), GETDATE())
+           END`,
+          {
+            userId: newUser.id,
+            planId: resolvedPlanId,
+            maxStores: resolvedMaxStores,
+            amount: resolvedPlanPrice,
+            startDate: resolvedStartDate,
+            endDate: resolvedEndDate,
+            autoRenewal: resolvedAutoRenewal ? 1 : 0,
+            processedBy: currentUser.id,
+            processedByRole: currentUser.role,
+            notes: `Cap goi khi tao tai khoan (${targetRole})`,
+          }
+        );
+      } catch (subscriptionLogError) {
+        console.error('Subscription history log error (non-blocking):', subscriptionLogError);
+      }
+    }
+
     res.status(201).json({
       id: newUser.id, email: newUser.email, displayName: newUser.display_name,
       role: newUser.role, status: newUser.status, createdAt: newUser.created_at, stores: assignedStoreIds,
@@ -306,7 +463,7 @@ router.post('/', requireModulePermission('users', 'add'), storeContext, async (r
 router.get('/', requireModulePermission('users', 'view'), async (req: AuthRequest, res: Response) => {
   try {
     const currentUser = req.user!;
-    const currentUserRole = currentUser.role as UserRole;
+    const currentUserRole = normalizeUserRole(currentUser.role);
 
     console.log('[GET /api/users] Current user:', currentUser.email, 'Role:', currentUserRole);
 
@@ -326,7 +483,9 @@ router.get('/', requireModulePermission('users', 'view'), async (req: AuthReques
     }
 
     const users = await query(
-      `SELECT id, email, display_name, role, permissions, status, created_at, photo_url FROM Users WHERE ${whereClause} ORDER BY created_at DESC`
+      `SELECT id, email, display_name, role, permissions, status, created_at, photo_url,
+              subscription_plan_id, max_stores, subscription_start_date, subscription_end_date, auto_renewal, subscription_status
+       FROM Users WHERE ${whereClause} ORDER BY created_at DESC`
     );
 
     const usersWithStores = await Promise.all(
@@ -341,6 +500,12 @@ router.get('/', requireModulePermission('users', 'view'), async (req: AuthReques
           id: u.id, email: u.email, displayName: u.display_name, role: u.role, 
           permissions: u.permissions ? JSON.parse(u.permissions as string) : undefined,
           status: u.status, createdAt: u.created_at, photoURL: u.photo_url || undefined,
+          subscriptionPlanId: (u.subscription_plan_id as string | null) || undefined,
+          maxStores: Number((u.max_stores as number | null) || 1),
+          subscriptionStartDate: u.subscription_start_date || undefined,
+          subscriptionEndDate: u.subscription_end_date || undefined,
+          autoRenewal: Boolean(u.auto_renewal),
+          subscriptionStatus: (u.subscription_status as string | null) || undefined,
           stores: stores.map((s: Record<string, unknown>) => ({
             storeId: s.storeId, storeName: s.storeName, storeCode: s.storeCode,
           })),
@@ -362,19 +527,26 @@ router.get('/:id', requireModulePermission('users', 'view'), async (req: AuthReq
   try {
     const { id } = req.params;
     const currentUser = req.user!;
-    const currentUserRole = currentUser.role as UserRole;
+    const currentUserRole = normalizeUserRole(currentUser.role);
 
     const user = await queryOne<{
       id: string; email: string; display_name: string | null; role: string;
       permissions: string | null; status: string; created_at: Date; photo_url: string | null;
-    }>('SELECT id, email, display_name, role, permissions, status, created_at, photo_url FROM Users WHERE id = @id', { id });
+      subscription_plan_id: string | null; max_stores: number | null; subscription_start_date: Date | null; subscription_end_date: Date | null;
+      auto_renewal: boolean | null; subscription_status: string | null;
+    }>(
+      `SELECT id, email, display_name, role, permissions, status, created_at, photo_url,
+              subscription_plan_id, max_stores, subscription_start_date, subscription_end_date, auto_renewal, subscription_status
+       FROM Users WHERE id = @id`,
+      { id }
+    );
 
     if (!user) {
       res.status(404).json({ error: 'Không tìm thấy người dùng' });
       return;
     }
 
-    if (currentUserRole !== 'owner' && !canManageRole(currentUserRole, user.role as UserRole)) {
+    if (currentUserRole !== 'owner' && !canManageRole(currentUserRole, normalizeUserRole(user.role))) {
       res.status(403).json({ error: 'Bạn không có quyền xem thông tin người dùng này', errorCode: 'PERM001' });
       return;
     }
@@ -389,6 +561,12 @@ router.get('/:id', requireModulePermission('users', 'view'), async (req: AuthReq
       id: user.id, email: user.email, displayName: user.display_name, role: user.role,
       permissions: user.permissions ? JSON.parse(user.permissions) : null,
       status: user.status, createdAt: user.created_at, photoURL: user.photo_url || undefined,
+      subscriptionPlanId: user.subscription_plan_id || undefined,
+      maxStores: Number(user.max_stores || 1),
+      subscriptionStartDate: user.subscription_start_date || undefined,
+      subscriptionEndDate: user.subscription_end_date || undefined,
+      autoRenewal: Boolean(user.auto_renewal),
+      subscriptionStatus: user.subscription_status || undefined,
       stores: stores.map((s: Record<string, unknown>) => ({
         storeId: s.storeId, storeName: s.storeName, storeCode: s.storeCode,
       })),
@@ -407,17 +585,24 @@ router.get('/:id', requireModulePermission('users', 'view'), async (req: AuthReq
 router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { displayName, role, status, storeIds, permissions, password, photoURL } = req.body;
+    const { displayName, role, status, storeIds, permissions, password, photoURL, subscriptionPlanId, subscriptionMonths, autoRenewal } = req.body;
     const currentUser = req.user!;
-    const currentUserRole = currentUser.role as UserRole;
+    const currentUserRole = normalizeUserRole(currentUser.role);
     const currentStoreId = req.headers['x-store-id'] as string;
 
     console.log('[PUT /api/users/:id] Request body:', JSON.stringify({ displayName, role, status, storeIds, permissions: permissions ? 'provided' : 'undefined', password: password ? 'provided' : 'undefined', photoURL: photoURL ? 'provided' : 'undefined' }));
     console.log('[PUT /api/users/:id] Current user:', currentUser.email, 'Role:', currentUserRole);
 
-    const user = await queryOne<{ 
+    const user = await queryOne<{
       id: string; email: string; display_name: string | null; role: string; permissions: string | null; status: string;
-    }>('SELECT id, email, display_name, role, permissions, status FROM Users WHERE id = @id', { id });
+      subscription_plan_id: string | null; max_stores: number | null; subscription_start_date: Date | null; subscription_end_date: Date | null;
+      auto_renewal: boolean | null; subscription_status: string | null;
+    }>(
+      `SELECT id, email, display_name, role, permissions, status,
+              subscription_plan_id, max_stores, subscription_start_date, subscription_end_date, auto_renewal, subscription_status
+       FROM Users WHERE id = @id`,
+      { id }
+    );
 
     if (!user) {
       res.status(404).json({ error: 'Không tìm thấy người dùng' });
@@ -425,7 +610,7 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
     }
 
     const isEditingSelf = id === currentUser.id;
-    const targetUserRole = user.role as UserRole;
+    const targetUserRole = normalizeUserRole(user.role);
 
     // Check role hierarchy - Requirements: 4.1, 4.2
     // Owner can edit other owners, users can edit themselves (limited fields)
@@ -441,13 +626,15 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
 
     // Non-owner editing self can only change displayName, password, and photoURL
     if (isEditingSelf && currentUserRole !== 'owner') {
-      if (role || status || storeIds || permissions) {
+      if (role || status || storeIds || permissions || subscriptionPlanId !== undefined || subscriptionMonths !== undefined || autoRenewal !== undefined) {
         res.status(403).json({ error: 'Bạn chỉ có thể thay đổi tên hiển thị, mật khẩu và ảnh đại diện của mình', errorCode: 'PERM001' });
         return;
       }
     }
 
-    if (role && role !== user.role && !canManageRole(currentUserRole, role as UserRole)) {
+    const normalizedTargetRole = role ? normalizeUserRole(role) : targetUserRole;
+
+    if (role && normalizeUserRole(role) !== targetUserRole && !canManageRole(currentUserRole, normalizeUserRole(role))) {
       res.status(403).json({ error: 'Bạn không có quyền gán role này', errorCode: 'PERM001' });
       return;
     }
@@ -455,6 +642,9 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
     const oldValues = {
       displayName: user.display_name, role: user.role, status: user.status,
       permissions: user.permissions ? JSON.parse(user.permissions) : null,
+      subscriptionPlanId: user.subscription_plan_id,
+      subscriptionEndDate: user.subscription_end_date,
+      autoRenewal: user.auto_renewal,
     };
 
     const roleChanged = role && role !== user.role;
@@ -464,6 +654,105 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
     let updateFields = `display_name = COALESCE(@displayName, display_name), role = COALESCE(@role, role),
       status = COALESCE(@status, status), updated_at = GETDATE()`;
     const params: Record<string, unknown> = { id, displayName, role, status };
+
+    const shouldUpdateSubscription =
+      subscriptionPlanId !== undefined ||
+      subscriptionMonths !== undefined ||
+      autoRenewal !== undefined;
+
+    let subscriptionUpdateLog:
+      | {
+          planId: string;
+          maxStores: number;
+          amount: number;
+          startDate: Date;
+          endDate: Date;
+          autoRenewal: number;
+        }
+      | null = null;
+
+    if (shouldUpdateSubscription) {
+      const fallbackPlans: Record<string, { maxStores: number }> = {
+        basic: { maxStores: 1 },
+        pro: { maxStores: 5 },
+        enterprise: { maxStores: 999 },
+      };
+
+      const requestedPlanId = typeof subscriptionPlanId === 'string' ? subscriptionPlanId.trim() : '';
+      const finalPlanId = requestedPlanId || user.subscription_plan_id || '';
+
+      if (requestedPlanId && user.subscription_plan_id && requestedPlanId !== user.subscription_plan_id) {
+        const [currentPriority, requestedPriority] = await Promise.all([
+          getPlanPriority(user.subscription_plan_id),
+          getPlanPriority(requestedPlanId),
+        ]);
+
+        if (requestedPriority > 0 && currentPriority > 0 && requestedPriority < currentPriority) {
+          res.status(400).json({
+            error: 'Không thể cấp gói thấp hơn gói hiện tại của người dùng',
+          });
+          return;
+        }
+      }
+
+      if (!finalPlanId) {
+        updateFields += `,
+          subscription_plan_id = NULL,
+          max_stores = 1,
+          subscription_start_date = NULL,
+          subscription_end_date = NULL,
+          auto_renewal = 0,
+          subscription_status = 'inactive'`;
+      } else {
+        const months = Number(subscriptionMonths) > 0 ? Math.min(Number(subscriptionMonths), 24) : 1;
+        const startDate = new Date();
+        const endDate = new Date(startDate);
+        endDate.setMonth(endDate.getMonth() + months);
+
+        let maxStores = 1;
+        let planPrice = 0;
+        try {
+          const planFromDb = await queryOne<{ max_stores: number; price: number }>(
+            `SELECT max_stores, price FROM SubscriptionPlans WHERE id = @planId`,
+            { planId: finalPlanId }
+          );
+          maxStores = Number(planFromDb?.max_stores || fallbackPlans[finalPlanId]?.maxStores || 1);
+          planPrice = Number(planFromDb?.price || 0);
+        } catch (planLookupError) {
+          maxStores = Number(fallbackPlans[finalPlanId]?.maxStores || 1);
+          const fallbackPrices: Record<string, number> = {
+            basic: 199000,
+            pro: 499000,
+            enterprise: 1999000,
+          };
+          planPrice = Number(fallbackPrices[finalPlanId] || 0);
+          console.warn('Subscription plan lookup failed, using fallback max stores:', planLookupError);
+        }
+
+        updateFields += `,
+          subscription_plan_id = @subscriptionPlanId,
+          max_stores = @maxStores,
+          subscription_start_date = @subscriptionStartDate,
+          subscription_end_date = @subscriptionEndDate,
+          auto_renewal = @autoRenewal,
+          subscription_status = 'active'`;
+
+        params.subscriptionPlanId = finalPlanId;
+        params.maxStores = maxStores;
+        params.subscriptionStartDate = startDate;
+        params.subscriptionEndDate = endDate;
+        params.autoRenewal = autoRenewal === undefined ? Number(Boolean(user.auto_renewal)) : Number(Boolean(autoRenewal));
+
+        subscriptionUpdateLog = {
+          planId: finalPlanId,
+          maxStores,
+          amount: planPrice,
+          startDate,
+          endDate,
+          autoRenewal: Number(params.autoRenewal),
+        };
+      }
+    }
 
     if (permissions !== undefined) {
       // Save permissions as-is (empty object {} means user explicitly cleared all permissions)
@@ -498,6 +787,52 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
       }
     }
 
+    if (subscriptionUpdateLog) {
+      try {
+        await query(
+          `INSERT INTO SubscriptionHistory
+             (id, user_id, plan_id, max_stores, amount, payment_method, start_date, end_date, status, auto_renewal, created_at)
+           VALUES
+             (NEWID(), @userId, @planId, @maxStores, @amount, 'admin_assign', @startDate, @endDate, 'active', @autoRenewal, GETDATE())`,
+          {
+            userId: id,
+            planId: subscriptionUpdateLog.planId,
+            maxStores: subscriptionUpdateLog.maxStores,
+            amount: subscriptionUpdateLog.amount,
+            startDate: subscriptionUpdateLog.startDate,
+            endDate: subscriptionUpdateLog.endDate,
+            autoRenewal: subscriptionUpdateLog.autoRenewal,
+          }
+        );
+
+        await query(
+          `IF EXISTS (SELECT * FROM sysobjects WHERE name='SubscriptionTransactions' AND xtype='U')
+           BEGIN
+             INSERT INTO SubscriptionTransactions
+               (id, user_id, transaction_type, plan_id, max_stores, amount, currency, payment_method, payment_status,
+                start_date, end_date, auto_renewal, processed_by, processed_by_role, notes, created_at, updated_at)
+             VALUES
+               (NEWID(), @userId, 'manual_purchase', @planId, @maxStores, @amount, 'VND', 'cash', 'completed',
+                @startDate, @endDate, @autoRenewal, @processedBy, @processedByRole, @notes, GETDATE(), GETDATE())
+           END`,
+          {
+            userId: id,
+            planId: subscriptionUpdateLog.planId,
+            maxStores: subscriptionUpdateLog.maxStores,
+            amount: subscriptionUpdateLog.amount,
+            startDate: subscriptionUpdateLog.startDate,
+            endDate: subscriptionUpdateLog.endDate,
+            autoRenewal: subscriptionUpdateLog.autoRenewal,
+            processedBy: currentUser.id,
+            processedByRole: currentUser.role,
+            notes: `Cap goi khi cap nhat tai khoan (${normalizedTargetRole})`,
+          }
+        );
+      } catch (subscriptionLogError) {
+        console.error('Subscription update history log error (non-blocking):', subscriptionLogError);
+      }
+    }
+
     if (roleChanged || permissionsChanged || storeIds !== undefined) {
       invalidateUserPermissionCache(id);
     }
@@ -515,6 +850,9 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
     if (status !== undefined) newValues.status = status;
     if (permissions !== undefined) newValues.permissions = permissions;
     if (storeIds !== undefined) newValues.storeIds = storeIds;
+    if (subscriptionPlanId !== undefined) newValues.subscriptionPlanId = subscriptionPlanId;
+    if (subscriptionMonths !== undefined) newValues.subscriptionMonths = subscriptionMonths;
+    if (autoRenewal !== undefined) newValues.autoRenewal = autoRenewal;
     if (password) newValues.passwordChanged = true;
 
     try {
@@ -723,14 +1061,14 @@ router.post('/change-password', authenticate, async (req: AuthRequest, res: Resp
 
 
 /**
- * DELETE /api/users/:id - Deactivate user (soft delete)
+ * DELETE /api/users/:id - Delete user permanently
  * Requirements: 4.1, 4.2, 4.4, 4.5
  */
 router.delete('/:id', requireModulePermission('users', 'delete'), async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const currentUser = req.user!;
-    const currentUserRole = currentUser.role as UserRole;
+    const currentUserRole = normalizeUserRole(currentUser.role);
     const currentStoreId = req.headers['x-store-id'] as string;
 
     console.log('[DELETE USER] Request received:', {
@@ -764,10 +1102,11 @@ router.delete('/:id', requireModulePermission('users', 'delete'), async (req: Au
     });
 
     // Check role hierarchy - Requirements: 4.1, 4.2
-    const canManage = canManageRole(currentUserRole, user.role as UserRole);
+    const targetUserRole = normalizeUserRole(user.role);
+    const canManage = canManageRole(currentUserRole, targetUserRole);
     console.log('[DELETE USER] Role hierarchy check:', {
       currentUserRole,
-      targetUserRole: user.role,
+      targetUserRole,
       canManage
     });
 
@@ -777,11 +1116,182 @@ router.delete('/:id', requireModulePermission('users', 'delete'), async (req: Au
       return;
     }
 
-    // Soft delete - Requirements: 4.4
-    console.log('[DELETE USER] Performing soft delete...');
-    await query(`UPDATE Users SET status = 'inactive', updated_at = GETDATE() WHERE id = @id`, { id });
+    // Prevent deleting owner of stores
+    const storesTableExists = await queryOne<{ hasTable: number }>(
+      `SELECT CASE WHEN OBJECT_ID('Stores', 'U') IS NOT NULL THEN 1 ELSE 0 END AS hasTable`
+    );
+
+    let ownedStoresResult: { count: number } | null = { count: 0 };
+
+    if ((storesTableExists?.hasTable || 0) === 1) {
+      const hasSnakeOwnerId = await queryOne<{ hasColumn: number }>(
+        `SELECT CASE WHEN COL_LENGTH('Stores', 'owner_id') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+      );
+
+      if ((hasSnakeOwnerId?.hasColumn || 0) === 1) {
+        ownedStoresResult = await queryOne<{ count: number }>(
+          `SELECT COUNT(*) AS count FROM Stores WHERE owner_id = @userId`,
+          { userId: id }
+        );
+      } else {
+        const hasPascalOwnerId = await queryOne<{ hasColumn: number }>(
+          `SELECT CASE WHEN COL_LENGTH('Stores', 'OwnerId') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+        );
+
+        if ((hasPascalOwnerId?.hasColumn || 0) === 1) {
+          ownedStoresResult = await queryOne<{ count: number }>(
+            `SELECT COUNT(*) AS count FROM Stores WHERE OwnerId = @userId`,
+            { userId: id }
+          );
+        }
+      }
+    }
+    if ((ownedStoresResult?.count || 0) > 0) {
+      res.status(400).json({
+        error: 'Người dùng đang là chủ cửa hàng. Vui lòng chuyển quyền sở hữu trước khi xóa.',
+      });
+      return;
+    }
+
+    // Prevent deleting users tied to core business history
+    let shiftCountResult: { count: number } | null = { count: 0 };
+    const shiftsTableExists = await queryOne<{ hasTable: number }>(
+      `SELECT CASE WHEN OBJECT_ID('Shifts', 'U') IS NOT NULL THEN 1 ELSE 0 END AS hasTable`
+    );
+    if ((shiftsTableExists?.hasTable || 0) === 1) {
+      const shiftsHasSnakeUserId = await queryOne<{ hasColumn: number }>(
+        `SELECT CASE WHEN COL_LENGTH('Shifts', 'user_id') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+      );
+      if ((shiftsHasSnakeUserId?.hasColumn || 0) === 1) {
+        shiftCountResult = await queryOne<{ count: number }>(
+          `SELECT COUNT(*) AS count FROM Shifts WHERE user_id = @userId`,
+          { userId: id }
+        );
+      } else {
+        const shiftsHasPascalUserId = await queryOne<{ hasColumn: number }>(
+          `SELECT CASE WHEN COL_LENGTH('Shifts', 'UserId') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+        );
+        if ((shiftsHasPascalUserId?.hasColumn || 0) === 1) {
+          shiftCountResult = await queryOne<{ count: number }>(
+            `SELECT COUNT(*) AS count FROM Shifts WHERE UserId = @userId`,
+            { userId: id }
+          );
+        }
+      }
+    }
+    if ((shiftCountResult?.count || 0) > 0) {
+      res.status(400).json({
+        error: 'Người dùng đã có lịch sử ca làm việc. Không thể xóa vĩnh viễn.',
+      });
+      return;
+    }
+
+    let salesCountResult: { count: number } | null = { count: 0 };
+    const salesTableExists = await queryOne<{ hasTable: number }>(
+      `SELECT CASE WHEN OBJECT_ID('Sales', 'U') IS NOT NULL THEN 1 ELSE 0 END AS hasTable`
+    );
+    if ((salesTableExists?.hasTable || 0) === 1) {
+      const salesHasSnakeCreatedBy = await queryOne<{ hasColumn: number }>(
+        `SELECT CASE WHEN COL_LENGTH('Sales', 'created_by') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+      );
+      if ((salesHasSnakeCreatedBy?.hasColumn || 0) === 1) {
+        salesCountResult = await queryOne<{ count: number }>(
+          `SELECT COUNT(*) AS count FROM Sales WHERE created_by = @userId`,
+          { userId: id }
+        );
+      } else {
+        const salesHasPascalCreatedBy = await queryOne<{ hasColumn: number }>(
+          `SELECT CASE WHEN COL_LENGTH('Sales', 'CreatedBy') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+        );
+        if ((salesHasPascalCreatedBy?.hasColumn || 0) === 1) {
+          salesCountResult = await queryOne<{ count: number }>(
+            `SELECT COUNT(*) AS count FROM Sales WHERE CreatedBy = @userId`,
+            { userId: id }
+          );
+        }
+      }
+    }
+    if ((salesCountResult?.count || 0) > 0) {
+      res.status(400).json({
+        error: 'Người dùng đã có lịch sử đơn bán hàng. Không thể xóa vĩnh viễn.',
+      });
+      return;
+    }
+
+    console.log('[DELETE USER] Performing hard delete...');
+
+    // Clean up child records first to satisfy foreign keys across schema variants.
+    const sessionsTableExists = await queryOne<{ hasTable: number }>(
+      `SELECT CASE WHEN OBJECT_ID('Sessions', 'U') IS NOT NULL THEN 1 ELSE 0 END AS hasTable`
+    );
+    if ((sessionsTableExists?.hasTable || 0) === 1) {
+      const sessionsHasSnakeUserId = await queryOne<{ hasColumn: number }>(
+        `SELECT CASE WHEN COL_LENGTH('Sessions', 'user_id') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+      );
+      if ((sessionsHasSnakeUserId?.hasColumn || 0) === 1) {
+        await query(`DELETE FROM Sessions WHERE user_id = @userId`, { userId: id });
+      } else {
+        const sessionsHasPascalUserId = await queryOne<{ hasColumn: number }>(
+          `SELECT CASE WHEN COL_LENGTH('Sessions', 'UserId') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+        );
+        if ((sessionsHasPascalUserId?.hasColumn || 0) === 1) {
+          await query(`DELETE FROM Sessions WHERE UserId = @userId`, { userId: id });
+        }
+      }
+    }
+
+    const userStoresTableExists = await queryOne<{ hasTable: number }>(
+      `SELECT CASE WHEN OBJECT_ID('UserStores', 'U') IS NOT NULL THEN 1 ELSE 0 END AS hasTable`
+    );
+    if ((userStoresTableExists?.hasTable || 0) === 1) {
+      const userStoresHasSnakeUserId = await queryOne<{ hasColumn: number }>(
+        `SELECT CASE WHEN COL_LENGTH('UserStores', 'user_id') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+      );
+      if ((userStoresHasSnakeUserId?.hasColumn || 0) === 1) {
+        await query(`DELETE FROM UserStores WHERE user_id = @userId`, { userId: id });
+      } else {
+        const userStoresHasPascalUserId = await queryOne<{ hasColumn: number }>(
+          `SELECT CASE WHEN COL_LENGTH('UserStores', 'UserId') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+        );
+        if ((userStoresHasPascalUserId?.hasColumn || 0) === 1) {
+          await query(`DELETE FROM UserStores WHERE UserId = @userId`, { userId: id });
+        }
+      }
+    }
+
+    const permissionsTableExists = await queryOne<{ hasTable: number }>(
+      `SELECT CASE WHEN OBJECT_ID('Permissions', 'U') IS NOT NULL THEN 1 ELSE 0 END AS hasTable`
+    );
+    if ((permissionsTableExists?.hasTable || 0) === 1) {
+      const permissionsHasSnakeUserId = await queryOne<{ hasColumn: number }>(
+        `SELECT CASE WHEN COL_LENGTH('Permissions', 'user_id') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+      );
+      if ((permissionsHasSnakeUserId?.hasColumn || 0) === 1) {
+        await query(`DELETE FROM Permissions WHERE user_id = @userId`, { userId: id });
+      } else {
+        const permissionsHasPascalUserId = await queryOne<{ hasColumn: number }>(
+          `SELECT CASE WHEN COL_LENGTH('Permissions', 'UserId') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+        );
+        if ((permissionsHasPascalUserId?.hasColumn || 0) === 1) {
+          await query(`DELETE FROM Permissions WHERE UserId = @userId`, { userId: id });
+        }
+      }
+    }
+
+    await query(
+      `IF OBJECT_ID('SubscriptionTransactions', 'U') IS NOT NULL
+       DELETE FROM SubscriptionTransactions WHERE user_id = @userId`,
+      { userId: id }
+    );
+
+    await query(
+      `IF OBJECT_ID('SubscriptionHistory', 'U') IS NOT NULL
+       DELETE FROM SubscriptionHistory WHERE user_id = @userId`,
+      { userId: id }
+    );
+
+    await query('DELETE FROM Users WHERE id = @id', { id });
     invalidateUserPermissionCache(id);
-    await query('DELETE FROM Sessions WHERE user_id = @userId', { userId: id });
 
     // Audit log - Requirements: 4.5
     try {
@@ -792,7 +1302,7 @@ router.delete('/:id', requireModulePermission('users', 'delete'), async (req: Au
         entityType: 'User',
         entityId: id,
         oldValues: { email: user.email, displayName: user.display_name, role: user.role, status: user.status },
-        newValues: { status: 'inactive' },
+        newValues: { deleted: true },
         ipAddress: (req.ip as string) || undefined,
         userAgent: req.headers['user-agent'],
       });
@@ -801,10 +1311,11 @@ router.delete('/:id', requireModulePermission('users', 'delete'), async (req: Au
     }
 
     console.log('[DELETE USER] Success');
-    res.json({ success: true });
+    res.json({ success: true, hardDeleted: true });
   } catch (error) {
     console.error('Delete user error:', error);
-    res.status(500).json({ error: 'Không thể xóa người dùng' });
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    res.status(500).json({ error: `Không thể xóa người dùng: ${errorMessage}` });
   }
 });
 

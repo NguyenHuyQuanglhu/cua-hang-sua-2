@@ -28,6 +28,16 @@ export function VoucherInput({
   const [isValidating, setIsValidating] = useState(false)
   const { toast } = useToast()
 
+  type VoucherValidateResponse = {
+    valid: boolean
+    voucher?: {
+      code: string
+      name?: string
+    }
+    discount?: number
+    error?: string
+  }
+
   const validateVoucher = async () => {
     if (!code.trim()) {
       toast({
@@ -40,7 +50,7 @@ export function VoucherInput({
 
     setIsValidating(true)
     try {
-      const response = await apiClient.request('/vouchers/validate', {
+      const response = await apiClient.request<VoucherValidateResponse>('/vouchers/validate', {
         method: 'POST',
         body: {
           code: code.trim().toUpperCase(),
@@ -49,8 +59,8 @@ export function VoucherInput({
         },
       })
 
-      if (response.valid) {
-        onVoucherApplied(response.voucher, response.discount)
+      if (response.valid && response.voucher) {
+        onVoucherApplied(response.voucher, Number(response.discount || 0))
         setCode('')
         toast({
           title: 'Thành công',

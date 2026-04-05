@@ -11,7 +11,10 @@ export async function getPayments(): Promise<{
   error?: string;
 }> {
   try {
-    const payments = await apiClient.getPayments();
+    const response = await apiClient.getPayments() as unknown;
+    const payments = Array.isArray(response)
+      ? (response as Array<Record<string, unknown>>)
+      : [];
     return { success: true, payments };
   } catch (error: unknown) {
     console.error('Error fetching payments:', error);
@@ -51,7 +54,10 @@ export async function getSupplierPayments(): Promise<{
   error?: string;
 }> {
   try {
-    const payments = await apiClient.getSupplierPayments();
+    const response = await apiClient.getSupplierPayments() as unknown;
+    const payments = Array.isArray(response)
+      ? (response as Array<Record<string, unknown>>)
+      : [];
     return { success: true, payments };
   } catch (error: unknown) {
     console.error('Error fetching supplier payments:', error);

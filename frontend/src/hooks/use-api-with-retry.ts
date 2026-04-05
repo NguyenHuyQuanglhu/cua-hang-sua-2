@@ -102,16 +102,9 @@ export function useApiWithRetry<T = any>(
           toast({
             variant: 'destructive',
             title: isRecoverable ? 'Lỗi kết nối' : 'Lỗi',
-            description: (
-              <div className="space-y-2">
-                <p>{errorMessage}</p>
-                {isRecoverable && (
-                  <p className="text-xs text-muted-foreground">
-                    Đã thử lại {retryOptions.maxRetries || 3} lần. Vui lòng kiểm tra kết nối và thử lại.
-                  </p>
-                )}
-              </div>
-            ),
+            description: isRecoverable
+              ? `${errorMessage}. Đã thử lại ${retryOptions.maxRetries || 3} lần. Vui lòng kiểm tra kết nối và thử lại.`
+              : errorMessage,
           })
         }
 

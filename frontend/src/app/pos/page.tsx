@@ -205,10 +205,14 @@ export default function POSPage() {
   const [showQRPaymentDialog, setShowQRPaymentDialog] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethod | null>(null);
   const [lastSaleId, setLastSaleId] = useState<string | null>(null);
+  const cartStorageKey = useMemo(
+    () => (currentStore?.id ? `pos-cart-${currentStore.id}` : 'pos-cart'),
+    [currentStore?.id]
+  );
 
   // Load cart from localStorage on mount with error handling
   useEffect(() => {
-    const savedCart = safeStorage.getItem('pos-cart');
+    const savedCart = safeStorage.getItem(cartStorageKey);
     const savedCustomerId = safeStorage.getItem('pos-customer-id');
     const savedDiscountType = safeStorage.getItem('pos-discount-type');
     const savedDiscountValue = safeStorage.getItem('pos-discount-value');
@@ -220,48 +224,60 @@ export default function POSPage() {
       } catch (e) {
         console.error('Failed to parse saved cart:', e);
       }
+    } else {
+      setCart([]);
     }
     if (savedCustomerId) setSelectedCustomerId(savedCustomerId);
     if (savedDiscountType) setDiscountType(savedDiscountType as 'percentage' | 'amount');
     if (savedDiscountValue) setDiscountValue(Number(savedDiscountValue));
     if (savedPointsUsed) setPointsUsed(Number(savedPointsUsed));
-  }, []);
+  }, [cartStorageKey]);
 
   // Update cart items with latest stock info when products data changes
   useEffect(() => {
     if (cart.length > 0 && products.length > 0) {
       const tempProductsMap = new Map(products.map((p) => [p.id, p]));
-      
-      setCart(prevCart => prevCart.map(item => {
+
+      let removedCount = 0;
+      setCart(prevCart => prevCart.flatMap(item => {
         const product = tempProductsMap.get(item.productId);
         if (!product) {
           console.log('[Update cart] Product not found:', item.productId);
-          return item;
+          removedCount += 1;
+          return [];
         }
 
         // Get stock from product
         const stockInBaseUnit = (product as any).stockQuantity || (product as any).currentStock || 0;
         console.log('[Update cart]', product.name, 'updating stock to:', stockInBaseUnit, 'from product:', product);
         
-        return {
+        return [{
           ...item,
           stockInfo: {
             ...item.stockInfo,
             stockInBaseUnit: stockInBaseUnit,
           }
-        };
+        }];
       }));
+
+      if (removedCount > 0) {
+        toast({
+          variant: 'destructive',
+          title: 'Đã làm mới giỏ hàng',
+          description: `${removedCount} sản phẩm không thuộc cửa hàng hiện tại đã được gỡ khỏi giỏ.`,
+        });
+      }
     }
-  }, [products]);
+  }, [products, cart.length, toast]);
 
   // Save cart to localStorage whenever it changes with error handling
   useEffect(() => {
     if (cart.length > 0) {
-      safeStorage.setItem('pos-cart', JSON.stringify(cart));
+      safeStorage.setItem(cartStorageKey, JSON.stringify(cart));
     } else {
-      safeStorage.removeItem('pos-cart');
+      safeStorage.removeItem(cartStorageKey);
     }
-  }, [cart]);
+  }, [cart, cartStorageKey]);
 
   // Save other state to localStorage with error handling
   useEffect(() => {
@@ -309,7 +325,7 @@ export default function POSPage() {
         // Continue even if sync fails
       }
 
-      const result = await getProducts({ pageSize: 1000 }); // Get all active products
+      const result = await getProducts({ pageSize: 1000, storeId: currentStore?.id }); // Get products of current store only
       if (result.success && result.data) {
         console.log('[fetchProducts] First 3 products:', result.data.slice(0, 3));
         setProducts(result.data as unknown as ProductWithStock[]);
@@ -325,7 +341,7 @@ export default function POSPage() {
     } finally {
       setProductsLoading(false);
     }
-  }, [toast]);
+  }, [toast, currentStore?.id]);
 
   // Fetch customers from SQL Server
   const fetchCustomers = useCallback(async () => {
@@ -620,7 +636,7 @@ export default function POSPage() {
       }
 
       // If not found locally, try SQL Server API
-      const result = await getProductByBarcode(barcode)
+      const result = await getProductByBarcode(barcode, currentStore?.id)
       if (result.success && result.product) {
         const product = result.product as unknown as ProductWithStock
         // Add to local products cache
@@ -874,7 +890,7 @@ export default function POSPage() {
         previousDebt: previousDebt, // The debt being paid
         remainingDebt: 0, // After payment, debt should be 0
         paymentMethod: paymentMethod,
-        status: 'completed', // Mark as completed since payment is done
+        status: 'printed', // Mark as finalized for debt payment
         isChangeReturned: customerPayment > previousDebt ? true : false,
         items: [], // Empty items array
       };
@@ -957,7 +973,7 @@ export default function POSPage() {
       previousDebt: includeDebtPayment ? previousDebt : 0, // Only include debt if checkbox is checked
       remainingDebt: remainingDebt,
       paymentMethod: paymentMethod,
-      status: 'completed', // Mark as completed after payment
+      status: 'printed', // Mark as finalized after payment
       isChangeReturned: isChangeReturned,
       items: itemsData,
     }

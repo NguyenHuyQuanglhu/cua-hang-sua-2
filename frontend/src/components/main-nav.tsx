@@ -270,6 +270,13 @@ export function MainNav() {
                             </SidebarMenuSubButton>
                         </SidebarMenuSubItem>
                       )}
+                        {hasPermission('reports_transactions', 'view') && (
+                        <SidebarMenuSubItem>
+                          <SidebarMenuSubButton asChild isActive={isActive('/reports/subscription-history')}>
+                            <Link href="/reports/subscription-history" className='flex items-center gap-2'><Sparkles className="h-4 w-4 text-yellow-500" />Lịch sử gói dịch vụ</Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                        )}
                       {hasPermission('reports_transactions', 'view') && (
                         <SidebarMenuSubItem>
                             <SidebarMenuSubButton asChild isActive={isActive('/reports/transactions')}>

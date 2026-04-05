@@ -79,9 +79,9 @@ import { getSuppliers } from "@/app/suppliers/actions"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
 import { ImportProducts } from "./components/import-products"
-import { QuickPurchaseDialog } from "./components/quick-purchase-dialog"
+import { QuickImportDialog } from "../purchases/components/quick-import-dialog"
 import { useUserRole } from "@/hooks/use-user-role"
-import { useStore } from "@/contexts/store-context"
+import { useStoreId } from "@/contexts/store-context"
 
 
 // Product type from SQL Server API
@@ -147,7 +147,7 @@ export default function ProductsPage() {
   const { toast } = useToast();
   const router = useRouter();
   const { permissions, isLoading: isRoleLoading } = useUserRole();
-  const { selectedStoreId } = useStore();
+  const selectedStoreId = useStoreId();
 
   // Track previous filter values to detect changes
   const prevFiltersRef = useRef({ debouncedSearchTerm, categoryFilter: categoryFilter.join(','), statusFilter });
@@ -451,6 +451,10 @@ export default function ProductsPage() {
     purchaseLots: (selectedProduct as any).purchaseLots || [], // Include purchase lots from API
   } : undefined;
 
+  const selectedQuickImportProduct = selectedProductForQuickPurchase
+    ? products.find((p) => p.id === selectedProductForQuickPurchase)
+    : undefined;
+
   return (
     <>
       <ProductForm 
@@ -565,7 +569,12 @@ export default function ProductsPage() {
               <>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Button size="sm" className="h-8 gap-1" variant="outline" onClick={() => setIsQuickPurchaseOpen(true)}>
+                    <Button
+                      size="sm"
+                      className="h-8 gap-1"
+                      variant="outline"
+                      onClick={() => router.push('/purchases/quick-import')}
+                    >
                       <Zap className="h-3.5 w-3.5 text-yellow-500" />
                       <span className="sr-only sm:not-sr-only sm:whitespace-nowrap">
                         Nhập nhanh
@@ -837,32 +846,32 @@ export default function ProductsPage() {
         ))}
       </Tabs>
 
-      <QuickPurchaseDialog
-        isOpen={isQuickPurchaseOpen}
-        onOpenChange={(open) => {
-          setIsQuickPurchaseOpen(open);
-          if (!open) {
-            // Reset selected product and clear sorting when dialog closes
-            setSelectedProductForQuickPurchase(undefined);
-            setCurrentPage(1);
-            setSortKey(null);
-            setSortDirection('asc');
-          }
-        }}
-        products={products.map(p => ({ 
-          id: p.id, 
-          name: p.name, 
-          unitId: p.unitId,
-          costPrice: p.averageCost 
-        }))}
-        units={units}
-        suppliers={suppliers}
-        preselectedProductId={selectedProductForQuickPurchase}
-        onSuccess={() => {
-          // Refresh products list after successful purchase
-          fetchProducts();
-        }}
-      />
+      {selectedQuickImportProduct && (
+        <QuickImportDialog
+          open={isQuickPurchaseOpen}
+          onOpenChange={(open) => {
+            setIsQuickPurchaseOpen(open);
+            if (!open) {
+              setSelectedProductForQuickPurchase(undefined);
+              setCurrentPage(1);
+              setSortKey(null);
+              setSortDirection('asc');
+            }
+          }}
+          product={{
+            id: selectedQuickImportProduct.id,
+            name: selectedQuickImportProduct.name,
+            sku: selectedQuickImportProduct.barcode || '',
+            costPrice: selectedQuickImportProduct.averageCost || 0,
+            unitId: selectedQuickImportProduct.unitId,
+            unitName: unitsMap.get(selectedQuickImportProduct.unitId)?.name || 'đơn vị',
+            currentStock: selectedQuickImportProduct.currentStock || 0,
+          }}
+          onSuccess={() => {
+            fetchProducts();
+          }}
+        />
+      )}
     </>
   )
 }

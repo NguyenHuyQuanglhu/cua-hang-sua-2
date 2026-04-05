@@ -18,6 +18,7 @@ import {
   AlertTriangle,
   RefreshCw,
   Bell,
+  Percent,
 } from "lucide-react"
 
 import {
@@ -66,7 +67,24 @@ import {
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { CustomerForm } from "./components/customer-form"
-import { getCustomers, deleteCustomer, updateCustomerStatus, generateCustomerTemplate, getCustomerDebt, CustomerWithDebt, CustomerDebtHistory, syncCustomerAccounts } from "./actions"
+import {
+  getCustomers,
+  deleteCustomer,
+  updateCustomerStatus,
+  generateCustomerTemplate,
+  getCustomerDebt,
+  CustomerWithDebt,
+  CustomerDebtHistory,
+  syncCustomerAccounts,
+  getCustomerDiscounts,
+  getCustomerDiscountPayouts,
+  createCustomerDiscount,
+  updateCustomerDiscount,
+  deleteCustomerDiscount,
+  payCustomerDiscounts,
+  type CustomerDiscountItem,
+  type CustomerDiscountPayoutItem,
+} from "./actions"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
 import { Input } from "@/components/ui/input"
@@ -82,7 +100,13 @@ interface Customer {
   email?: string;
   phone?: string;
   address?: string;
-  customerType: 'personal' | 'business';
+  customerType: string;
+  customerSegment?: string;
+  customerSegmentLabel?: string;
+  discountRate?: number;
+  totalDiscountPending?: number;
+  totalDiscountPaid?: number;
+  totalDiscountAll?: number;
   customerGroup?: string;
   gender?: 'male' | 'female' | 'other';
   birthday?: string;
@@ -109,7 +133,7 @@ interface DebtHistoryItem {
   runningBalance: number;
 }
 
-type CustomerTypeFilter = 'all' | 'personal' | 'business';
+type CustomerTypeFilter = 'all' | 'personal' | 'business' | 'wholesaler' | 'agency' | 'vip';
 type GenderFilter = 'all' | 'male' | 'female' | 'other';
 type LoyaltyTierFilter = 'all' | 'diamond' | 'gold' | 'silver' | 'bronze' | 'none';
 type SortKey = 'name' | 'status' | 'debt' | 'customerType' | 'customerGroup' | 'gender' | 'loyaltyTier';
@@ -151,6 +175,24 @@ const getTierIcon = (tier: string | undefined) => {
   }
 }
 
+const getCustomerSegmentLabel = (segment?: string, segmentLabel?: string) => {
+  if (segmentLabel && segmentLabel.trim()) {
+    return segmentLabel;
+  }
+
+  switch (segment) {
+    case 'personal': return 'Cá nhân';
+    case 'business': return 'Doanh nghiệp';
+    case 'wholesaler': return 'Đại lý sỉ';
+    case 'agency': return 'Nhà phân phối';
+    case 'vip': return 'VIP';
+    default: return segment ? segment.replace(/[-_]/g, ' ') : 'Khác';
+  }
+}
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const isValidUUID = (value: string | null | undefined) => UUID_REGEX.test(String(value || '').trim());
+
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<CustomerWithDebt[]>([]);
@@ -171,6 +213,18 @@ export default function CustomersPage() {
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [loyaltyTierFilter, setLoyaltyTierFilter] = useState<LoyaltyTierFilter>('all');
+  const [discountCustomer, setDiscountCustomer] = useState<CustomerWithDebt | null>(null);
+  const [discountItems, setDiscountItems] = useState<CustomerDiscountItem[]>([]);
+  const [discountPayoutItems, setDiscountPayoutItems] = useState<CustomerDiscountPayoutItem[]>([]);
+  const [discountAmount, setDiscountAmount] = useState('');
+  const [discountDescription, setDiscountDescription] = useState('');
+  const [editingDiscountId, setEditingDiscountId] = useState<string | null>(null);
+  const [paymentNote, setPaymentNote] = useState('');
+  const [payoutMethod, setPayoutMethod] = useState('cash');
+  const [transferReference, setTransferReference] = useState('');
+  const [transferAccountName, setTransferAccountName] = useState('');
+  const [transferAccountNumber, setTransferAccountNumber] = useState('');
+  const [transferBankName, setTransferBankName] = useState('');
   const { permissions, isLoading: isRoleLoading } = useUserRole();
 
   const { toast } = useToast();
@@ -210,6 +264,125 @@ export default function CustomersPage() {
     fetchPaymentHistory();
   }, [viewingPaymentsFor]);
 
+  const loadDiscounts = async (customer: CustomerWithDebt) => {
+    if (!isValidUUID(customer.id)) {
+      toast({ variant: 'destructive', title: 'Lỗi', description: 'ID khách hàng không hợp lệ, không thể tải chi tiết chiết khấu.' });
+      return;
+    }
+
+    setDiscountCustomer(customer);
+    const [result, payoutResult] = await Promise.all([
+      getCustomerDiscounts(customer.id),
+      getCustomerDiscountPayouts(customer.id),
+    ]);
+
+    if (result.success && result.items) {
+      setDiscountItems(result.items);
+    } else {
+      setDiscountItems([]);
+      toast({ variant: 'destructive', title: 'Lỗi', description: result.error || 'Không thể tải chiết khấu' });
+    }
+
+    if (payoutResult.success && payoutResult.items) {
+      setDiscountPayoutItems(payoutResult.items);
+    } else {
+      setDiscountPayoutItems([]);
+    }
+  };
+
+  const refreshCustomers = async () => {
+    const refreshResult = await getCustomers(true);
+    if (refreshResult.success && refreshResult.customers) {
+      setCustomers(refreshResult.customers);
+    }
+  };
+
+  const handleSaveDiscount = async () => {
+    if (!discountCustomer) return;
+    const amount = Number(discountAmount || 0);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast({ variant: 'destructive', title: 'Lỗi', description: 'Số tiền chiết khấu phải lớn hơn 0' });
+      return;
+    }
+
+    const result = editingDiscountId
+      ? await updateCustomerDiscount(discountCustomer.id, editingDiscountId, amount, discountDescription)
+      : await createCustomerDiscount(discountCustomer.id, amount, discountDescription);
+
+    if (!result.success) {
+      toast({ variant: 'destructive', title: 'Lỗi', description: result.error || 'Không thể lưu chiết khấu' });
+      return;
+    }
+
+    setDiscountAmount('');
+    setDiscountDescription('');
+    setEditingDiscountId(null);
+    await loadDiscounts(discountCustomer);
+    await refreshCustomers();
+    toast({ title: 'Thành công', description: 'Đã lưu chiết khấu.' });
+  };
+
+  const handleEditDiscount = (item: CustomerDiscountItem) => {
+    setEditingDiscountId(item.id);
+    setDiscountAmount(String(item.amount));
+    setDiscountDescription(item.description || '');
+  };
+
+  const handleDeleteDiscount = async (item: CustomerDiscountItem) => {
+    if (!discountCustomer) return;
+    const result = await deleteCustomerDiscount(discountCustomer.id, item.id);
+    if (!result.success) {
+      toast({ variant: 'destructive', title: 'Lỗi', description: result.error || 'Không thể xóa chiết khấu' });
+      return;
+    }
+    await loadDiscounts(discountCustomer);
+    await refreshCustomers();
+    toast({ title: 'Thành công', description: 'Đã xóa chiết khấu.' });
+  };
+
+  const handlePayDiscounts = async () => {
+    if (!discountCustomer) return;
+    if (!isValidUUID(discountCustomer.id)) {
+      toast({ variant: 'destructive', title: 'Lỗi', description: 'ID khách hàng không hợp lệ, không thể thanh toán chiết khấu.' });
+      return;
+    }
+
+    const pendingAmount = discountItems
+      .filter((item) => item.status === 'pending')
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+    if (pendingAmount <= 0) {
+      toast({ title: 'Thông báo', description: 'Không có chiết khấu chờ thanh toán.' });
+      return;
+    }
+
+    const result = await payCustomerDiscounts(discountCustomer.id, {
+      paymentNote,
+      payoutMethod,
+      transferReference,
+      transferAccountName,
+      transferAccountNumber,
+      transferBankName,
+    });
+    if (!result.success) {
+      if ((result.error || '').includes('Không có chiết khấu chờ thanh toán')) {
+        toast({ title: 'Thông báo', description: 'Không có chiết khấu chờ thanh toán.' });
+        return;
+      }
+      toast({ variant: 'destructive', title: 'Lỗi', description: result.error || 'Không thể thanh toán chiết khấu' });
+      return;
+    }
+    setPaymentNote('');
+    setPayoutMethod('cash');
+    setTransferReference('');
+    setTransferAccountName('');
+    setTransferAccountNumber('');
+    setTransferBankName('');
+    await loadDiscounts(discountCustomer);
+    await refreshCustomers();
+    toast({ title: 'Đã thanh toán', description: `Đã thanh toán ${formatCurrency(Number(result.paidAmount || 0))} chiết khấu.` });
+  };
+
   const filteredCustomers = useMemo(() => {
     return customers?.filter(customer => {
       // Loyalty tier filter
@@ -218,8 +391,9 @@ export default function CustomersPage() {
         if(loyaltyTierFilter !== 'none' && customer.loyaltyTier !== loyaltyTierFilter) return false;
       }
       
-      // Customer type filter
-      if (customerTypeFilter !== 'all' && customer.customerType !== customerTypeFilter) return false;
+      // Customer type/segment filter
+      const segment = (customer.customerSegment || customer.customerType || 'personal') as string;
+      if (customerTypeFilter !== 'all' && segment !== customerTypeFilter) return false;
       
       // Gender filter - handle undefined/null values
       if (genderFilter !== 'all') {
@@ -498,6 +672,195 @@ export default function CustomersPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={!!discountCustomer} onOpenChange={(open) => !open && setDiscountCustomer(null)}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Chiết khấu khách hàng: {discountCustomer?.name}</DialogTitle>
+            <DialogDescription>
+              Quản lý chi tiết chiết khấu, tổng mức chiết khấu và thanh toán chiết khấu cho khách hàng.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <Card>
+              <CardContent className="pt-4">
+                <p className="text-sm text-muted-foreground">Tổng chiết khấu</p>
+                <p className="text-lg font-semibold">{formatCurrency(discountItems.reduce((s, i) => s + Number(i.amount || 0), 0))}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <p className="text-sm text-muted-foreground">Chưa thanh toán</p>
+                <p className="text-lg font-semibold text-orange-600">
+                  {formatCurrency(discountItems.filter(i => i.status === 'pending').reduce((s, i) => s + Number(i.amount || 0), 0))}
+                </p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <p className="text-sm text-muted-foreground">Đã thanh toán</p>
+                <p className="text-lg font-semibold text-green-600">
+                  {formatCurrency(discountItems.filter(i => i.status === 'paid').reduce((s, i) => s + Number(i.amount || 0), 0))}
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-[1fr_2fr_auto] gap-2">
+            <Input
+              type="number"
+              min={0}
+              step="1000"
+              placeholder="Số tiền chiết khấu"
+              value={discountAmount}
+              onChange={(e) => setDiscountAmount(e.target.value)}
+            />
+            <Input
+              placeholder="Mô tả chiết khấu"
+              value={discountDescription}
+              onChange={(e) => setDiscountDescription(e.target.value)}
+            />
+            <Button onClick={handleSaveDiscount}>{editingDiscountId ? 'Cập nhật' : 'Thêm'}</Button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-[2fr_auto] gap-2">
+            <Input
+              placeholder="Ghi chú thanh toán chiết khấu"
+              value={paymentNote}
+              onChange={(e) => setPaymentNote(e.target.value)}
+            />
+            <Button
+              variant="default"
+              onClick={handlePayDiscounts}
+              disabled={!discountItems.some((i) => i.status === 'pending')}
+            >
+              Thanh toán chiết khấu
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <Input
+              placeholder="Phương thức: cash/bank_transfer"
+              value={payoutMethod}
+              onChange={(e) => setPayoutMethod(e.target.value)}
+            />
+            <Input
+              placeholder="Mã tham chiếu chuyển khoản"
+              value={transferReference}
+              onChange={(e) => setTransferReference(e.target.value)}
+            />
+            <Input
+              placeholder="Tài khoản chuyển đi"
+              value={transferAccountName}
+              onChange={(e) => setTransferAccountName(e.target.value)}
+            />
+            <Input
+              placeholder="Số tài khoản chuyển đi"
+              value={transferAccountNumber}
+              onChange={(e) => setTransferAccountNumber(e.target.value)}
+            />
+            <Input
+              placeholder="Ngân hàng chuyển đi"
+              value={transferBankName}
+              onChange={(e) => setTransferBankName(e.target.value)}
+            />
+          </div>
+
+          <Table containerClassName="overflow-x-auto" className="w-full table-auto min-w-[980px]">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[170px]">Ngày</TableHead>
+                <TableHead className="w-[220px]">Hóa đơn</TableHead>
+                <TableHead className="min-w-[280px]">Mô tả</TableHead>
+                <TableHead className="w-[170px]">Trạng thái</TableHead>
+                <TableHead className="w-[140px] text-right">Số tiền</TableHead>
+                <TableHead className="w-[170px]">Hành động</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {discountItems.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground">Chưa có bản ghi chiết khấu</TableCell>
+                </TableRow>
+              )}
+              {discountItems.map((item) => (
+                <TableRow key={item.id}>
+                  <TableCell className="align-top">{new Date(item.created_at).toLocaleString('vi-VN')}</TableCell>
+                  <TableCell>
+                    <div className="text-xs">
+                      <div>{item.invoice_number || '-'}</div>
+                      {item.invoice_date && <div className="text-muted-foreground">{new Date(item.invoice_date).toLocaleDateString('vi-VN')}</div>}
+                      {item.discount_percent_of_invoice !== null && item.discount_percent_of_invoice !== undefined && (
+                        <div className="text-muted-foreground">Ty le: {Number(item.discount_percent_of_invoice).toFixed(2)}%</div>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>{item.description || '-'}</TableCell>
+                  <TableCell className="align-top">
+                    <div className="space-y-1">
+                      <Badge className="whitespace-nowrap" variant={item.status === 'pending' ? 'secondary' : 'default'}>
+                        {item.status === 'pending' ? 'Chờ thanh toán' : 'Đã thanh toán'}
+                      </Badge>
+                      {item.paid_at && (
+                        <div className="text-xs text-muted-foreground">{new Date(item.paid_at).toLocaleString('vi-VN')}</div>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-right font-medium">{formatCurrency(Number(item.amount || 0))}</TableCell>
+                  <TableCell>
+                    {item.status === 'pending' ? (
+                      <div className="flex gap-2">
+                        <Button size="sm" className="w-16" variant="outline" onClick={() => handleEditDiscount(item)}>Sửa</Button>
+                        <Button size="sm" className="w-16" variant="destructive" onClick={() => handleDeleteDiscount(item)}>Xóa</Button>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">-</span>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+
+          <div>
+            <p className="text-sm font-medium mb-2">Lịch sử thanh toán chiết khấu</p>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Ngày</TableHead>
+                  <TableHead>Phương thức</TableHead>
+                  <TableHead>Chuyển khoản</TableHead>
+                  <TableHead className="text-right">Số tiền</TableHead>
+                  <TableHead className="text-right">Số giao dịch</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {discountPayoutItems.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center text-muted-foreground">Chưa có lịch sử thanh toán</TableCell>
+                  </TableRow>
+                )}
+                {discountPayoutItems.map((item) => (
+                  <TableRow key={item.id}>
+                    <TableCell>{new Date(item.paid_at || item.created_at).toLocaleString('vi-VN')}</TableCell>
+                    <TableCell>{item.payout_method || '-'}</TableCell>
+                    <TableCell>
+                      <div className="text-xs">
+                        <div>{item.transfer_reference || '-'}</div>
+                        {item.transfer_bank_name && <div className="text-muted-foreground">{item.transfer_bank_name}</div>}
+                        {item.transfer_account_number && <div className="text-muted-foreground">{item.transfer_account_number}</div>}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right">{formatCurrency(Number(item.total_amount || 0))}</TableCell>
+                    <TableCell className="text-right">{Number(item.transaction_count || 0)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </DialogContent>
+      </Dialog>
+
 
       <div className="flex items-center gap-2 mb-4">
          <div className="grid gap-2">
@@ -524,6 +887,9 @@ export default function CustomersPage() {
                   <DropdownMenuRadioItem value="all">Tất cả</DropdownMenuRadioItem>
                   <DropdownMenuRadioItem value="personal">Cá nhân</DropdownMenuRadioItem>
                   <DropdownMenuRadioItem value="business">Doanh nghiệp</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="wholesaler">Đại lý sỉ</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="agency">Nhà phân phối</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="vip">VIP</DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
                 <DropdownMenuSeparator />
                 <DropdownMenuLabel>Giới tính</DropdownMenuLabel>
@@ -597,17 +963,18 @@ export default function CustomersPage() {
            </div>
         </CardHeader>
         <CardContent>
-          <Table>
+          <Table containerClassName="overflow-x-auto" className="w-full table-auto min-w-[980px]">
             <TableHeader>
               <TableRow>
                 <TableHead className="w-16 hidden md:table-cell">STT</TableHead>
-                <SortableHeader sortKey="name" className="min-w-[150px]">Tên</SortableHeader>
+                <SortableHeader sortKey="name">Tên</SortableHeader>
                 <SortableHeader sortKey="status">Trạng thái</SortableHeader>
                 <SortableHeader sortKey="loyaltyTier">Hạng</SortableHeader>
-                <SortableHeader sortKey="debt" className="text-right">Công nợ (Trả/Nợ)</SortableHeader>
                 <SortableHeader sortKey="customerType" className="hidden md:table-cell">Loại</SortableHeader>
+                <TableHead className="hidden md:table-cell text-right">Chiết khấu (%)</TableHead>
+                <TableHead className="hidden md:table-cell text-right">Tổng CK</TableHead>
                 <SortableHeader sortKey="customerGroup" className="hidden md:table-cell">Nhóm</SortableHeader>
-                <TableHead className="hidden lg:table-cell">Email</TableHead>
+                <TableHead className="hidden xl:table-cell w-[220px]">Email</TableHead>
                 <TableHead>
                   <span className="sr-only">Hành động</span>
                 </TableHead>
@@ -617,14 +984,15 @@ export default function CustomersPage() {
               {isLoading && <TableRow><TableCell colSpan={10} className="text-center h-24">Đang tải...</TableCell></TableRow>}
               {!isLoading && sortedCustomers?.map((customer, index) => {
                 const debt = customer.calculatedDebt || customer.currentDebt || 0;
-                const paid = customer.totalPayments || 0;
                 const hasDebt = debt > 0;
+                const hasValidCustomerId = isValidUUID(customer.id);
+                const hasPendingDiscount = Number(customer.totalDiscountPending || 0) > 0;
                 const isOverLimit = customer.creditLimit > 0 && debt > customer.creditLimit;
                 return (
                   <TableRow key={customer.id}>
                     <TableCell className="font-medium hidden md:table-cell">{index + 1}</TableCell>
                     <TableCell className="font-medium min-w-0">
-                      <Link href={`/customers/${customer.id}`} className="hover:underline flex items-center gap-1 whitespace-nowrap overflow-hidden">
+                      <Link href={`/customers/${customer.id}`} className="hover:underline flex items-center gap-1 overflow-hidden">
                         <span className="truncate">{customer.name}</span>
                         {isOverLimit && <AlertTriangle className="h-4 w-4 text-destructive flex-shrink-0" aria-label="Vượt hạn mức tín dụng" />}
                       </Link>
@@ -663,26 +1031,28 @@ export default function CustomersPage() {
                         </div>
                       </Badge>
                     </TableCell>
-                     <TableCell>
-                      <div className="flex flex-col items-end space-y-1">
-                        <button 
-                          className="underline cursor-pointer text-green-600 text-sm" 
-                          onClick={() => setViewingPaymentsFor(customer)}
-                        >
-                          {formatCurrency(paid)}
-                        </button>
-                        <div className={`text-sm font-medium ${debt > 0 ? "text-destructive" : "text-muted-foreground"}`}>
-                          {formatCurrency(debt)}
-                        </div>
-                      </div>
-                    </TableCell>
                     <TableCell className="hidden md:table-cell">
-                      <Badge variant="outline">{customer.customerType === 'personal' ? 'Cá nhân' : 'Doanh nghiệp'}</Badge>
+                      <Badge variant="outline">{getCustomerSegmentLabel(customer.customerSegment || customer.customerType, customer.customerSegmentLabel)}</Badge>
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell text-right">
+                      <span className="inline-flex items-center gap-1 font-medium">
+                        <Percent className="h-3 w-3" />
+                        {Number(customer.discountRate || 0).toFixed(2)}
+                      </span>
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell text-right">
+                      <button
+                        className="underline text-orange-600 disabled:no-underline disabled:text-muted-foreground"
+                        onClick={() => loadDiscounts(customer)}
+                        disabled={!hasValidCustomerId}
+                      >
+                        {formatCurrency(Number(customer.totalDiscountPending || 0))}
+                      </button>
                     </TableCell>
                      <TableCell className="hidden md:table-cell">
                       {customer.customerGroup}
                     </TableCell>
-                    <TableCell className="hidden lg:table-cell">{customer.email}</TableCell>
+                    <TableCell className="hidden xl:table-cell max-w-[220px] truncate">{customer.email}</TableCell>
                     <TableCell>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
@@ -703,6 +1073,45 @@ export default function CustomersPage() {
                           {canEditCustomer && (
                             <DropdownMenuItem onClick={() => handleEditCustomer(customer)}>Sửa</DropdownMenuItem>
                           )}
+                          {canEditCustomer && (
+                            <DropdownMenuItem
+                              onClick={() => {
+                                if (!hasValidCustomerId) {
+                                  toast({ variant: 'destructive', title: 'Lỗi', description: 'ID khách hàng không hợp lệ.' });
+                                  return;
+                                }
+                                loadDiscounts(customer);
+                              }}
+                              disabled={!hasValidCustomerId}
+                            >
+                              Chi tiết chiết khấu
+                            </DropdownMenuItem>
+                          )}
+                          {canEditCustomer && (
+                            <DropdownMenuItem onClick={async () => {
+                              if (!hasValidCustomerId) {
+                                toast({ variant: 'destructive', title: 'Lỗi', description: 'ID khách hàng không hợp lệ.' });
+                                return;
+                              }
+                              if (!hasPendingDiscount) {
+                                toast({ title: 'Thông báo', description: 'Không có chiết khấu chờ thanh toán.' });
+                                return;
+                              }
+                              const result = await payCustomerDiscounts(customer.id);
+                              if (result.success) {
+                                toast({ title: 'Đã thanh toán', description: `Đã thanh toán ${formatCurrency(Number(result.paidAmount || 0))} cho ${customer.name}` });
+                                await refreshCustomers();
+                              } else {
+                                if ((result.error || '').includes('Không có chiết khấu chờ thanh toán')) {
+                                  toast({ title: 'Thông báo', description: 'Không có chiết khấu chờ thanh toán.' });
+                                } else {
+                                  toast({ variant: 'destructive', title: 'Lỗi', description: result.error || 'Không thể thanh toán chiết khấu' });
+                                }
+                              }
+                            }} disabled={!hasPendingDiscount}>
+                              Thanh toán chiết khấu
+                            </DropdownMenuItem>
+                          )}
                           {canDeleteCustomer && (
                           <DropdownMenuItem className="text-destructive" onClick={() => setCustomerToDelete(customer)} disabled={hasDebt}>Xóa</DropdownMenuItem>
                           )}
@@ -713,7 +1122,7 @@ export default function CustomersPage() {
                 )})}
                 {!isLoading && sortedCustomers?.length === 0 && (
                     <TableRow>
-                        <TableCell colSpan={10} className="text-center h-24">
+                    <TableCell colSpan={10} className="text-center h-24">
                             Không tìm thấy khách hàng nào.
                         </TableCell>
                     </TableRow>

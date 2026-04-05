@@ -88,7 +88,7 @@ interface SaleFormProps {
   sale?: Sale;
 }
 
-const FormattedNumberInput = ({ value, onChange, ...props }: { value: number; onChange: (value: number) => void; [key: string]: any }) => {
+const FormattedNumberInput = ({ value, onChange, ...props }: { value?: number; onChange: (value: number) => void; [key: string]: any }) => {
   const [displayValue, setDisplayValue] = useState(value?.toLocaleString('en-US') || '');
 
   useEffect(() => {
@@ -457,7 +457,6 @@ export function SaleForm({ isOpen, onOpenChange, customers, products, units, all
           productId: product.id, 
           quantity: 1, 
           price: product.sellingPrice || 0,
-          unitId: product.defaultSalesUnitId || product.unitId, // Ưu tiên default sales unit
         });
       }
     }

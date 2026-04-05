@@ -41,6 +41,8 @@ export interface CreateSaleResult {
  * Handles sales transactions with automatic inventory deduction and unit conversion
  */
 export declare class SalesService {
+    private resolvePreferredColumnName;
+    private resolveStoreColumnName;
     /**
      * Generate a unique invoice number
      */

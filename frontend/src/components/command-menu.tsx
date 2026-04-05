@@ -185,6 +185,10 @@ export function CommandMenu() {
               <History className="mr-2 h-4 w-4" />
               <span>Lịch sử Giao dịch</span>
             </CommandItem>
+            <CommandItem onSelect={() => runCommand(() => router.push('/reports/subscription-history'))}>
+              <Sparkles className="mr-2 h-4 w-4" />
+              <span>Lịch sử gói dịch vụ</span>
+            </CommandItem>
             <CommandItem onSelect={() => runCommand(() => router.push('/reports/revenue'))}>
               <FileText className="mr-2 h-4 w-4" />
               <span>Báo cáo Doanh thu</span>

@@ -24,6 +24,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useStore } from '@/contexts/store-context'
 import { getPostShiftRedirectPath } from '@/lib/navigation'
+import type { UserRole } from '@/lib/types'
 
 interface Shift {
   id: string;
@@ -208,7 +209,7 @@ export function ShiftControls({ activeShift, onShiftClosed }: ShiftControlsProps
           onShiftClosed()
         } else {
           // Default behavior: redirect based on user role
-          const redirectPath = user?.role ? getPostShiftRedirectPath(user.role) : '/login'
+          const redirectPath = user?.role ? getPostShiftRedirectPath(user.role as UserRole) : '/login'
           router.push(redirectPath)
         }
       } else {

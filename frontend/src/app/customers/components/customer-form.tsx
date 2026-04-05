@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -30,26 +30,49 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
-import { Customer } from '@/lib/types'
-import { upsertCustomer } from '../actions'
+import { createStoreCustomerSegment, getStoreCustomerSegments, StoreCustomerSegment, upsertCustomer } from '../actions'
 import { useToast } from '@/hooks/use-toast'
 import { useRouter } from 'next/navigation'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { cn } from '@/lib/utils'
-import { CalendarIcon } from 'lucide-react'
-import { Calendar } from '@/components/ui/calendar'
 import { format } from 'date-fns'
 import { Separator } from '@/components/ui/separator'
+import { useUserRole } from '@/hooks/use-user-role'
+
+const DEFAULT_DISCOUNT_BY_SEGMENT: Record<string, number> = {
+  personal: 0,
+  business: 10,
+  wholesaler: 12,
+  agency: 15,
+  vip: 8,
+};
+
+const DEFAULT_CUSTOMER_SEGMENTS: StoreCustomerSegment[] = [
+  { segmentKey: 'personal', segmentLabel: 'Cá nhân', baseCustomerType: 'personal', defaultDiscountRate: 0, isActive: true, isSystem: true },
+  { segmentKey: 'business', segmentLabel: 'Doanh nghiệp', baseCustomerType: 'business', defaultDiscountRate: 10, isActive: true, isSystem: true },
+  { segmentKey: 'wholesaler', segmentLabel: 'Đại lý sỉ', baseCustomerType: 'business', defaultDiscountRate: 12, isActive: true, isSystem: true },
+  { segmentKey: 'agency', segmentLabel: 'Nhà phân phối', baseCustomerType: 'business', defaultDiscountRate: 15, isActive: true, isSystem: true },
+  { segmentKey: 'vip', segmentLabel: 'VIP', baseCustomerType: 'personal', defaultDiscountRate: 8, isActive: true, isSystem: true },
+];
+
+const MIN_CUSTOMER_AGE = 12;
+const EARLIEST_BIRTHDAY = new Date('1900-01-01');
+const LATEST_BIRTHDAY = (() => {
+  const now = new Date();
+  return new Date(now.getFullYear() - MIN_CUSTOMER_AGE, now.getMonth(), now.getDate());
+})();
 
 const customerFormSchema = z.object({
   name: z.string().min(1, "Tên không được để trống."),
   email: z.string().email("Email không hợp lệ.").optional().or(z.literal('')),
   phone: z.string().optional(),
   address: z.string().optional(),
-  customerType: z.enum(['personal', 'business']),
+  customerSegment: z.string().min(1, 'Loại khách hàng là bắt buộc.'),
+  discountRate: z.coerce.number().min(0, "Chiết khấu phải >= 0").max(100, "Chiết khấu tối đa 100%"),
   customerGroup: z.string().optional(),
   gender: z.enum(['male', 'female', 'other']).optional(),
-  birthday: z.date().optional(),
+  birthday: z
+    .date()
+    .max(LATEST_BIRTHDAY, `Khách hàng phải từ ${MIN_CUSTOMER_AGE} tuổi trở lên.`)
+    .optional(),
   zalo: z.string().optional(),
   bankName: z.string().optional(),
   bankAccountNumber: z.string().optional(),
@@ -63,15 +86,44 @@ const customerFormSchema = z.object({
 
 type CustomerFormValues = z.infer<typeof customerFormSchema>;
 
+interface CustomerFormModel {
+  id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  customerType?: string;
+  customerSegment?: string;
+  customerGroup?: string;
+  gender?: 'male' | 'female' | 'other';
+  birthday?: string;
+  zalo?: string;
+  bankName?: string;
+  bankAccountNumber?: string;
+  bankBranch?: string;
+  creditLimit: number;
+  status: 'active' | 'inactive';
+  loyaltyPoints?: number;
+  lifetimePoints?: number;
+  loyaltyTier?: 'bronze' | 'silver' | 'gold' | 'diamond';
+  discountRate?: number;
+}
+
 interface CustomerFormProps {
   isOpen: boolean;
   onOpenChange: (isOpen: boolean, newCustomerId?: string) => void;
-  customer?: Customer;
+  customer?: CustomerFormModel;
 }
 
 export function CustomerForm({ isOpen, onOpenChange, customer }: CustomerFormProps) {
   const { toast } = useToast();
   const router = useRouter();
+  const { role } = useUserRole();
+  const [segmentOptions, setSegmentOptions] = useState<StoreCustomerSegment[]>(DEFAULT_CUSTOMER_SEGMENTS);
+  const [isLoadingSegments, setIsLoadingSegments] = useState(false);
+  const [newSegmentLabel, setNewSegmentLabel] = useState('');
+  const [newSegmentBaseType, setNewSegmentBaseType] = useState<'personal' | 'business'>('personal');
+  const [isCreatingSegment, setIsCreatingSegment] = useState(false);
 
   const defaultValues: Partial<CustomerFormValues> = customer
     ? { 
@@ -79,7 +131,8 @@ export function CustomerForm({ isOpen, onOpenChange, customer }: CustomerFormPro
         email: customer.email || '',
         phone: customer.phone || '',
         address: customer.address || '',
-        customerType: customer.customerType,
+        customerSegment: (customer as unknown as { customerSegment?: string }).customerSegment as CustomerFormValues['customerSegment'] || (customer.customerType as CustomerFormValues['customerSegment']) || 'personal',
+        discountRate: Number((customer as unknown as { discountRate?: number }).discountRate || 0),
         customerGroup: customer.customerGroup || '',
         gender: customer.gender,
         birthday: customer.birthday ? new Date(customer.birthday) : undefined,
@@ -95,7 +148,8 @@ export function CustomerForm({ isOpen, onOpenChange, customer }: CustomerFormPro
       }
     : { 
         name: '',
-        customerType: 'personal',
+        customerSegment: 'personal',
+        discountRate: 0,
         creditLimit: 0,
         status: 'active',
         loyaltyPoints: 0,
@@ -116,7 +170,8 @@ export function CustomerForm({ isOpen, onOpenChange, customer }: CustomerFormPro
             email: customer.email || '',
             phone: customer.phone || '',
             address: customer.address || '',
-            customerType: customer.customerType,
+            customerSegment: (customer as unknown as { customerSegment?: string }).customerSegment as CustomerFormValues['customerSegment'] || (customer.customerType as CustomerFormValues['customerSegment']) || 'personal',
+            discountRate: Number((customer as unknown as { discountRate?: number }).discountRate || 0),
             customerGroup: customer.customerGroup || '',
             gender: customer.gender,
             birthday: customer.birthday ? new Date(customer.birthday) : undefined,
@@ -135,7 +190,8 @@ export function CustomerForm({ isOpen, onOpenChange, customer }: CustomerFormPro
             email: '',
             phone: '',
             address: '',
-            customerType: 'personal',
+            customerSegment: 'personal',
+            discountRate: 0,
             customerGroup: '',
             gender: undefined,
             birthday: undefined,
@@ -153,11 +209,96 @@ export function CustomerForm({ isOpen, onOpenChange, customer }: CustomerFormPro
     }
   }, [customer, isOpen, form]);
 
+  const selectedSegment = form.watch('customerSegment');
+  const selectedSegmentConfig = segmentOptions.find((segment) => segment.segmentKey === selectedSegment);
+
+  const canManageSegments = ['owner', 'company_manager', 'store_manager', 'admin'].includes(String(role || '').toLowerCase());
+  const canEditDiscountRate = canManageSegments;
+
+  const loadSegmentOptions = async () => {
+    setIsLoadingSegments(true);
+    const result = await getStoreCustomerSegments();
+    if (result.success && result.data && result.data.length > 0) {
+      const filteredSegments = result.data.filter(
+        (segment) => segment.segmentKey !== 'worker' && segment.segmentKey !== 'tho'
+      );
+      setSegmentOptions(filteredSegments);
+      if (!filteredSegments.some((segment) => segment.segmentKey === form.getValues('customerSegment'))) {
+        form.setValue('customerSegment', 'personal');
+      }
+    } else {
+      setSegmentOptions(DEFAULT_CUSTOMER_SEGMENTS);
+      if (result.error) {
+        toast({
+          variant: 'destructive',
+          title: 'Không tải được loại khách hàng theo cửa hàng',
+          description: result.error,
+        });
+      }
+    }
+    setIsLoadingSegments(false);
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      loadSegmentOptions();
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    const currentRate = Number(form.getValues('discountRate') || 0);
+    if (!Number.isFinite(currentRate) || currentRate === 0) {
+      form.setValue('discountRate', selectedSegmentConfig?.defaultDiscountRate ?? DEFAULT_DISCOUNT_BY_SEGMENT[selectedSegment] ?? 0);
+    }
+  }, [selectedSegment, selectedSegmentConfig, form]);
+
+  const handleCreateSegment = async () => {
+    const label = newSegmentLabel.trim();
+    if (!label) {
+      toast({ variant: 'destructive', title: 'Thiếu thông tin', description: 'Vui lòng nhập tên loại khách hàng.' });
+      return;
+    }
+
+    setIsCreatingSegment(true);
+    const result = await createStoreCustomerSegment({
+      segmentLabel: label,
+      baseCustomerType: newSegmentBaseType,
+    });
+
+    if (!result.success || !result.data) {
+      toast({ variant: 'destructive', title: 'Không thể tạo loại khách hàng', description: result.error });
+      setIsCreatingSegment(false);
+      return;
+    }
+
+    await loadSegmentOptions();
+    form.setValue('customerSegment', result.data.segmentKey);
+    form.setValue('discountRate', Number(result.data.defaultDiscountRate || 0));
+    setNewSegmentLabel('');
+    toast({ title: 'Đã thêm loại khách hàng', description: `Đã thêm loại "${result.data.segmentLabel}" cho cửa hàng.` });
+    setIsCreatingSegment(false);
+  };
+
   const onSubmit = async (data: CustomerFormValues) => {
-    const dataToSubmit: Partial<Customer> = {
+    if (!customer && !data.gender) {
+      form.setError('gender', { type: 'manual', message: 'Vui lòng chọn giới tính khi thêm khách hàng mới.' });
+      return;
+    }
+
+    const baseCustomerType = selectedSegmentConfig?.baseCustomerType || (
+      data.customerSegment === 'business' || data.customerSegment === 'wholesaler' || data.customerSegment === 'agency'
+        ? 'business'
+        : 'personal'
+    );
+
+    const dataToSubmit: Record<string, unknown> = {
       ...data,
+      customerType: baseCustomerType,
       id: customer?.id,
       birthday: data.birthday ? data.birthday.toISOString() : undefined,
+    }
+    if (!canEditDiscountRate) {
+      delete dataToSubmit.discountRate;
     }
     const result = await upsertCustomer(dataToSubmit);
     if (result.success) {
@@ -205,7 +346,7 @@ export function CustomerForm({ isOpen, onOpenChange, customer }: CustomerFormPro
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <FormField
                         control={form.control}
-                        name="customerType"
+                      name="customerSegment"
                         render={({ field }) => (
                             <FormItem>
                             <FormLabel>Loại khách hàng</FormLabel>
@@ -216,10 +357,14 @@ export function CustomerForm({ isOpen, onOpenChange, customer }: CustomerFormPro
                                 </SelectTrigger>
                                 </FormControl>
                                 <SelectContent>
-                                    <SelectItem value="personal">Cá nhân</SelectItem>
-                                    <SelectItem value="business">Doanh nghiệp</SelectItem>
+                                    {segmentOptions.map((segment) => (
+                                      <SelectItem key={segment.segmentKey} value={segment.segmentKey}>{segment.segmentLabel}</SelectItem>
+                                    ))}
                                 </SelectContent>
                             </Select>
+                            <FormDescription>
+                              {isLoadingSegments ? 'Đang tải loại khách hàng theo cửa hàng...' : 'Danh sách loại khách hàng được cấu hình riêng cho cửa hàng hiện tại.'}
+                            </FormDescription>
                             <FormMessage />
                             </FormItem>
                         )}
@@ -246,6 +391,43 @@ export function CustomerForm({ isOpen, onOpenChange, customer }: CustomerFormPro
                         )}
                     />
                 </div>
+                {canManageSegments && (
+                  <div className="grid grid-cols-1 md:grid-cols-[1fr_180px_auto] gap-2 rounded-md border p-3">
+                    <Input
+                      placeholder="Thêm loại khách hàng mới cho cửa hàng"
+                      value={newSegmentLabel}
+                      onChange={(event) => setNewSegmentLabel(event.target.value)}
+                    />
+                    <Select value={newSegmentBaseType} onValueChange={(value) => setNewSegmentBaseType(value as 'personal' | 'business')}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Loại nền" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="personal">Nhóm cá nhân</SelectItem>
+                        <SelectItem value="business">Nhóm doanh nghiệp</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Button type="button" onClick={handleCreateSegment} disabled={isCreatingSegment}>
+                      {isCreatingSegment ? 'Đang thêm...' : 'Thêm loại'}
+                    </Button>
+                  </div>
+                )}
+                {canEditDiscountRate && (
+                  <FormField
+                    control={form.control}
+                    name="discountRate"
+                    render={({ field }) => (
+                      <FormItem>
+                      <FormLabel>Chiết khấu mặc định (%)</FormLabel>
+                      <FormControl>
+                        <Input type="number" min={0} max={100} step="0.01" placeholder="0" {...field} />
+                      </FormControl>
+                      <FormDescription>Áp dụng riêng cho khách hàng này khi tính chiết khấu.</FormDescription>
+                      <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
                  <FormField
                     control={form.control}
                     name="customerGroup"
@@ -306,8 +488,8 @@ export function CustomerForm({ isOpen, onOpenChange, customer }: CustomerFormPro
                         name="gender"
                         render={({ field }) => (
                             <FormItem>
-                            <FormLabel>Giới tính</FormLabel>
-                             <Select onValueChange={field.onChange} defaultValue={field.value}>
+                        <FormLabel>Giới tính{!customer ? ' *' : ''}</FormLabel>
+                         <Select onValueChange={field.onChange} value={field.value}>
                                 <FormControl>
                                 <SelectTrigger>
                                     <SelectValue placeholder="Chọn giới tính" />
@@ -327,39 +509,23 @@ export function CustomerForm({ isOpen, onOpenChange, customer }: CustomerFormPro
                         control={form.control}
                         name="birthday"
                         render={({ field }) => (
-                            <FormItem className="flex flex-col pt-2">
+                            <FormItem className="pt-2">
                                 <FormLabel>Ngày sinh</FormLabel>
-                                <Popover>
-                                    <PopoverTrigger asChild>
-                                    <FormControl>
-                                        <Button
-                                        variant={"outline"}
-                                        className={cn(
-                                            "w-full pl-3 text-left font-normal",
-                                            !field.value && "text-muted-foreground"
-                                        )}
-                                        >
-                                        {field.value ? (
-                                            format(field.value, "dd/MM/yyyy")
-                                        ) : (
-                                            <span>Chọn một ngày</span>
-                                        )}
-                                        <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
-                                        </Button>
-                                    </FormControl>
-                                    </PopoverTrigger>
-                                    <PopoverContent className="w-auto p-0" align="start">
-                                    <Calendar
-                                        mode="single"
-                                        selected={field.value}
-                                        onSelect={field.onChange}
-                                        disabled={(date) =>
-                                        date > new Date() || date < new Date("1900-01-01")
-                                        }
-                                        initialFocus
-                                    />
-                                    </PopoverContent>
-                                </Popover>
+                                <FormControl>
+                                  <Input
+                                    type="date"
+                                    min={format(EARLIEST_BIRTHDAY, 'yyyy-MM-dd')}
+                                    max={format(LATEST_BIRTHDAY, 'yyyy-MM-dd')}
+                                    value={field.value ? format(field.value, 'yyyy-MM-dd') : ''}
+                                    onChange={(event) => {
+                                      const value = event.target.value;
+                                      field.onChange(value ? new Date(`${value}T00:00:00`) : undefined);
+                                    }}
+                                  />
+                                </FormControl>
+                                <FormDescription>
+                                  Nhập hoặc chọn ngày sinh. Tuổi tối thiểu {MIN_CUSTOMER_AGE}.
+                                </FormDescription>
                                 <FormMessage />
                             </FormItem>
                         )}

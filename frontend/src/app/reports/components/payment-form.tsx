@@ -25,10 +25,15 @@ import {
 import { Input } from "@/components/ui/input"
 import { useToast } from '@/hooks/use-toast'
 import { useRouter } from 'next/navigation'
-import type { CustomerDebtInfo } from '../page'
 import { Textarea } from '@/components/ui/textarea'
 import { addPayment } from '@/app/payments/actions'
 import { formatCurrency } from '@/lib/utils'
+
+interface CustomerDebtInfo {
+  customerId: string;
+  customerName: string;
+  finalDebt: number;
+}
 
 const paymentFormSchema = z.object({
   amount: z.coerce.number().min(1, "Số tiền phải lớn hơn 0."),
