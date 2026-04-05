@@ -93,7 +93,7 @@ export default function ProfitReportPage() {
       const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
       
       const searchParams = new URLSearchParams(params);
-      const response = await fetch(`http://localhost:3001/api/reports/profit?${searchParams.toString()}`, {
+      const response = await fetch(`/api/reports/profit?${searchParams.toString()}`, {
         headers: {
           'Content-Type': 'application/json',
           'X-Store-Id': currentStore.id,
