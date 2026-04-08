@@ -14,7 +14,15 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     const storeId = req.storeId!;
     
     const payments = await query(
-      `SELECT p.*, c.full_name as customer_name
+      `SELECT 
+         p.id,
+         p.store_id,
+         p.customer_id,
+         p.amount,
+         p.payment_date,
+         p.notes,
+         p.created_at,
+         c.full_name as customer_name
        FROM Payments p
        LEFT JOIN Customers c ON p.customer_id = c.id
        WHERE p.store_id = @storeId
@@ -23,15 +31,15 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     );
 
     res.json(payments.map((p: Record<string, unknown>) => ({
-      id: p.Id,
-      storeId: p.StoreId,
-      customerId: p.CustomerId,
+      id: p.id,
+      storeId: p.store_id,
+      customerId: p.customer_id,
       customerName: p.customer_name,
-      amount: p.Amount,
-      paymentDate: p.PaymentDate,
+      amount: p.amount,
+      paymentDate: p.payment_date,
       paymentMethod: 'cash', // Default since not in schema
-      notes: p.Notes,
-      createdAt: p.CreatedAt,
+      notes: p.notes,
+      createdAt: p.created_at,
     })));
   } catch (error) {
     console.error('Get customer payments error:', error);
@@ -50,7 +58,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 
     // Insert payment record
     await query(
-      `INSERT INTO Payments (Id, StoreId, CustomerId, Amount, PaymentDate, Notes, CreatedAt)
+      `INSERT INTO Payments (id, store_id, customer_id, amount, payment_date, notes, created_at)
        VALUES (@paymentId, @storeId, @customerId, @amount, @paymentDate, @notes, GETDATE())`,
       {
         paymentId,

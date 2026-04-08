@@ -2,7 +2,16 @@
 
 import { apiClient } from '@/lib/api-client';
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const normalizeUuid = (value: unknown): string | null => {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    return null;
+  }
+
+  return UUID_REGEX.test(normalized) ? normalized : null;
+};
 
 export interface StoreCustomerSegment {
   segmentKey: string;
@@ -57,8 +66,16 @@ export async function getCustomer(
   customer?: Record<string, unknown>;
   error?: string;
 }> {
+  const normalizedCustomerId = normalizeUuid(customerId);
+  if (!normalizedCustomerId) {
+    return {
+      success: false,
+      error: 'ID khách hàng không hợp lệ (cần GUID chuẩn 8-4-4-4-12).',
+    };
+  }
+
   try {
-    const customer = await apiClient.getCustomer(customerId);
+    const customer = await apiClient.getCustomer(normalizedCustomerId);
     return { success: true, customer };
   } catch (error: unknown) {
     console.error('Error fetching customer:', error);
@@ -118,11 +135,20 @@ export async function createStoreCustomerSegment(input: {
  * Create or update a customer
  */
 export async function upsertCustomer(customer: Record<string, unknown>): Promise<{ success: boolean; customerId?: string; error?: string }> {
+  const rawId = String(customer.id || '').trim();
+  const normalizedId = normalizeUuid(rawId);
+
+  if (rawId && !normalizedId) {
+    return {
+      success: false,
+      error: 'ID khách hàng không hợp lệ (cần GUID chuẩn 8-4-4-4-12). Vui lòng tạo mới khách hàng.',
+    };
+  }
+
   try {
-    const id = customer.id as string | undefined;
-    if (id) {
-      await apiClient.updateCustomer(id, customer);
-      return { success: true, customerId: id };
+    if (normalizedId) {
+      await apiClient.updateCustomer(normalizedId, customer);
+      return { success: true, customerId: normalizedId };
     } else {
       const result = await apiClient.createCustomer(customer) as { id: string };
       return { success: true, customerId: result.id };
@@ -140,8 +166,16 @@ export async function upsertCustomer(customer: Record<string, unknown>): Promise
  * Delete a customer
  */
 export async function deleteCustomer(customerId: string): Promise<{ success: boolean; error?: string }> {
+  const normalizedCustomerId = normalizeUuid(customerId);
+  if (!normalizedCustomerId) {
+    return {
+      success: false,
+      error: 'ID khách hàng không hợp lệ (cần GUID chuẩn 8-4-4-4-12).',
+    };
+  }
+
   try {
-    await apiClient.deleteCustomer(customerId);
+    await apiClient.deleteCustomer(normalizedCustomerId);
     return { success: true };
   } catch (error: unknown) {
     console.error('Error deleting customer:', error);
@@ -160,8 +194,16 @@ export async function updateCustomerStatus(
   customerId: string,
   status: string
 ): Promise<{ success: boolean; error?: string }> {
+  const normalizedCustomerId = normalizeUuid(customerId);
+  if (!normalizedCustomerId) {
+    return {
+      success: false,
+      error: 'ID khách hàng không hợp lệ (cần GUID chuẩn 8-4-4-4-12).',
+    };
+  }
+
   try {
-    await apiClient.updateCustomer(customerId, { status });
+    await apiClient.updateCustomer(normalizedCustomerId, { status });
     return { success: true };
   } catch (error: unknown) {
     console.error('Error updating customer status:', error);
@@ -214,8 +256,16 @@ export async function getCustomerDiscounts(customerId: string): Promise<{
   items?: CustomerDiscountItem[];
   error?: string;
 }> {
+  const normalizedCustomerId = normalizeUuid(customerId);
+  if (!normalizedCustomerId) {
+    return {
+      success: false,
+      error: 'ID khách hàng không hợp lệ (cần GUID chuẩn 8-4-4-4-12).',
+    };
+  }
+
   try {
-    const response = await apiClient.request<{ success: boolean; data: CustomerDiscountItem[] }>(`/customers/${customerId}/discounts`);
+    const response = await apiClient.request<{ success: boolean; data: CustomerDiscountItem[] }>(`/customers/${normalizedCustomerId}/discounts`);
     return { success: true, items: response.data || [] };
   } catch (error: unknown) {
     console.error('Error fetching customer discounts:', error);
@@ -231,8 +281,16 @@ export async function getCustomerDiscountPayouts(customerId: string): Promise<{
   items?: CustomerDiscountPayoutItem[];
   error?: string;
 }> {
+  const normalizedCustomerId = normalizeUuid(customerId);
+  if (!normalizedCustomerId) {
+    return {
+      success: false,
+      error: 'ID khách hàng không hợp lệ (cần GUID chuẩn 8-4-4-4-12).',
+    };
+  }
+
   try {
-    const response = await apiClient.request<{ success: boolean; data: CustomerDiscountPayoutItem[] }>(`/customers/${customerId}/discounts/payouts`);
+    const response = await apiClient.request<{ success: boolean; data: CustomerDiscountPayoutItem[] }>(`/customers/${normalizedCustomerId}/discounts/payouts`);
     return { success: true, items: response.data || [] };
   } catch (error: unknown) {
     console.error('Error fetching customer discount payouts:', error);
@@ -244,8 +302,16 @@ export async function getCustomerDiscountPayouts(customerId: string): Promise<{
 }
 
 export async function createCustomerDiscount(customerId: string, amount: number, description?: string): Promise<{ success: boolean; error?: string }> {
+  const normalizedCustomerId = normalizeUuid(customerId);
+  if (!normalizedCustomerId) {
+    return {
+      success: false,
+      error: 'ID khách hàng không hợp lệ (cần GUID chuẩn 8-4-4-4-12).',
+    };
+  }
+
   try {
-    await apiClient.request(`/customers/${customerId}/discounts`, {
+    await apiClient.request(`/customers/${normalizedCustomerId}/discounts`, {
       method: 'POST',
       body: { amount, description },
     });
@@ -265,8 +331,16 @@ export async function updateCustomerDiscount(
   amount: number,
   description?: string
 ): Promise<{ success: boolean; error?: string }> {
+  const normalizedCustomerId = normalizeUuid(customerId);
+  if (!normalizedCustomerId) {
+    return {
+      success: false,
+      error: 'ID khách hàng không hợp lệ (cần GUID chuẩn 8-4-4-4-12).',
+    };
+  }
+
   try {
-    await apiClient.request(`/customers/${customerId}/discounts/${discountId}`, {
+    await apiClient.request(`/customers/${normalizedCustomerId}/discounts/${discountId}`, {
       method: 'PUT',
       body: { amount, description },
     });
@@ -281,8 +355,16 @@ export async function updateCustomerDiscount(
 }
 
 export async function deleteCustomerDiscount(customerId: string, discountId: string): Promise<{ success: boolean; error?: string }> {
+  const normalizedCustomerId = normalizeUuid(customerId);
+  if (!normalizedCustomerId) {
+    return {
+      success: false,
+      error: 'ID khách hàng không hợp lệ (cần GUID chuẩn 8-4-4-4-12).',
+    };
+  }
+
   try {
-    await apiClient.request(`/customers/${customerId}/discounts/${discountId}`, { method: 'DELETE' });
+    await apiClient.request(`/customers/${normalizedCustomerId}/discounts/${discountId}`, { method: 'DELETE' });
     return { success: true };
   } catch (error: unknown) {
     console.error('Error deleting customer discount:', error);
@@ -306,15 +388,15 @@ export async function payCustomerDiscounts(
         transferBankName?: string;
       }
 ): Promise<{ success: boolean; paidAmount?: number; payoutId?: string; error?: string }> {
-  try {
-    const normalizedCustomerId = String(customerId || '').trim();
-    if (!UUID_REGEX.test(normalizedCustomerId)) {
-      return {
-        success: false,
-        error: 'ID khách hàng không hợp lệ (cần UUID).',
-      };
-    }
+  const normalizedCustomerId = normalizeUuid(customerId);
+  if (!normalizedCustomerId) {
+    return {
+      success: false,
+      error: 'ID khách hàng không hợp lệ (cần GUID chuẩn 8-4-4-4-12).',
+    };
+  }
 
+  try {
     const body =
       typeof paymentInput === 'string'
         ? { paymentNote: paymentInput }
@@ -479,8 +561,8 @@ export async function getCustomerDebt(
       creditLimit?: number;
     };
 
-    const currentDebt = customerData.currentDebt || customerData.debt || 0;
-    const creditLimit = customerData.creditLimit || 0;
+    const currentDebt = customerData.currentDebt ?? customerData.debt ?? 0;
+    const creditLimit = customerData.creditLimit ?? 0;
 
     // Fetch debt history if requested
     let history: CustomerDebtHistory[] = [];
@@ -496,10 +578,10 @@ export async function getCustomerDebt(
     }
 
     const debtInfo: CustomerDebtInfo = {
-      totalDebt: customerData.debt || customerData.currentDebt || 0,
+      totalDebt: customerData.debt ?? customerData.currentDebt ?? 0,
       currentDebt: currentDebt,
-      totalSales: customerData.totalSales || 0,
-      totalPayments: customerData.totalPayments || 0,
+      totalSales: customerData.totalSales ?? 0,
+      totalPayments: customerData.totalPayments ?? 0,
       isOverLimit: creditLimit > 0 && currentDebt > creditLimit,
       availableCredit: creditLimit > 0 ? Math.max(0, creditLimit - currentDebt) : 0,
       history: history,
@@ -644,9 +726,9 @@ export async function getCustomerDebtWithHistory(
     }
 
     const debtInfo: CustomerDebtInfo = {
-      totalDebt: customerData.debt || customerData.currentDebt || 0,
-      totalSales: customerData.totalSales || 0,
-      totalPayments: customerData.totalPayments || 0,
+      totalDebt: customerData.debt ?? customerData.currentDebt ?? 0,
+      totalSales: customerData.totalSales ?? 0,
+      totalPayments: customerData.totalPayments ?? 0,
       history: history,
     };
 

@@ -13,13 +13,13 @@ export function validateUUID(paramName: string = 'id') {
       });
     }
 
-    // UUID v4 regex pattern
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    // Accept SQL Server GUID shape (8-4-4-4-12 hex) regardless of UUID version bits.
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     
     if (!uuidRegex.test(uuid)) {
       console.error(`❌ Invalid UUID format for ${paramName}:`, uuid);
       return res.status(400).json({ 
-        error: `Invalid ${paramName} format. Expected UUID format.`,
+        error: `Invalid ${paramName} format. Expected GUID format.`,
         received: uuid,
         expected: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
       });

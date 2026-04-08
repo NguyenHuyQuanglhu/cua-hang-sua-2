@@ -17,6 +17,7 @@ import { Separator } from '@/components/ui/separator'
 import { apiClient } from '@/lib/api-client'
 import { formatDistanceToNow } from 'date-fns'
 import { vi } from 'date-fns/locale'
+import { useStore } from '@/contexts/store-context'
 
 interface Notification {
   id: string
@@ -36,14 +37,28 @@ interface NotificationListProps {
 
 export function NotificationList({ onNotificationRead }: NotificationListProps) {
   const router = useRouter()
+  const { user, currentStore, isLoading: isStoreLoading } = useStore()
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [loading, setLoading] = useState(true)
+  const canLoadNotifications = Boolean(user && currentStore?.id && !isStoreLoading)
 
   useEffect(() => {
-    fetchNotifications()
-  }, [])
+    if (!canLoadNotifications) {
+      setNotifications([])
+      setLoading(false)
+      return
+    }
+
+    void fetchNotifications()
+  }, [canLoadNotifications, currentStore?.id, user?.id])
 
   const fetchNotifications = async () => {
+    if (!canLoadNotifications) {
+      setNotifications([])
+      setLoading(false)
+      return
+    }
+
     try {
       setLoading(true)
       const response = await apiClient.getNotifications({
@@ -61,6 +76,10 @@ export function NotificationList({ onNotificationRead }: NotificationListProps) 
   }
 
   const handleMarkAsRead = async (id: string) => {
+    if (!canLoadNotifications) {
+      return
+    }
+
     try {
       await apiClient.markNotificationAsRead(id)
       setNotifications(prev =>
@@ -73,6 +92,10 @@ export function NotificationList({ onNotificationRead }: NotificationListProps) 
   }
 
   const handleMarkAllAsRead = async () => {
+    if (!canLoadNotifications) {
+      return
+    }
+
     try {
       await apiClient.markAllNotificationsAsRead()
       setNotifications(prev => prev.map(n => ({ ...n, isRead: true })))
@@ -83,6 +106,10 @@ export function NotificationList({ onNotificationRead }: NotificationListProps) 
   }
 
   const handleDelete = async (id: string) => {
+    if (!canLoadNotifications) {
+      return
+    }
+
     try {
       await apiClient.deleteNotification(id)
       setNotifications(prev => prev.filter(n => n.id !== id))
@@ -99,6 +126,14 @@ export function NotificationList({ onNotificationRead }: NotificationListProps) 
     if (notification.actionUrl) {
       router.push(notification.actionUrl)
     }
+  }
+
+  if (!canLoadNotifications) {
+    return (
+      <div className="p-6 text-center text-sm text-muted-foreground">
+        Chọn cửa hàng để xem thông báo.
+      </div>
+    )
   }
 
   const getIcon = (type: string) => {

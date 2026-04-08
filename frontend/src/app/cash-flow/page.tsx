@@ -68,6 +68,35 @@ import { useUserRole } from "@/hooks/use-user-role"
 type SortKey = 'transactionDate' | 'type' | 'category' | 'amount' | 'reason';
 type TypeFilter = 'all' | 'thu' | 'chi';
 
+const CASH_FLOW_CATEGORY_LABELS: Record<string, string> = {
+  customer_discount_payout: 'Thanh toán chiết khấu',
+};
+
+const formatCashFlowCategory = (category?: string) => {
+  if (!category) return '';
+  return CASH_FLOW_CATEGORY_LABELS[category] || category;
+};
+
+const formatCashFlowReason = (reason?: string, category?: string) => {
+  const text = String(reason || '').trim();
+  if (!text) return '';
+
+  const isDiscountPayout = category === 'customer_discount_payout' || /chiet\s*khau\s*khach\s*hang/i.test(text);
+  if (!isDiscountPayout) {
+    return text;
+  }
+
+  const legacyPrefix = /^thanh\s*toan\s*chiet\s*khau\s*khach\s*hang\s*/i;
+  if (legacyPrefix.test(text)) {
+    const customerName = text.replace(legacyPrefix, '').trim();
+    return customerName
+      ? `Thanh toán chiết khấu khách hàng ${customerName}`
+      : 'Thanh toán chiết khấu khách hàng';
+  }
+
+  return text;
+};
+
 export default function CashFlowPage() {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState<CashTransaction | undefined>(undefined);
@@ -126,7 +155,7 @@ export default function CashFlowPage() {
     const uniqueCategories = new Set<string>();
     transactions.forEach(t => {
         if (t.category) {
-            uniqueCategories.add(t.category);
+            uniqueCategories.add(formatCashFlowCategory(t.category));
         }
     });
     return Array.from(uniqueCategories);
@@ -138,10 +167,12 @@ export default function CashFlowPage() {
         const typeMatch = typeFilter === 'all' || transaction.type === typeFilter;
         
         const term = searchTerm.toLowerCase();
-        const reason = transaction.reason || '';
+        const reason = formatCashFlowReason(transaction.reason, transaction.category);
+        const categoryLabel = formatCashFlowCategory(transaction.category);
         const searchMatch = !term ||
             reason.toLowerCase().includes(term) ||
-            (transaction.category && transaction.category.toLowerCase().includes(term));
+          (transaction.category && transaction.category.toLowerCase().includes(term)) ||
+          categoryLabel.toLowerCase().includes(term);
             
         return typeMatch && searchMatch;
     });
@@ -227,7 +258,12 @@ export default function CashFlowPage() {
       toast({ title: "Không có dữ liệu để xuất." });
       return;
     }
-    const result = await generateCashTransactionsExcel(sortedTransactions);
+    const normalizedTransactions = sortedTransactions.map((transaction) => ({
+      ...transaction,
+      reason: formatCashFlowReason(transaction.reason, transaction.category),
+    }));
+
+    const result = await generateCashTransactionsExcel(normalizedTransactions);
     if (result.success && result.data) {
         const link = document.createElement("a");
         link.href = `data:text/csv;charset=utf-8;base64,${result.data}`;
@@ -387,8 +423,8 @@ export default function CashFlowPage() {
                     <TableCell className="text-right font-semibold">
                       {transaction.type === 'thu' ? '+' : '-'}{formatCurrency(transaction.amount)}
                     </TableCell>
-                    <TableCell>{transaction.reason || ''}</TableCell>
-                    <TableCell>{transaction.category}</TableCell>
+                    <TableCell>{formatCashFlowReason(transaction.reason, transaction.category)}</TableCell>
+                    <TableCell>{formatCashFlowCategory(transaction.category)}</TableCell>
                     <TableCell>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>

@@ -3,6 +3,7 @@
     import { authenticate, storeContext, AuthRequest } from '../middleware/auth';
     import { salesService, InventoryInsufficientStockError } from '../services';
     import { salesSPRepository } from '../repositories/sales-sp-repository';
+    import { cashTransactionRepository } from '../repositories/cash-transaction-repository';
     import * as pdfInvoiceService from '../services/pdf-invoice-service';
     import { validateAndNormalizeStatus, validateStatusQuery } from '../middleware/validateStatus';
 
@@ -729,6 +730,35 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
         console.log('[POST /api/sales] ✗ SKIPPING debt update');
         console.log('[POST /api/sales] Reason: customerId =', customerId, '(type:', typeof customerId, ')');
         console.log('[POST /api/sales] Reason: previousDebt =', previousDebtAmount, '(type:', typeof previousDebtAmount, ')');
+      }
+
+      // Ensure debt payment appears in payment history and cashbook as a cash-in transaction.
+      if (customerId && customerPaymentAmount > 0) {
+        await query(
+          `INSERT INTO Payments (id, store_id, customer_id, payment_date, amount, notes, created_at)
+           VALUES (NEWID(), @storeId, @customerId, @paymentDate, @amount, @notes, @createdAt)`,
+          {
+            storeId,
+            customerId,
+            paymentDate: new Date(),
+            amount: customerPaymentAmount,
+            notes: `Thanh toán công nợ tại quầy (Hóa đơn ${invoiceNumber})`,
+            createdAt: new Date(),
+          }
+        );
+
+        await cashTransactionRepository.create(
+          {
+            storeId,
+            type: 'thu',
+            transactionDate: new Date().toISOString(),
+            amount: customerPaymentAmount,
+            reason: `Thu tiền công nợ khách hàng - ${invoiceNumber}`,
+            category: 'Thu tiền khách hàng',
+            relatedInvoiceId: saleId,
+          },
+          storeId
+        );
       }
 
       console.log('[POST /api/sales] Debt payment sale created:', saleId, invoiceNumber);

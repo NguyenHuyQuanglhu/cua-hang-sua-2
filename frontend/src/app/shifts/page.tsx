@@ -136,6 +136,14 @@ export default function ShiftsPage() {
     fetchShifts();
   }, [fetchShifts]);
 
+  useEffect(() => {
+    const refreshInterval = setInterval(() => {
+      fetchShifts();
+    }, 15000);
+
+    return () => clearInterval(refreshInterval);
+  }, [fetchShifts]);
+
   const filteredShifts = useMemo(() => {
     return shifts?.filter(shift => {
       const term = searchTerm.toLowerCase()

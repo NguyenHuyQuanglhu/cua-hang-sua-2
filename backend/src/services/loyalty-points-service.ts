@@ -1,14 +1,101 @@
 import { loyaltyPointsRepository } from '../repositories/loyalty-points-repository';
 import { customersSPRepository } from '../repositories/customers-sp-repository';
+import { settingsSPRepository } from '../repositories/settings-sp-repository';
 import { notificationGeneratorService } from './notification-generator.service';
 
 /**
  * Calculate loyalty tier based on lifetime points
  */
-function calculateLoyaltyTier(lifetimePoints: number): string {
-  if (lifetimePoints >= 10000) return 'diamond';
-  if (lifetimePoints >= 5000) return 'gold';
-  if (lifetimePoints >= 1000) return 'silver';
+type CanonicalTierName = 'bronze' | 'silver' | 'gold' | 'diamond';
+
+interface LoyaltyTierConfig {
+  name: CanonicalTierName;
+  threshold: number;
+}
+
+interface LoyaltySettingsPayload {
+  loyalty?: {
+    tiers?: Array<{
+      name?: string;
+      threshold?: number;
+    }>;
+  };
+}
+
+const DEFAULT_TIERS: LoyaltyTierConfig[] = [
+  { name: 'diamond', threshold: 10000 },
+  { name: 'gold', threshold: 5000 },
+  { name: 'silver', threshold: 1000 },
+  { name: 'bronze', threshold: 0 },
+];
+
+const TIER_ALIAS_MAP: Record<string, CanonicalTierName> = {
+  bronze: 'bronze',
+  dong: 'bronze',
+  silver: 'silver',
+  bac: 'silver',
+  gold: 'gold',
+  vang: 'gold',
+  diamond: 'diamond',
+  kimcuong: 'diamond',
+};
+
+function normalizeTierName(value: unknown): CanonicalTierName | null {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) {
+    return null;
+  }
+
+  const compactRaw = raw.replace(/\s+/g, '');
+  const ascii = compactRaw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z]/g, '');
+
+  return TIER_ALIAS_MAP[compactRaw] || TIER_ALIAS_MAP[ascii] || null;
+}
+
+function normalizeTiers(rawTiers: Array<{ name?: string; threshold?: number }> | undefined): LoyaltyTierConfig[] {
+  if (!rawTiers || rawTiers.length === 0) {
+    return DEFAULT_TIERS;
+  }
+
+  const tierThresholdMap = new Map<CanonicalTierName, number>();
+
+  for (const tier of rawTiers) {
+    const normalizedName = normalizeTierName(tier.name);
+    const threshold = Number(tier.threshold ?? 0);
+
+    if (!normalizedName || !Number.isFinite(threshold)) {
+      continue;
+    }
+
+    const currentThreshold = tierThresholdMap.get(normalizedName);
+    if (currentThreshold === undefined || threshold > currentThreshold) {
+      tierThresholdMap.set(normalizedName, threshold);
+    }
+  }
+
+  if (tierThresholdMap.size === 0) {
+    return DEFAULT_TIERS;
+  }
+
+  if (!tierThresholdMap.has('bronze')) {
+    tierThresholdMap.set('bronze', 0);
+  }
+
+  return Array.from(tierThresholdMap.entries())
+    .map(([name, threshold]) => ({ name, threshold }))
+    .sort((a, b) => b.threshold - a.threshold);
+}
+
+function calculateLoyaltyTier(lifetimePoints: number, tiers: LoyaltyTierConfig[]): string {
+  for (const tier of tiers) {
+    if (lifetimePoints >= tier.threshold) {
+      return tier.name;
+    }
+  }
+
   return 'bronze';
 }
 
@@ -16,6 +103,15 @@ function calculateLoyaltyTier(lifetimePoints: number): string {
  * Service for managing loyalty points operations
  */
 export class LoyaltyPointsService {
+  private async getConfiguredTiers(storeId: string): Promise<LoyaltyTierConfig[]> {
+    try {
+      const settings = await settingsSPRepository.getByStore(storeId) as LoyaltySettingsPayload;
+      return normalizeTiers(settings?.loyalty?.tiers);
+    } catch {
+      return DEFAULT_TIERS;
+    }
+  }
+
   /**
    * Calculate points earned from a purchase amount
    */
@@ -87,7 +183,8 @@ export class LoyaltyPointsService {
     });
 
     // Calculate new loyalty tier
-    const newTier = calculateLoyaltyTier(newBalance);
+    const tiers = await this.getConfiguredTiers(storeId);
+    const newTier = calculateLoyaltyTier(newBalance, tiers);
     const tierUpgraded = oldTier !== newTier;
 
     // Update customer's lifetime_points and loyalty tier using SP Repository
@@ -166,7 +263,8 @@ export class LoyaltyPointsService {
     });
 
     // Calculate new loyalty tier (points might have decreased)
-    const newTier = calculateLoyaltyTier(newBalance);
+    const tiers = await this.getConfiguredTiers(storeId);
+    const newTier = calculateLoyaltyTier(newBalance, tiers);
 
     // Update customer's lifetime_points and loyalty tier using SP Repository
     await customersSPRepository.update(customerId, storeId, {
@@ -206,7 +304,8 @@ export class LoyaltyPointsService {
     });
 
     // Calculate new loyalty tier
-    const newTier = calculateLoyaltyTier(newBalance);
+    const tiers = await this.getConfiguredTiers(storeId);
+    const newTier = calculateLoyaltyTier(newBalance, tiers);
 
     // Update customer's lifetime_points and loyalty tier using SP Repository
     await customersSPRepository.update(customerId, storeId, {
@@ -302,12 +401,13 @@ export class LoyaltyPointsService {
     try {
       // Get all customers with their current lifetime points
       const customers = await customersSPRepository.getByStore(storeId);
+      const tiers = await this.getConfiguredTiers(storeId);
       let updatedCount = 0;
 
       for (const customer of customers) {
         const lifetimePoints = customer.lifetimePoints || 0;
         const currentTier = customer.loyaltyTier;
-        const newTier = calculateLoyaltyTier(lifetimePoints);
+        const newTier = calculateLoyaltyTier(lifetimePoints, tiers);
 
         // Only update if tier has changed
         if (currentTier !== newTier) {

@@ -958,15 +958,24 @@ router.post('/:id/discounts/pay', (0, validate_uuid_1.validateUUID)(), async (re
         const storeId = req.storeId;
         const userId = req.user?.id || null;
         const paymentNote = req.body.paymentNote ? String(req.body.paymentNote) : null;
-        const payoutMethod = req.body.payoutMethod ? String(req.body.payoutMethod) : 'cash';
+        const payoutMethod = req.body.payoutMethod ? String(req.body.payoutMethod).toLowerCase() : 'cash';
         const transferReference = req.body.transferReference ? String(req.body.transferReference) : null;
         const transferAccountName = req.body.transferAccountName ? String(req.body.transferAccountName) : null;
         const transferAccountNumber = req.body.transferAccountNumber ? String(req.body.transferAccountNumber) : null;
         const transferBankName = req.body.transferBankName ? String(req.body.transferBankName) : null;
+        const requiresCustomerBankAccount = payoutMethod === 'bank_transfer' || payoutMethod === 'transfer' || payoutMethod === 'bank';
         await ensureCustomerDiscountTables();
-        const customerBankInfo = await (0, db_1.queryOne)(`SELECT bank_name, bank_account_number, bank_branch
+        const customerBankInfo = await (0, db_1.queryOne)(`SELECT full_name AS name, bank_name, bank_account_number, bank_branch
        FROM Customers
        WHERE id = @customerId AND store_id = @storeId`, { customerId: id, storeId });
+        if (!customerBankInfo) {
+            return res.status(404).json({ error: 'Không tìm thấy khách hàng' });
+        }
+        if (requiresCustomerBankAccount && !String(customerBankInfo.bank_account_number || '').trim()) {
+            return res.status(400).json({
+                error: `Khách hàng ${customerBankInfo.name || id} không có số tài khoản ngân hàng. Vui lòng cập nhật trước khi thanh toán chuyển khoản.`,
+            });
+        }
         const pending = await (0, db_1.queryOne)(`SELECT SUM(amount) AS total
        FROM CustomerDiscountTransactions
        WHERE customer_id = @customerId AND store_id = @storeId AND status = 'pending'`, { customerId: id, storeId });
@@ -979,15 +988,31 @@ router.post('/:id/discounts/pay', (0, validate_uuid_1.validateUUID)(), async (re
             return res.status(400).json({ error: 'Không có chiết khấu chờ thanh toán' });
         }
         const payoutId = (0, uuid_1.v4)();
+        // Save payout into cash flow so it appears in So quy / Thu-Chi / Tat ca giao dich.
+        await (0, db_1.query)(`IF OBJECT_ID('CashTransactions', 'U') IS NOT NULL
+       BEGIN
+         INSERT INTO CashTransactions
+           (id, store_id, type, transaction_date, amount, reason, category, related_invoice_id, created_by, created_at)
+         VALUES
+           (@id, @storeId, 'chi', GETDATE(), @amount, @reason, @category, @relatedInvoiceId, @createdBy, GETDATE())
+       END`, {
+            id: (0, uuid_1.v4)(),
+            storeId,
+            amount: totalPaidAmount,
+            reason: `Thanh toán chiết khấu khách hàng ${customerBankInfo?.name || id}`,
+            category: 'customer_discount_payout',
+            relatedInvoiceId: payoutId,
+            createdBy: userId,
+        });
         await (0, db_1.query)(`INSERT INTO CustomerDiscountPayouts
-         (id, customer_id, store_id, total_amount, transaction_count, payout_method,
-          transfer_reference, transfer_note,
+         (id, customer_id, store_id, total_amount, transaction_count,
+          payout_method, transfer_reference, transfer_note,
           transfer_account_name, transfer_account_number, transfer_bank_name,
           customer_bank_name, customer_bank_account_number, customer_bank_branch,
           paid_at, created_by, created_at)
        VALUES
-         (@id, @customerId, @storeId, @totalAmount, @transactionCount, @payoutMethod,
-          @transferReference, @transferNote,
+         (@id, @customerId, @storeId, @totalAmount, @transactionCount,
+          @payoutMethod, @transferReference, @transferNote,
           @transferAccountName, @transferAccountNumber, @transferBankName,
           @customerBankName, @customerBankAccountNumber, @customerBankBranch,
           GETDATE(), @createdBy, GETDATE())`, {
@@ -1002,9 +1027,9 @@ router.post('/:id/discounts/pay', (0, validate_uuid_1.validateUUID)(), async (re
             transferAccountName,
             transferAccountNumber,
             transferBankName,
-            customerBankName: customerBankInfo?.bank_name || null,
-            customerBankAccountNumber: customerBankInfo?.bank_account_number || null,
-            customerBankBranch: customerBankInfo?.bank_branch || null,
+            customerBankName: customerBankInfo.bank_name,
+            customerBankAccountNumber: customerBankInfo.bank_account_number,
+            customerBankBranch: customerBankInfo.bank_branch,
             createdBy: userId,
         });
         await (0, db_1.query)(`UPDATE CustomerDiscountTransactions

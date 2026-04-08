@@ -146,10 +146,10 @@ export default function CustomerDetailPage() {
 
   // Calculate total debt: prioritize calculatedDebt > currentDebt > totalDebt > history's last runningBalance
   const lastHistoryBalance = history.length > 0
-    ? [...history].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0]?.runningBalance || 0
+    ? [...history].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0]?.runningBalance ?? 0
     : 0;
-  const totalDebt = customer.calculatedDebt || customer.currentDebt || customer.totalDebt || lastHistoryBalance || 0;
-  const creditLimit = customer.creditLimit || 0;
+  const totalDebt = customer.calculatedDebt ?? customer.currentDebt ?? customer.totalDebt ?? lastHistoryBalance ?? 0;
+  const creditLimit = customer.creditLimit ?? 0;
   const isOverLimit = creditLimit > 0 && totalDebt > creditLimit;
 
   // Calculate loyalty points from history (total spent)

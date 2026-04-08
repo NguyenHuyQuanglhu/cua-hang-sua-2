@@ -45,48 +45,85 @@ router.get('/supplier-debt', async (req: AuthRequest, res: Response) => {
       { storeId }
     );
 
-    // Get purchase totals per supplier
+    // Primary source: PurchaseOrders remaining_debt (same logic as supplier debt report page)
     let purchaseTotals: Record<string, number> = {};
+    let paidTotals: Record<string, number> = {};
+    let debtTotals: Record<string, number> = {};
+
     try {
-      const purchases = await query(
-        `SELECT supplier_id, SUM(total_amount) as total
+      const purchaseSummary = await query(
+        `SELECT
+           supplier_id,
+           SUM(COALESCE(total_amount, 0)) as total_purchases,
+           SUM(COALESCE(paid_amount, 0)) as total_paid,
+           SUM(COALESCE(remaining_debt, COALESCE(total_amount, 0) - COALESCE(paid_amount, 0))) as total_debt
          FROM PurchaseOrders
          WHERE store_id = @storeId AND supplier_id IS NOT NULL
          GROUP BY supplier_id`,
         { storeId }
       );
-      purchaseTotals = (purchases as Array<{ supplier_id: string; total: number }>).reduce((acc, p) => {
-        acc[p.supplier_id] = Number(p.total) || 0;
-        return acc;
-      }, {} as Record<string, number>);
-    } catch {
-      // PurchaseOrders table may not exist
-    }
 
-    // Get payment totals per supplier
-    let paymentTotals: Record<string, number> = {};
-    try {
-      const payments = await query(
-        `SELECT supplier_id, SUM(amount) as total
-         FROM SupplierPayments
-         WHERE store_id = @storeId AND supplier_id IS NOT NULL
-         GROUP BY supplier_id`,
-        { storeId }
-      );
-      paymentTotals = (payments as Array<{ supplier_id: string; total: number }>).reduce((acc, p) => {
-        acc[p.supplier_id] = Number(p.total) || 0;
+      (purchaseSummary as Array<{ supplier_id: string; total_purchases: number; total_paid: number; total_debt: number }>).forEach((row) => {
+        const supplierId = row.supplier_id;
+        if (!supplierId) return;
+
+        purchaseTotals[supplierId] = Number(row.total_purchases) || 0;
+        paidTotals[supplierId] = Number(row.total_paid) || 0;
+        debtTotals[supplierId] = Number(row.total_debt) || 0;
+      });
+    } catch {
+      // Backward-compatible fallback for environments without paid_amount/remaining_debt columns.
+      let paymentTotals: Record<string, number> = {};
+
+      try {
+        const purchases = await query(
+          `SELECT supplier_id, SUM(total_amount) as total
+           FROM PurchaseOrders
+           WHERE store_id = @storeId AND supplier_id IS NOT NULL
+           GROUP BY supplier_id`,
+          { storeId }
+        );
+
+        purchaseTotals = (purchases as Array<{ supplier_id: string; total: number }>).reduce((acc, p) => {
+          acc[p.supplier_id] = Number(p.total) || 0;
+          return acc;
+        }, {} as Record<string, number>);
+      } catch {
+        // PurchaseOrders table may not exist
+      }
+
+      try {
+        const payments = await query(
+          `SELECT supplier_id, SUM(amount) as total
+           FROM SupplierPayments
+           WHERE store_id = @storeId AND supplier_id IS NOT NULL
+           GROUP BY supplier_id`,
+          { storeId }
+        );
+
+        paymentTotals = (payments as Array<{ supplier_id: string; total: number }>).reduce((acc, p) => {
+          acc[p.supplier_id] = Number(p.total) || 0;
+          return acc;
+        }, {} as Record<string, number>);
+      } catch {
+        // SupplierPayments table may not exist
+      }
+
+      paidTotals = paymentTotals;
+      debtTotals = Object.keys(purchaseTotals).reduce((acc, supplierId) => {
+        const totalPurchases = purchaseTotals[supplierId] || 0;
+        const totalPaid = paymentTotals[supplierId] || 0;
+        acc[supplierId] = totalPurchases - totalPaid;
         return acc;
       }, {} as Record<string, number>);
-    } catch {
-      // SupplierPayments table may not exist
     }
 
     // Calculate debt for each supplier and filter those with debt > 0
     const suppliersWithDebt = (suppliers as Array<{ id: string; name: string; contact_person: string; phone: string }>)
       .map(supplier => {
         const totalPurchases = purchaseTotals[supplier.id] || 0;
-        const totalPaid = paymentTotals[supplier.id] || 0;
-        const totalDebt = totalPurchases - totalPaid;
+        const totalPaid = paidTotals[supplier.id] || 0;
+        const totalDebt = debtTotals[supplier.id] || 0;
         
         return {
           id: supplier.id,

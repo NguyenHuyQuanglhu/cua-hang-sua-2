@@ -108,9 +108,8 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     const offset = (pageNum - 1) * pageSizeNum;
     const paginatedProducts = products.slice(offset, offset + pageSizeNum);
 
-    res.json({
-      success: true,
-      data: paginatedProducts.map((p) => {
+    const mappedProducts = await Promise.all(
+      paginatedProducts.map(async (p) => {
         // Parse avgCostByUnit JSON if exists
         let avgCostByUnit = [];
         if ((p as any).avgCostByUnit) {
@@ -120,6 +119,21 @@ router.get('/', async (req: AuthRequest, res: Response) => {
           } catch (e) {
             console.error('Failed to parse avgCostByUnit:', e);
             avgCostByUnit = [];
+          }
+        }
+
+        // Always calculate stock in product display unit to avoid mixing quantities across units.
+        const productUnitId = (p as any).unitId as string | undefined;
+        let displayStock = p.currentStock ?? p.stockQuantity ?? 0;
+        if (productUnitId) {
+          try {
+            displayStock = await inventorySPRepository.getAvailable(p.id, storeId, productUnitId);
+          } catch (stockError) {
+            console.error('[GET /api/products] Failed to get stock by unit, using fallback:', {
+              productId: p.id,
+              unitId: productUnitId,
+              error: stockError,
+            });
           }
         }
 
@@ -134,9 +148,9 @@ router.get('/', async (req: AuthRequest, res: Response) => {
           costPrice: p.costPrice,
           sku: p.sku,
           barcode: p.sku, // Use sku as barcode for now
-          stockQuantity: p.currentStock ?? p.stockQuantity ?? 0, // Use ProductInventory first, fallback to Products
-          currentStock: p.currentStock ?? p.stockQuantity ?? 0, // Add currentStock for POS compatibility
-          unitId: (p as any).unitId,
+          stockQuantity: displayStock,
+          currentStock: displayStock,
+          unitId: productUnitId,
           images: p.images,
           status: p.status,
           purchaseLots: [], // Empty array for now
@@ -144,7 +158,12 @@ router.get('/', async (req: AuthRequest, res: Response) => {
           createdAt: p.createdAt,
           updatedAt: p.updatedAt,
         };
-      }),
+      })
+    );
+
+    res.json({
+      success: true,
+      data: mappedProducts,
       total,
       page: pageNum,
       pageSize: pageSizeNum,

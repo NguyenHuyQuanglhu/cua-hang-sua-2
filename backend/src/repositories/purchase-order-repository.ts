@@ -350,7 +350,7 @@ export class PurchaseOrderRepository extends BaseRepository<PurchaseOrder> {
     const countQuery = `SELECT COUNT(*) as total FROM PurchaseOrders po LEFT JOIN Suppliers s ON po.supplier_id = s.id WHERE ${whereClause}`;
     const countResult = await queryOne<{ total: number }>(countQuery, params);
     const total = countResult?.total ?? 0;
-    const orderBy = options?.orderBy || 'po.updated_at';
+    const orderBy = options?.orderBy || 'po.import_date';
     const direction = options?.orderDirection || 'DESC';
     const dataQuery = `SELECT po.*, ISNULL(s.name, N'[Chưa có NCC]') as supplier_name, (SELECT COUNT(*) FROM PurchaseOrderItems WHERE purchase_order_id = po.id) as item_count FROM PurchaseOrders po LEFT JOIN Suppliers s ON po.supplier_id = s.id WHERE ${whereClause} ORDER BY ${orderBy} ${direction} OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`;
     const results = await query<PurchaseOrderRecord & { supplier_name: string | null; item_count: number }>(dataQuery, { ...params, offset, pageSize });

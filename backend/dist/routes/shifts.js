@@ -10,7 +10,23 @@ router.use(auth_1.storeContext);
 router.get('/', async (req, res) => {
     try {
         const storeId = req.storeId;
-        const shifts = await (0, db_1.query)('SELECT * FROM Shifts WHERE store_id = @storeId ORDER BY start_time DESC', { storeId });
+        const shifts = await (0, db_1.query)(`SELECT
+         s.*,
+         ISNULL(ss.cash_sales, 0) as calculated_cash_sales,
+         ISNULL(ss.total_revenue, 0) as calculated_total_revenue,
+         ISNULL(ss.sales_count, 0) as calculated_sales_count
+       FROM Shifts s
+       OUTER APPLY (
+         SELECT
+           SUM(ISNULL(sa.customer_payment, 0)) as cash_sales,
+           SUM(ISNULL(sa.final_amount, 0)) as total_revenue,
+           COUNT(*) as sales_count
+         FROM Sales sa
+         WHERE sa.store_id = s.store_id
+           AND sa.shift_id = s.id
+       ) ss
+       WHERE s.store_id = @storeId
+       ORDER BY s.start_time DESC`, { storeId });
         res.json(shifts.map((s) => ({
             id: s.id,
             storeId: s.store_id,
@@ -21,12 +37,12 @@ router.get('/', async (req, res) => {
             endTime: s.end_time,
             startingCash: s.starting_cash,
             endingCash: s.ending_cash,
-            cashSales: s.cash_sales,
+            cashSales: s.calculated_cash_sales,
             cashPayments: s.cash_payments,
             totalCashInDrawer: s.total_cash_in_drawer,
             cashDifference: s.cash_difference,
-            totalRevenue: s.total_revenue,
-            salesCount: s.sales_count,
+            totalRevenue: s.calculated_total_revenue,
+            salesCount: s.calculated_sales_count,
             createdAt: s.created_at,
             updatedAt: s.updated_at,
         })));

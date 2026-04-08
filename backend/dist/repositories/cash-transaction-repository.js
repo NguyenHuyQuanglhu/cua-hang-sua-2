@@ -6,6 +6,22 @@ const db_1 = require("../db");
  * CashTransaction repository for managing cash flow transactions
  */
 class CashTransactionRepository {
+    toSqlLocalIsoString(value) {
+        if (!(value instanceof Date)) {
+            return String(value);
+        }
+        // SQL DATETIME columns are timezone-naive; mssql returns them as UTC dates by default.
+        // Use UTC getters to preserve the original wall-clock value stored in SQL.
+        const year = value.getUTCFullYear();
+        const month = String(value.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(value.getUTCDate()).padStart(2, '0');
+        const hours = String(value.getUTCHours()).padStart(2, '0');
+        const minutes = String(value.getUTCMinutes()).padStart(2, '0');
+        const seconds = String(value.getUTCSeconds()).padStart(2, '0');
+        const millis = String(value.getUTCMilliseconds()).padStart(3, '0');
+        // Return timezone-free ISO-like string so frontend won't shift to next/previous day.
+        return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${millis}`;
+    }
     /**
      * Find all cash transactions with filtering options
      */
@@ -51,7 +67,7 @@ class CashTransactionRepository {
                 storeId: r.store_id,
                 type: r.type,
                 transactionDate: r.transaction_date instanceof Date
-                    ? r.transaction_date.toISOString()
+                    ? this.toSqlLocalIsoString(r.transaction_date)
                     : String(r.transaction_date),
                 amount: r.amount,
                 reason: r.reason,
@@ -59,7 +75,7 @@ class CashTransactionRepository {
                 relatedInvoiceId: r.related_invoice_id || undefined,
                 createdBy: r.created_by || undefined,
                 createdAt: r.created_at instanceof Date
-                    ? r.created_at.toISOString()
+                    ? this.toSqlLocalIsoString(r.created_at)
                     : String(r.created_at),
             })),
             total,
@@ -80,7 +96,7 @@ class CashTransactionRepository {
             storeId: result.store_id,
             type: result.type,
             transactionDate: result.transaction_date instanceof Date
-                ? result.transaction_date.toISOString()
+                ? this.toSqlLocalIsoString(result.transaction_date)
                 : String(result.transaction_date),
             amount: result.amount,
             reason: result.reason,
@@ -88,7 +104,7 @@ class CashTransactionRepository {
             relatedInvoiceId: result.related_invoice_id || undefined,
             createdBy: result.created_by || undefined,
             createdAt: result.created_at instanceof Date
-                ? result.created_at.toISOString()
+                ? this.toSqlLocalIsoString(result.created_at)
                 : String(result.created_at),
         };
     }

@@ -11,20 +11,36 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { NotificationList } from './notification-list'
 import { apiClient } from '@/lib/api-client'
+import { useStore } from '@/contexts/store-context'
 
 export function NotificationBell() {
+  const { user, currentStore, isLoading: isStoreLoading } = useStore()
   const [unreadCount, setUnreadCount] = useState(0)
   const [isOpen, setIsOpen] = useState(false)
+  const canLoadNotifications = Boolean(user && currentStore?.id && !isStoreLoading)
 
   useEffect(() => {
-    fetchUnreadCount()
-    
+    if (!canLoadNotifications) {
+      setUnreadCount(0)
+      return
+    }
+
+    void fetchUnreadCount()
+
     // Poll every 30 seconds
-    const interval = setInterval(fetchUnreadCount, 30000)
+    const interval = setInterval(() => {
+      void fetchUnreadCount()
+    }, 30000)
+
     return () => clearInterval(interval)
-  }, [])
+  }, [canLoadNotifications, currentStore?.id, user?.id])
 
   const fetchUnreadCount = async () => {
+    if (!canLoadNotifications) {
+      setUnreadCount(0)
+      return
+    }
+
     try {
       const response = await apiClient.getUnreadNotificationCount()
       if (response.success) {
@@ -36,13 +52,16 @@ export function NotificationBell() {
   }
 
   const handleNotificationRead = () => {
-    fetchUnreadCount()
+    if (!canLoadNotifications) {
+      return
+    }
+    void fetchUnreadCount()
   }
 
   return (
     <Popover open={isOpen} onOpenChange={setIsOpen}>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon" className="relative">
+        <Button variant="ghost" size="icon" className="relative" disabled={!canLoadNotifications}>
           <Bell className="h-5 w-5" />
           {unreadCount > 0 && (
             <Badge 

@@ -2,6 +2,7 @@
  * Service for managing loyalty points operations
  */
 export declare class LoyaltyPointsService {
+    private getConfiguredTiers;
     /**
      * Calculate points earned from a purchase amount
      */

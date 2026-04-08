@@ -89,43 +89,59 @@ router.get('/', async (req, res) => {
         const totalPages = Math.ceil(total / pageSizeNum);
         const offset = (pageNum - 1) * pageSizeNum;
         const paginatedProducts = products.slice(offset, offset + pageSizeNum);
+        const mappedProducts = await Promise.all(paginatedProducts.map(async (p) => {
+            // Parse avgCostByUnit JSON if exists
+            let avgCostByUnit = [];
+            if (p.avgCostByUnit) {
+                try {
+                    const parsed = JSON.parse(p.avgCostByUnit);
+                    avgCostByUnit = Array.isArray(parsed) ? parsed : [];
+                }
+                catch (e) {
+                    console.error('Failed to parse avgCostByUnit:', e);
+                    avgCostByUnit = [];
+                }
+            }
+            // Always calculate stock in product display unit to avoid mixing quantities across units.
+            const productUnitId = p.unitId;
+            let displayStock = p.currentStock ?? p.stockQuantity ?? 0;
+            if (productUnitId) {
+                try {
+                    displayStock = await repositories_1.inventorySPRepository.getAvailable(p.id, storeId, productUnitId);
+                }
+                catch (stockError) {
+                    console.error('[GET /api/products] Failed to get stock by unit, using fallback:', {
+                        productId: p.id,
+                        unitId: productUnitId,
+                        error: stockError,
+                    });
+                }
+            }
+            return {
+                id: p.id,
+                storeId: p.storeId,
+                categoryId: p.categoryId,
+                categoryName: p.categoryName,
+                name: p.name,
+                description: p.description,
+                price: p.price,
+                costPrice: p.costPrice,
+                sku: p.sku,
+                barcode: p.sku, // Use sku as barcode for now
+                stockQuantity: displayStock,
+                currentStock: displayStock,
+                unitId: productUnitId,
+                images: p.images,
+                status: p.status,
+                purchaseLots: [], // Empty array for now
+                avgCostByUnit, // Add average cost by unit
+                createdAt: p.createdAt,
+                updatedAt: p.updatedAt,
+            };
+        }));
         res.json({
             success: true,
-            data: paginatedProducts.map((p) => {
-                // Parse avgCostByUnit JSON if exists
-                let avgCostByUnit = [];
-                if (p.avgCostByUnit) {
-                    try {
-                        const parsed = JSON.parse(p.avgCostByUnit);
-                        avgCostByUnit = Array.isArray(parsed) ? parsed : [];
-                    }
-                    catch (e) {
-                        console.error('Failed to parse avgCostByUnit:', e);
-                        avgCostByUnit = [];
-                    }
-                }
-                return {
-                    id: p.id,
-                    storeId: p.storeId,
-                    categoryId: p.categoryId,
-                    categoryName: p.categoryName,
-                    name: p.name,
-                    description: p.description,
-                    price: p.price,
-                    costPrice: p.costPrice,
-                    sku: p.sku,
-                    barcode: p.sku, // Use sku as barcode for now
-                    stockQuantity: p.currentStock ?? p.stockQuantity ?? 0, // Use ProductInventory first, fallback to Products
-                    currentStock: p.currentStock ?? p.stockQuantity ?? 0, // Add currentStock for POS compatibility
-                    unitId: p.unitId,
-                    images: p.images,
-                    status: p.status,
-                    purchaseLots: [], // Empty array for now
-                    avgCostByUnit, // Add average cost by unit
-                    createdAt: p.createdAt,
-                    updatedAt: p.updatedAt,
-                };
-            }),
+            data: mappedProducts,
             total,
             page: pageNum,
             pageSize: pageSizeNum,

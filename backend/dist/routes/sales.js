@@ -38,6 +38,7 @@ const db_1 = require("../db");
 const auth_1 = require("../middleware/auth");
 const services_1 = require("../services");
 const sales_sp_repository_1 = require("../repositories/sales-sp-repository");
+const cash_transaction_repository_1 = require("../repositories/cash-transaction-repository");
 const pdfInvoiceService = __importStar(require("../services/pdf-invoice-service"));
 const validateStatus_1 = require("../middleware/validateStatus");
 const router = (0, express_1.Router)();
@@ -622,6 +623,27 @@ router.post('/', validateStatus_1.validateAndNormalizeStatus, async (req, res) =
                 console.log('[POST /api/sales] ✗ SKIPPING debt update');
                 console.log('[POST /api/sales] Reason: customerId =', customerId, '(type:', typeof customerId, ')');
                 console.log('[POST /api/sales] Reason: previousDebt =', previousDebtAmount, '(type:', typeof previousDebtAmount, ')');
+            }
+            // Ensure debt payment appears in payment history and cashbook as a cash-in transaction.
+            if (customerId && customerPaymentAmount > 0) {
+                await (0, db_1.query)(`INSERT INTO Payments (id, store_id, customer_id, payment_date, amount, notes, created_at)
+           VALUES (NEWID(), @storeId, @customerId, @paymentDate, @amount, @notes, @createdAt)`, {
+                    storeId,
+                    customerId,
+                    paymentDate: new Date(),
+                    amount: customerPaymentAmount,
+                    notes: `Thanh toán công nợ tại quầy (Hóa đơn ${invoiceNumber})`,
+                    createdAt: new Date(),
+                });
+                await cash_transaction_repository_1.cashTransactionRepository.create({
+                    storeId,
+                    type: 'thu',
+                    transactionDate: new Date().toISOString(),
+                    amount: customerPaymentAmount,
+                    reason: `Thu tiền công nợ khách hàng - ${invoiceNumber}`,
+                    category: 'Thu tiền khách hàng',
+                    relatedInvoiceId: saleId,
+                }, storeId);
             }
             console.log('[POST /api/sales] Debt payment sale created:', saleId, invoiceNumber);
             res.status(201).json({

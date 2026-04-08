@@ -41,7 +41,17 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 
-type TransactionType = 'sale' | 'purchase' | 'customer_payment' | 'supplier_payment' | 'subscription_purchase';
+type TransactionType = 'sale' | 'purchase' | 'customer_payment' | 'supplier_payment' | 'subscription_purchase' | 'discount_payout';
+
+interface CashFlowItem {
+  id: string;
+  transactionDate: string;
+  type: 'thu' | 'chi';
+  amount: number;
+  reason?: string;
+  category?: string;
+  relatedInvoiceId?: string;
+}
 
 interface SubscriptionHistoryItem {
   id: string;
@@ -69,6 +79,61 @@ interface UnifiedTransaction {
 
 type SortKey = 'date' | 'type' | 'partnerName' | 'amount';
 
+const normalizeText = (value?: string): string => {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+};
+
+const toNumber = (value: unknown, fallback = 0): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const toValidDate = (...candidates: unknown[]): Date => {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const parsed = new Date(String(candidate));
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  }
+
+  return new Date();
+};
+
+const normalizeInvoiceCode = (value?: string): string => {
+  return String(value || '').trim().toUpperCase();
+};
+
+const extractInvoiceNumberFromPaymentNote = (note?: string): string | null => {
+  const normalized = normalizeText(note);
+  // Match formats like "Hoa don INV202604080012"
+  const match = normalized.match(/hoa\s*don\s*([a-z0-9-]+)/i);
+  if (!match?.[1]) {
+    return null;
+  }
+
+  return normalizeInvoiceCode(match[1]);
+};
+
+const extractDiscountPayoutCustomerName = (reason?: string): string => {
+  const text = String(reason || '').trim();
+  if (!text) return 'Khách hàng';
+
+  // Expected formats: both legacy non-accent and accented Vietnamese strings.
+  const match =
+    text.match(/thanh\s*toán\s*chiết\s*khấu\s*khách\s*hàng\s*(.+)$/i) ||
+    text.match(/thanh\s*toan\s*chiet\s*khau\s*khach\s*hang\s*(.+)$/i);
+  if (match?.[1]) {
+    const name = match[1].trim();
+    return name || 'Khách hàng';
+  }
+
+  return 'Khách hàng';
+};
+
 export default function AllTransactionsPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>('date');
@@ -86,28 +151,99 @@ export default function AllTransactionsPage() {
   const [customerPayments, setCustomerPayments] = useState<Payment[]>([]);
   const [supplierPayments, setSupplierPayments] = useState<any[]>([]);
   const [subscriptionPurchases, setSubscriptionPurchases] = useState<SubscriptionHistoryItem[]>([]);
+  const [cashFlowTransactions, setCashFlowTransactions] = useState<CashFlowItem[]>([]);
+  const [supplierDebtTotal, setSupplierDebtTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     if (!currentStore) return;
 
+    const fetchAllSales = async (): Promise<any[]> => {
+      const pageSize = 200;
+      const allSales: any[] = [];
+      let page = 1;
+      let totalPages = 1;
+
+      do {
+        const response = await apiClient.getSales({ page, pageSize });
+        const pageData = Array.isArray(response) ? response : (response as any)?.data || [];
+        allSales.push(...pageData);
+
+        const nextTotalPages = Number((response as any)?.totalPages || 1);
+        totalPages = Number.isFinite(nextTotalPages) && nextTotalPages > 0 ? nextTotalPages : 1;
+        page += 1;
+      } while (page <= totalPages);
+
+      return allSales;
+    };
+
+    const fetchAllPurchases = async (): Promise<any[]> => {
+      const pageSize = 200;
+      const allPurchases: any[] = [];
+      let page = 1;
+      let totalPages = 1;
+
+      do {
+        const response = await apiClient.request<{ data?: any[]; pagination?: { totalPages?: number } }>(
+          `/purchases?page=${page}&pageSize=${pageSize}`
+        );
+
+        const pageData = Array.isArray(response) ? response : (response as any)?.data || [];
+        allPurchases.push(...pageData);
+
+        const nextTotalPages = Number((response as any)?.pagination?.totalPages || 1);
+        totalPages = Number.isFinite(nextTotalPages) && nextTotalPages > 0 ? nextTotalPages : 1;
+        page += 1;
+      } while (page <= totalPages);
+
+      return allPurchases;
+    };
+
     const fetchData = async () => {
       try {
         setIsLoading(true);
-        
-        const [salesData, purchasesData, paymentsData, supplierPaymentsData, subscriptionHistoryData] = await Promise.all([
-          apiClient.getSales(),
-          apiClient.getPurchases(),
+
+        const [salesResult, purchasesResult, paymentsResult, supplierPaymentsResult, supplierDebtResult, subscriptionResult, cashFlowResult] = await Promise.allSettled([
+          fetchAllSales(),
+          fetchAllPurchases(),
           apiClient.getPayments(),
           apiClient.getSupplierPayments(),
+          apiClient.getSupplierDebtReport(),
           apiClient.request<{ history: SubscriptionHistoryItem[] }>('/subscription/history?limit=200'),
+          apiClient.request<{ data: CashFlowItem[] }>('/cash-flow?pageSize=500'),
         ]);
+
+        const salesData = salesResult.status === 'fulfilled' ? salesResult.value : [];
+        const purchasesData = purchasesResult.status === 'fulfilled' ? purchasesResult.value : [];
+        const paymentsData = paymentsResult.status === 'fulfilled' ? paymentsResult.value : [];
+        const supplierPaymentsData = supplierPaymentsResult.status === 'fulfilled' ? supplierPaymentsResult.value : [];
+        const supplierDebtData = supplierDebtResult.status === 'fulfilled' ? supplierDebtResult.value : { data: [] };
+        const subscriptionHistoryData = subscriptionResult.status === 'fulfilled' ? subscriptionResult.value : { history: [] };
+        const cashFlowData = cashFlowResult.status === 'fulfilled' ? cashFlowResult.value : { data: [] };
+
+        if (subscriptionResult.status === 'rejected') {
+          console.error('Subscription history fetch failed, continue with other transaction data:', subscriptionResult.reason);
+        }
+        if (purchasesResult.status === 'rejected') {
+          console.error('Purchases fetch failed, continue with other transaction data:', purchasesResult.reason);
+        }
+        if (supplierDebtResult.status === 'rejected') {
+          console.error('Supplier debt fetch failed, continue with transaction data:', supplierDebtResult.reason);
+        }
+
+        const supplierDebtItems = Array.isArray((supplierDebtData as any)?.data) ? (supplierDebtData as any).data : [];
+        const totalSupplierDebt = supplierDebtItems.reduce(
+          (sum: number, item: any) => sum + toNumber(item.totalDebt ?? item.finalDebt, 0),
+          0
+        );
 
         setSales(Array.isArray(salesData) ? salesData : (salesData as any).data || []);
         setPurchases(Array.isArray(purchasesData) ? purchasesData : (purchasesData as any).data || []);
         setCustomerPayments(Array.isArray(paymentsData) ? paymentsData : (paymentsData as any).data || []);
         setSupplierPayments(Array.isArray(supplierPaymentsData) ? supplierPaymentsData : (supplierPaymentsData as any).data || []);
         setSubscriptionPurchases(subscriptionHistoryData?.history || []);
+        setCashFlowTransactions(Array.isArray((cashFlowData as any)?.data) ? (cashFlowData as any).data : []);
+        setSupplierDebtTotal(totalSupplierDebt);
         
         setIsLoading(false);
       } catch (error) {
@@ -121,9 +257,15 @@ export default function AllTransactionsPage() {
 
   const unifiedTransactions = useMemo((): UnifiedTransaction[] => {
     const transactions: UnifiedTransaction[] = [];
+    const saleInvoiceSet = new Set<string>();
 
     // Add sales
     sales.forEach(sale => {
+      const invoiceCode = normalizeInvoiceCode(sale.invoiceNumber);
+      if (invoiceCode) {
+        saleInvoiceSet.add(invoiceCode);
+      }
+
       transactions.push({
         id: `sale-${sale.id}`,
         date: new Date(sale.transactionDate),
@@ -137,31 +279,55 @@ export default function AllTransactionsPage() {
       });
     });
 
+    const purchaseIdSet = new Set<string>();
+
     // Add purchases
     purchases.forEach(purchase => {
-      // Map field names from backend (camelCase) to expected format
-      const purchaseDate = (purchase as any).importDate || purchase.purchaseDate;
-      const invoiceNumber = (purchase as any).orderNumber || purchase.invoiceNumber;
-      const supplierName = purchase.supplierName || 'Không rõ';
-      
-      // Use paidAmount if available, otherwise use totalAmount
-      const displayAmount = purchase.paidAmount !== undefined ? purchase.paidAmount : purchase.totalAmount || 0;
+      // Accept both camelCase and snake_case keys so this page remains compatible across schemas.
+      const purchaseDate = toValidDate(
+        (purchase as any).importDate,
+        (purchase as any).import_date,
+        (purchase as any).purchaseDate,
+        (purchase as any).createdAt,
+        (purchase as any).created_at
+      );
+      const invoiceNumber = (purchase as any).orderNumber || (purchase as any).order_number || purchase.invoiceNumber;
+      const supplierName = purchase.supplierName || (purchase as any).supplier_name || 'Không rõ';
+      const totalAmount = toNumber((purchase as any).totalAmount ?? (purchase as any).total_amount, 0);
+      const paidAmount = toNumber((purchase as any).paidAmount ?? (purchase as any).paid_amount, 0);
+      const displayAmount = totalAmount > 0 ? totalAmount : paidAmount;
+      const purchaseId = String((purchase as any).id || '');
+
+      if (purchaseId) {
+        purchaseIdSet.add(purchaseId);
+      }
       
       transactions.push({
-        id: `purchase-${purchase.id}`,
-        date: new Date(purchaseDate),
+        id: `purchase-${purchaseId || Math.random().toString(36).slice(2)}`,
+        date: purchaseDate,
         type: 'purchase',
         partnerName: supplierName,
-        partnerId: purchase.supplierId || '',
+        partnerId: purchase.supplierId || (purchase as any).supplier_id || '',
         reference: invoiceNumber || '',
         amount: displayAmount,
         notes: purchase.notes,
-        originalData: purchase,
+        originalData: {
+          ...purchase,
+          totalAmount,
+          paidAmount,
+        },
       });
     });
 
     // Add customer payments
     customerPayments.forEach(payment => {
+      const invoiceCodeFromNote = extractInvoiceNumberFromPaymentNote(payment.notes);
+      // Do not show duplicated "Thu tiền KH" rows generated at checkout for invoices
+      // that already exist as sale transactions.
+      if (invoiceCodeFromNote && saleInvoiceSet.has(invoiceCodeFromNote)) {
+        return;
+      }
+
       transactions.push({
         id: `customer-payment-${payment.id}`,
         date: new Date(payment.paymentDate),
@@ -205,8 +371,64 @@ export default function AllTransactionsPage() {
       });
     });
 
+    // Add customer discount payout transactions from cash flow
+    cashFlowTransactions
+      .filter((item) => {
+        const category = String(item.category || '').toLowerCase();
+        const reason = normalizeText(item.reason);
+        return category === 'customer_discount_payout' || reason.includes('chiet khau khach hang');
+      })
+      .forEach((item) => {
+        transactions.push({
+          id: `discount-payout-${item.id}`,
+          date: new Date(item.transactionDate),
+          type: 'discount_payout',
+          partnerName: extractDiscountPayoutCustomerName(item.reason),
+          partnerId: '',
+          reference: item.relatedInvoiceId || 'Chi tra chiet khau',
+          amount: item.amount || 0,
+          notes: item.reason || 'Chi tra chiet khau khach hang',
+          originalData: item,
+        });
+      });
+
+    // Fallback: include purchase transactions from cash-flow if purchases API misses records.
+    cashFlowTransactions
+      .filter((item) => {
+        if (item.type !== 'chi') return false;
+        const category = normalizeText(item.category);
+        const reason = normalizeText(item.reason);
+        const isPurchaseCashFlow = category.includes('nhap hang') || reason.includes('nhap hang');
+        if (!isPurchaseCashFlow) return false;
+
+        const relatedId = String(item.relatedInvoiceId || '');
+        if (relatedId && purchaseIdSet.has(relatedId)) {
+          return false;
+        }
+
+        return true;
+      })
+      .forEach((item) => {
+        transactions.push({
+          id: `purchase-fallback-${item.id}`,
+          date: toValidDate(item.transactionDate),
+          type: 'purchase',
+          partnerName: 'Nhà cung cấp',
+          partnerId: '',
+          reference: item.relatedInvoiceId || 'Phiếu nhập',
+          amount: toNumber(item.amount, 0),
+          notes: item.reason || 'Chi tiền nhập hàng',
+          originalData: {
+            id: item.relatedInvoiceId,
+            totalAmount: toNumber(item.amount, 0),
+            paidAmount: toNumber(item.amount, 0),
+            supplierId: null,
+          },
+        });
+      });
+
     return transactions;
-  }, [sales, purchases, customerPayments, supplierPayments, subscriptionPurchases]);
+  }, [sales, purchases, customerPayments, supplierPayments, subscriptionPurchases, cashFlowTransactions]);
 
   const filteredTransactions = useMemo(() => {
     let filtered = unifiedTransactions;
@@ -302,6 +524,7 @@ export default function AllTransactionsPage() {
       case 'customer_payment': return 'Thu tiền KH';
       case 'supplier_payment': return 'Trả tiền NCC';
       case 'subscription_purchase': return 'Mua gói dịch vụ';
+      case 'discount_payout': return 'Thanh toán chiết khấu';
     }
   };
 
@@ -312,6 +535,7 @@ export default function AllTransactionsPage() {
       case 'customer_payment': return <DollarSign className="h-4 w-4" />;
       case 'supplier_payment': return <TrendingDown className="h-4 w-4" />;
       case 'subscription_purchase': return <Sparkles className="h-4 w-4" />;
+      case 'discount_payout': return <TrendingDown className="h-4 w-4" />;
     }
   };
 
@@ -322,6 +546,7 @@ export default function AllTransactionsPage() {
       case 'customer_payment': return 'outline';
       case 'supplier_payment': return 'destructive';
       case 'subscription_purchase': return 'outline';
+      case 'discount_payout': return 'destructive';
     }
   };
 
@@ -333,13 +558,15 @@ export default function AllTransactionsPage() {
           
           const saleData = tx.originalData as any;
           const saleCustomerId = saleData.customerId || null;
+          const saleCustomerPayment = toNumber(saleData.customerPayment ?? saleData.customer_payment, 0);
           
           // Khách lẻ (không có customerId) không sinh ra phiếu 'customer_payment'.
           // Đối với khách lẻ, ta cộng thẳng vào doanh thu.
-          // Đối với khách có tài khoản, tiền mặt thu được ĐÃ sinh ra phiếu 'customer_payment'
-          // nên nếu cộng ở đây sẽ bị double count (nhân đôi số tiền thu được).
+          // Đối với khách có tài khoản, phần thanh toán tại quầy lấy từ customerPayment của hóa đơn.
           if (!saleCustomerId) {
             acc.totalRevenue += tx.amount; 
+          } else {
+            acc.totalRevenue += saleCustomerPayment;
           }
           break;
         case 'purchase':
@@ -382,8 +609,13 @@ export default function AllTransactionsPage() {
     });
   }, [sortedTransactions]);
 
+  const visibleTransactions = useMemo(
+    () => sortedTransactions.filter((tx) => tx.type !== 'customer_payment'),
+    [sortedTransactions]
+  );
+
   const handleExportExcel = () => {
-    const dataToExport = sortedTransactions.map((tx, index) => ({
+    const dataToExport = visibleTransactions.map((tx, index) => ({
       'STT': index + 1,
       'Ngày': format(tx.date, 'dd/MM/yyyy'),
       'Loại giao dịch': getTransactionTypeLabel(tx.type),
@@ -428,7 +660,7 @@ export default function AllTransactionsPage() {
             <Package className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-orange-600">{formatCurrency(summary.totalPurchases)}</div>
+            <div className="text-2xl font-bold text-orange-600">{formatCurrency(summary.totalSupplierPayments)}</div>
             <p className="text-xs text-muted-foreground mt-1">Số tiền đã trả cho nhà cung cấp</p>
           </CardContent>
         </Card>
@@ -449,7 +681,7 @@ export default function AllTransactionsPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-red-600">
-              {formatCurrency(summary.totalPurchaseAmount - summary.totalPurchasePaid - summary.totalSupplierPayments)}
+              {formatCurrency(supplierDebtTotal)}
             </div>
             <p className="text-xs text-muted-foreground mt-1">Công nợ còn phải trả</p>
           </CardContent>
@@ -491,9 +723,9 @@ export default function AllTransactionsPage() {
                 <SelectItem value="all">Tất cả</SelectItem>
                 <SelectItem value="sale">Bán hàng</SelectItem>
                 <SelectItem value="purchase">Nhập hàng</SelectItem>
-                <SelectItem value="customer_payment">Thu tiền KH</SelectItem>
                 <SelectItem value="supplier_payment">Trả tiền NCC</SelectItem>
                 <SelectItem value="subscription_purchase">Mua gói dịch vụ</SelectItem>
+                <SelectItem value="discount_payout">Thanh toán chiết khấu</SelectItem>
               </SelectContent>
             </Select>
 
@@ -527,7 +759,7 @@ export default function AllTransactionsPage() {
             </TableHeader>
             <TableBody>
               {isLoading && <TableRow><TableCell colSpan={6} className="text-center h-24">Đang tải dữ liệu...</TableCell></TableRow>}
-              {!isLoading && sortedTransactions.map((tx, index) => (
+              {!isLoading && visibleTransactions.map((tx, index) => (
                 <TableRow key={tx.id}>
                   <TableCell>{index + 1}</TableCell>
                   <TableCell>{format(tx.date, 'dd/MM/yyyy HH:mm')}</TableCell>
@@ -547,7 +779,7 @@ export default function AllTransactionsPage() {
                   </TableCell>
                 </TableRow>
               ))}
-              {!isLoading && sortedTransactions.length === 0 && (
+              {!isLoading && visibleTransactions.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={6} className="text-center h-24">Không có giao dịch nào trong kỳ.</TableCell>
                 </TableRow>
@@ -557,7 +789,7 @@ export default function AllTransactionsPage() {
         </CardContent>
         <CardFooter>
           <div className="text-xs text-muted-foreground">
-            Hiển thị <strong>{sortedTransactions.length}</strong> giao dịch.
+            Hiển thị <strong>{visibleTransactions.length}</strong> giao dịch.
           </div>
         </CardFooter>
       </Card>

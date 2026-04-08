@@ -950,7 +950,7 @@ export default function POSPage() {
     setIsSubmitting(true)
     const itemsData = cart.map((item) => ({
       productId: item.productId,
-      quantity: item.quantity * item.stockInfo.conversionFactor, // Store in base unit
+      quantity: item.quantity, // Send quantity in selected sale unit (backend validates by unitId)
       price: item.price,
       unitId: item.saleUnitId, // Include the selected unit ID
     }))

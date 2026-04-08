@@ -66,6 +66,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { CustomerForm } from "./components/customer-form"
 import {
   getCustomers,
@@ -77,13 +78,11 @@ import {
   CustomerDebtHistory,
   syncCustomerAccounts,
   getCustomerDiscounts,
-  getCustomerDiscountPayouts,
   createCustomerDiscount,
   updateCustomerDiscount,
   deleteCustomerDiscount,
   payCustomerDiscounts,
   type CustomerDiscountItem,
-  type CustomerDiscountPayoutItem,
 } from "./actions"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
@@ -190,7 +189,7 @@ const getCustomerSegmentLabel = (segment?: string, segmentLabel?: string) => {
   }
 }
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isValidUUID = (value: string | null | undefined) => UUID_REGEX.test(String(value || '').trim());
 
 
@@ -270,10 +269,7 @@ export default function CustomersPage() {
     }
 
     setDiscountCustomer(customer);
-    const [result, payoutResult] = await Promise.all([
-      getCustomerDiscounts(customer.id),
-      getCustomerDiscountPayouts(customer.id),
-    ]);
+    const result = await getCustomerDiscounts(customer.id);
 
     if (result.success && result.items) {
       setDiscountItems(result.items);
@@ -350,6 +346,17 @@ export default function CustomersPage() {
       return;
     }
 
+    const normalizedPayoutMethod = String(payoutMethod || 'cash').toLowerCase();
+    const requiresBankAccount = normalizedPayoutMethod === 'bank_transfer' || normalizedPayoutMethod === 'transfer' || normalizedPayoutMethod === 'bank';
+    if (requiresBankAccount && !String(discountCustomer.bankAccountNumber || '').trim()) {
+      toast({
+        variant: 'destructive',
+        title: 'Thiếu thông tin ngân hàng',
+        description: `Khách hàng ${discountCustomer.name} không có số tài khoản ngân hàng. Vui lòng cập nhật hồ sơ khách hàng trước khi thanh toán chuyển khoản.`,
+      });
+      return;
+    }
+
     const result = await payCustomerDiscounts(discountCustomer.id, {
       paymentNote,
       payoutMethod,
@@ -419,6 +426,15 @@ export default function CustomersPage() {
   }
 
   const handleEditCustomer = (customer: Customer) => {
+    if (!isValidUUID(customer.id)) {
+      toast({
+        variant: 'destructive',
+        title: 'Lỗi',
+        description: 'ID khách hàng không hợp lệ, không thể chỉnh sửa.',
+      });
+      return;
+    }
+
     setSelectedCustomer(customer);
     setIsFormOpen(true);
   }
@@ -448,6 +464,17 @@ export default function CustomersPage() {
 
   const handleDelete = async () => {
     if (!customerToDelete) return;
+
+    if (!isValidUUID(customerToDelete.id)) {
+      toast({
+        variant: 'destructive',
+        title: 'Lỗi',
+        description: 'ID khách hàng không hợp lệ, không thể xóa.',
+      });
+      setCustomerToDelete(null);
+      return;
+    }
+
     setIsDeleting(true);
     const result = await deleteCustomer(customerToDelete.id);
     if (result.success) {
@@ -667,13 +694,16 @@ export default function CustomersPage() {
       </Dialog>
 
       <Dialog open={!!discountCustomer} onOpenChange={(open) => !open && setDiscountCustomer(null)}>
-        <DialogContent className="sm:max-w-3xl">
-          <DialogHeader>
+        <DialogContent className="w-[min(96vw,1100px)] sm:max-w-[96vw] h-[90vh] max-h-[calc(100vh-2rem)] overflow-hidden p-0 flex flex-col">
+          <DialogHeader className="px-6 pt-6 pb-2">
             <DialogTitle>Chiết khấu khách hàng: {discountCustomer?.name}</DialogTitle>
             <DialogDescription>
               Quản lý chi tiết chiết khấu, tổng mức chiết khấu và thanh toán chiết khấu cho khách hàng.
             </DialogDescription>
           </DialogHeader>
+
+          <ScrollArea className="flex-1 min-h-0 min-w-0">
+          <div className="min-w-0 px-6 pb-6 pr-5">
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <Card>
@@ -700,8 +730,9 @@ export default function CustomersPage() {
             </Card>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-[1fr_2fr_auto] gap-2">
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto]">
             <Input
+              className="min-w-0"
               type="number"
               min={0}
               step="1000"
@@ -710,20 +741,23 @@ export default function CustomersPage() {
               onChange={(e) => setDiscountAmount(e.target.value)}
             />
             <Input
+              className="min-w-0"
               placeholder="Mô tả chiết khấu"
               value={discountDescription}
               onChange={(e) => setDiscountDescription(e.target.value)}
             />
-            <Button onClick={handleSaveDiscount}>{editingDiscountId ? 'Cập nhật' : 'Thêm'}</Button>
+            <Button className="md:col-span-2 lg:col-span-1 md:w-full lg:w-auto" onClick={handleSaveDiscount}>{editingDiscountId ? 'Cập nhật' : 'Thêm'}</Button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-[2fr_auto] gap-2">
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-[minmax(0,2fr)_auto]">
             <Input
+              className="min-w-0"
               placeholder="Ghi chú thanh toán chiết khấu"
               value={paymentNote}
               onChange={(e) => setPaymentNote(e.target.value)}
             />
             <Button
+              className="md:col-span-2 lg:col-span-1 md:w-full lg:w-auto"
               variant="default"
               onClick={handlePayDiscounts}
               disabled={!discountItems.some((i) => i.status === 'pending')}
@@ -760,7 +794,7 @@ export default function CustomersPage() {
             />
           </div>
 
-          <Table containerClassName="overflow-x-auto" className="w-full table-auto min-w-[980px]">
+          <Table allowHorizontalScroll containerClassName="overflow-x-auto overflow-y-visible max-w-full" className="w-full table-auto min-w-[760px]">
             <TableHeader>
               <TableRow>
                 <TableHead className="w-[170px]">Ngày</TableHead>
@@ -816,42 +850,9 @@ export default function CustomersPage() {
             </TableBody>
           </Table>
 
-          <div>
-            <p className="text-sm font-medium mb-2">Lịch sử thanh toán chiết khấu</p>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Ngày</TableHead>
-                  <TableHead>Phương thức</TableHead>
-                  <TableHead>Chuyển khoản</TableHead>
-                  <TableHead className="text-right">Số tiền</TableHead>
-                  <TableHead className="text-right">Số giao dịch</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {discountPayoutItems.length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={5} className="text-center text-muted-foreground">Chưa có lịch sử thanh toán</TableCell>
-                  </TableRow>
-                )}
-                {discountPayoutItems.map((item) => (
-                  <TableRow key={item.id}>
-                    <TableCell>{new Date(item.paid_at || item.created_at).toLocaleString('vi-VN')}</TableCell>
-                    <TableCell>{item.payout_method || '-'}</TableCell>
-                    <TableCell>
-                      <div className="text-xs">
-                        <div>{item.transfer_reference || '-'}</div>
-                        {item.transfer_bank_name && <div className="text-muted-foreground">{item.transfer_bank_name}</div>}
-                        {item.transfer_account_number && <div className="text-muted-foreground">{item.transfer_account_number}</div>}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right">{formatCurrency(Number(item.total_amount || 0))}</TableCell>
-                    <TableCell className="text-right">{Number(item.transaction_count || 0)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
           </div>
+          </ScrollArea>
+
         </DialogContent>
       </Dialog>
 
@@ -986,15 +987,22 @@ export default function CustomersPage() {
                   <TableRow key={customer.id}>
                     <TableCell className="font-medium hidden md:table-cell">{index + 1}</TableCell>
                     <TableCell className="font-medium min-w-0">
-                      <Link href={`/customers/${customer.id}`} className="hover:underline flex items-center gap-1 overflow-hidden">
-                        <span className="truncate">{customer.name}</span>
-                        {isOverLimit && <AlertTriangle className="h-4 w-4 text-destructive flex-shrink-0" aria-label="Vượt hạn mức tín dụng" />}
-                      </Link>
+                      {hasValidCustomerId ? (
+                        <Link href={`/customers/${customer.id}`} className="hover:underline flex items-center gap-1 overflow-hidden">
+                          <span className="truncate">{customer.name}</span>
+                          {isOverLimit && <AlertTriangle className="h-4 w-4 text-destructive flex-shrink-0" aria-label="Vượt hạn mức tín dụng" />}
+                        </Link>
+                      ) : (
+                        <div className="flex items-center gap-1 overflow-hidden text-muted-foreground" title="ID khách hàng không hợp lệ">
+                          <span className="truncate">{customer.name}</span>
+                          {isOverLimit && <AlertTriangle className="h-4 w-4 text-destructive flex-shrink-0" aria-label="Vượt hạn mức tín dụng" />}
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="sm" className="p-1 h-auto" disabled={isUpdating}>
+                          <Button variant="ghost" size="sm" className="p-1 h-auto" disabled={isUpdating || !hasValidCustomerId}>
                             <Badge variant={customer.status === 'active' ? 'default' : 'secondary'}>
                               {customer.status === 'active' ? 'Hoạt động' : 'Không hoạt động'}
                               <ChevronDown className="h-3 w-3 ml-1" />
@@ -1004,13 +1012,13 @@ export default function CustomersPage() {
                         <DropdownMenuContent align="start">
                           <DropdownMenuItem 
                             onClick={() => handleStatusChange(customer.id, 'active')}
-                            disabled={customer.status === 'active' || isUpdating}
+                            disabled={customer.status === 'active' || isUpdating || !hasValidCustomerId}
                           >
                             Hoạt động
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={() => handleStatusChange(customer.id, 'inactive')}
-                            disabled={customer.status === 'inactive' || isUpdating}
+                            disabled={customer.status === 'inactive' || isUpdating || !hasValidCustomerId}
                           >
                             Không hoạt động
                           </DropdownMenuItem>
@@ -1061,11 +1069,17 @@ export default function CustomersPage() {
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           <DropdownMenuLabel>Hành động</DropdownMenuLabel>
-                           <DropdownMenuItem asChild>
-                             <Link href={`/customers/${customer.id}`}>Xem chi tiết</Link>
-                          </DropdownMenuItem>
+                          {hasValidCustomerId ? (
+                            <DropdownMenuItem asChild>
+                              <Link href={`/customers/${customer.id}`}>Xem chi tiết</Link>
+                            </DropdownMenuItem>
+                          ) : (
+                            <DropdownMenuItem disabled>Xem chi tiết</DropdownMenuItem>
+                          )}
                           {canEditCustomer && (
-                            <DropdownMenuItem onClick={() => handleEditCustomer(customer)}>Sửa</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => handleEditCustomer(customer)} disabled={!hasValidCustomerId}>
+                              Sửa
+                            </DropdownMenuItem>
                           )}
                           {canEditCustomer && (
                             <DropdownMenuItem
@@ -1107,7 +1121,19 @@ export default function CustomersPage() {
                             </DropdownMenuItem>
                           )}
                           {canDeleteCustomer && (
-                          <DropdownMenuItem className="text-destructive" onClick={() => setCustomerToDelete(customer)} disabled={hasDebt}>Xóa</DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="text-destructive"
+                            onClick={() => {
+                              if (!hasValidCustomerId) {
+                                toast({ variant: 'destructive', title: 'Lỗi', description: 'ID khách hàng không hợp lệ.' });
+                                return;
+                              }
+                              setCustomerToDelete(customer);
+                            }}
+                            disabled={hasDebt || !hasValidCustomerId}
+                          >
+                            Xóa
+                          </DropdownMenuItem>
                           )}
                         </DropdownMenuContent>
                       </DropdownMenu>
