@@ -215,7 +215,6 @@ export default function CustomersPage() {
   const [loyaltyTierFilter, setLoyaltyTierFilter] = useState<LoyaltyTierFilter>('all');
   const [discountCustomer, setDiscountCustomer] = useState<CustomerWithDebt | null>(null);
   const [discountItems, setDiscountItems] = useState<CustomerDiscountItem[]>([]);
-  const [discountPayoutItems, setDiscountPayoutItems] = useState<CustomerDiscountPayoutItem[]>([]);
   const [discountAmount, setDiscountAmount] = useState('');
   const [discountDescription, setDiscountDescription] = useState('');
   const [editingDiscountId, setEditingDiscountId] = useState<string | null>(null);
@@ -283,11 +282,6 @@ export default function CustomersPage() {
       toast({ variant: 'destructive', title: 'Lỗi', description: result.error || 'Không thể tải chiết khấu' });
     }
 
-    if (payoutResult.success && payoutResult.items) {
-      setDiscountPayoutItems(payoutResult.items);
-    } else {
-      setDiscountPayoutItems([]);
-    }
   };
 
   const refreshCustomers = async () => {
