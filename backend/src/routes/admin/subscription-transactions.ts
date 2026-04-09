@@ -10,11 +10,121 @@ import { authenticate, AuthRequest } from '../../middleware/auth';
 import { requireModulePermission } from '../../middleware/permission';
 import { subscriptionTransactionService, type SubscriptionTransactionFilter } from '../../services/subscription-transaction-service';
 import { autoRenewalService } from '../../services/auto-renewal-service';
-import { query } from '../../db';
+import { query, queryOne } from '../../db';
 
 const router = Router();
 
 router.use(authenticate);
+
+type SubscriptionTransactionRecord = Awaited<ReturnType<typeof subscriptionTransactionService.getTransactions>>[number];
+
+interface TransactionPersonInfo {
+  fullName: string;
+  email: string;
+  phone: string | null;
+}
+
+function extractMetadataPerson(
+  metadata: Record<string, any> | undefined,
+  key: 'assignedBy' | 'assignedTo'
+): { fullName?: string; email?: string } {
+  if (!metadata || typeof metadata !== 'object') {
+    return {};
+  }
+
+  const rawPerson = metadata[key];
+  if (!rawPerson || typeof rawPerson !== 'object') {
+    return {};
+  }
+
+  const person = rawPerson as Record<string, unknown>;
+  const fullName = typeof person.fullName === 'string' ? person.fullName.trim() : '';
+  const email = typeof person.email === 'string' ? person.email.trim() : '';
+
+  return {
+    fullName: fullName || undefined,
+    email: email || undefined,
+  };
+}
+
+async function enrichTransactionWithActors(
+  transaction: SubscriptionTransactionRecord
+): Promise<SubscriptionTransactionRecord & { userInfo: TransactionPersonInfo; processedByInfo: TransactionPersonInfo }> {
+  const assignedBySnapshot = extractMetadataPerson(transaction.metadata, 'assignedBy');
+  const assignedToSnapshot = extractMetadataPerson(transaction.metadata, 'assignedTo');
+
+  const fallbackUserLabel = transaction.userId
+    ? `ID: ${String(transaction.userId).slice(0, 8)}`
+    : 'Nguoi dung khong xac dinh';
+
+  const fallbackUserName = String(
+    transaction.userNameSnapshot || assignedToSnapshot.fullName || ''
+  ).trim() || fallbackUserLabel;
+  const fallbackUserEmail = String(
+    transaction.userEmailSnapshot || assignedToSnapshot.email || ''
+  ).trim() || '-';
+
+  let userInfo: TransactionPersonInfo = {
+    fullName: fallbackUserName,
+    email: fallbackUserEmail,
+    phone: null,
+  };
+
+  if (transaction.userId) {
+    try {
+      const resolvedUserInfo = await subscriptionTransactionService.getUserInfo(transaction.userId);
+      if (resolvedUserInfo) {
+        userInfo = {
+          fullName: resolvedUserInfo.fullName || fallbackUserName,
+          email: resolvedUserInfo.email || fallbackUserEmail,
+          phone: resolvedUserInfo.phone || null,
+        };
+      }
+    } catch (error) {
+      console.error(`Failed to get user info for ${transaction.userId}:`, error);
+    }
+  }
+
+  const hasProcessedBy = Boolean(transaction.processedBy && String(transaction.processedBy).trim());
+  const processedById = hasProcessedBy ? String(transaction.processedBy).trim() : '';
+  const processedByFallbackLabel = hasProcessedBy
+    ? `ID: ${processedById.slice(0, 8)}`
+    : (transaction.processedByRole === 'system' ? 'He thong' : 'Quan tri vien');
+
+  const fallbackProcessedByName = String(
+    transaction.processedByName || assignedBySnapshot.fullName || ''
+  ).trim() || processedByFallbackLabel;
+  const fallbackProcessedByEmail = String(
+    transaction.processedByEmail || assignedBySnapshot.email || ''
+  ).trim() || '-';
+
+  let processedByInfo: TransactionPersonInfo = {
+    fullName: fallbackProcessedByName,
+    email: fallbackProcessedByEmail,
+    phone: null,
+  };
+
+  if (hasProcessedBy) {
+    try {
+      const resolvedProcessedByInfo = await subscriptionTransactionService.getUserInfo(processedById);
+      if (resolvedProcessedByInfo) {
+        processedByInfo = {
+          fullName: resolvedProcessedByInfo.fullName || fallbackProcessedByName,
+          email: resolvedProcessedByInfo.email || fallbackProcessedByEmail,
+          phone: resolvedProcessedByInfo.phone || null,
+        };
+      }
+    } catch (error) {
+      console.error(`Failed to get processedBy info for ${processedById}:`, error);
+    }
+  }
+
+  return {
+    ...transaction,
+    userInfo,
+    processedByInfo,
+  };
+}
 
 // GET /api/admin/subscription-transactions - Lấy danh sách giao dịch gói dịch vụ
 router.get('/', requireModulePermission('users', 'view'), async (req: AuthRequest, res: Response) => {
@@ -69,6 +179,47 @@ router.get('/', requireModulePermission('users', 'view'), async (req: AuthReques
     }
 
     try {
+      const historyColumns = await queryOne<{
+        hasProcessedBy: number;
+        hasProcessedByName: number;
+        hasProcessedByEmail: number;
+        hasCreatedBy: number;
+        hasCreatedByName: number;
+        hasCreatedByEmail: number;
+        hasMetadata: number;
+      }>(`
+        SELECT
+          CASE WHEN COL_LENGTH('SubscriptionHistory', 'processed_by') IS NOT NULL THEN 1 ELSE 0 END AS hasProcessedBy,
+          CASE WHEN COL_LENGTH('SubscriptionHistory', 'processed_by_name') IS NOT NULL THEN 1 ELSE 0 END AS hasProcessedByName,
+          CASE WHEN COL_LENGTH('SubscriptionHistory', 'processed_by_email') IS NOT NULL THEN 1 ELSE 0 END AS hasProcessedByEmail,
+          CASE WHEN COL_LENGTH('SubscriptionHistory', 'created_by') IS NOT NULL THEN 1 ELSE 0 END AS hasCreatedBy,
+          CASE WHEN COL_LENGTH('SubscriptionHistory', 'created_by_name') IS NOT NULL THEN 1 ELSE 0 END AS hasCreatedByName,
+          CASE WHEN COL_LENGTH('SubscriptionHistory', 'created_by_email') IS NOT NULL THEN 1 ELSE 0 END AS hasCreatedByEmail,
+          CASE WHEN COL_LENGTH('SubscriptionHistory', 'metadata') IS NOT NULL THEN 1 ELSE 0 END AS hasMetadata
+      `);
+
+      const processedBySelect = (historyColumns?.hasProcessedBy || 0) === 1
+        ? 'h.processed_by AS processed_by'
+        : (historyColumns?.hasCreatedBy || 0) === 1
+          ? 'h.created_by AS processed_by'
+          : 'CAST(NULL AS NVARCHAR(36)) AS processed_by';
+
+      const processedByNameSelect = (historyColumns?.hasProcessedByName || 0) === 1
+        ? 'h.processed_by_name AS processed_by_name'
+        : (historyColumns?.hasCreatedByName || 0) === 1
+          ? 'h.created_by_name AS processed_by_name'
+          : 'CAST(NULL AS NVARCHAR(255)) AS processed_by_name';
+
+      const processedByEmailSelect = (historyColumns?.hasProcessedByEmail || 0) === 1
+        ? 'h.processed_by_email AS processed_by_email'
+        : (historyColumns?.hasCreatedByEmail || 0) === 1
+          ? 'h.created_by_email AS processed_by_email'
+          : 'CAST(NULL AS NVARCHAR(255)) AS processed_by_email';
+
+      const metadataSelect = (historyColumns?.hasMetadata || 0) === 1
+        ? 'h.metadata AS metadata'
+        : 'CAST(NULL AS NVARCHAR(MAX)) AS metadata';
+
       const fallbackRows = await query(
         `SELECT TOP (@limit)
            h.id,
@@ -81,6 +232,10 @@ router.get('/', requireModulePermission('users', 'view'), async (req: AuthReques
            h.start_date,
            h.end_date,
            h.auto_renewal,
+           ${processedBySelect},
+           ${processedByNameSelect},
+           ${processedByEmailSelect},
+           ${metadataSelect},
            h.created_at
          FROM SubscriptionHistory h
          ORDER BY h.created_at DESC`,
@@ -93,6 +248,15 @@ router.get('/', requireModulePermission('users', 'view'), async (req: AuthReques
           ? (rawStatus as 'pending' | 'completed' | 'failed' | 'refunded')
           : 'completed';
 
+        let metadata: Record<string, any> | undefined;
+        if (typeof row.metadata === 'string' && row.metadata.trim()) {
+          try {
+            metadata = JSON.parse(row.metadata) as Record<string, any>;
+          } catch {
+            metadata = undefined;
+          }
+        }
+
         return ({
         id: `history_${String(row.id)}`,
         userId: row.user_id as string,
@@ -101,16 +265,20 @@ router.get('/', requireModulePermission('users', 'view'), async (req: AuthReques
         maxStores: Number(row.max_stores || 1),
         amount: Number(row.amount || 0),
         currency: 'VND',
-        paymentMethod: (row.payment_method as 'auto_payment' | 'bank_transfer' | 'credit_card' | 'cash') || 'cash',
+        paymentMethod: (row.payment_method as 'auto_payment' | 'bank_transfer' | 'credit_card' | 'cash' | 'admin_assign') || 'cash',
         paymentStatus,
         startDate: new Date(row.start_date as string),
         endDate: new Date(row.end_date as string),
         autoRenewal: Boolean(row.auto_renewal),
+        processedBy: (row.processed_by as string) || undefined,
         processedByRole: 'system' as const,
+        processedByName: (row.processed_by_name as string) || undefined,
+        processedByEmail: (row.processed_by_email as string) || undefined,
         notes:
           String(row.payment_method || '').toLowerCase() === 'admin_assign'
-            ? 'Cap goi (nguon SubscriptionHistory)'
+            ? 'Cấp gói (nguồn SubscriptionHistory)'
             : 'Nguon du lieu: SubscriptionHistory',
+        metadata,
         createdAt: new Date(row.created_at as string),
         updatedAt: new Date(row.created_at as string),
       });
@@ -134,34 +302,8 @@ router.get('/', requireModulePermission('users', 'view'), async (req: AuthReques
       console.warn('Fallback query SubscriptionHistory failed:', fallbackError);
     }
 
-    // Lấy thông tin user cho mỗi giao dịch
     const transactionsWithUserInfo = await Promise.all(
-      transactions.map(async (transaction) => {
-        const fallbackUserLabel = transaction.userId
-          ? `ID: ${String(transaction.userId).slice(0, 8)}`
-          : 'Nguoi dung khong xac dinh';
-        try {
-          const userInfo = await subscriptionTransactionService.getUserInfo(transaction.userId);
-          return {
-            ...transaction,
-            userInfo: {
-              fullName: userInfo?.fullName || fallbackUserLabel,
-              email: userInfo?.email || '-',
-              phone: userInfo?.phone || null,
-            }
-          };
-        } catch (error) {
-          console.error(`Failed to get user info for ${transaction.userId}:`, error);
-          return {
-            ...transaction,
-            userInfo: {
-              fullName: fallbackUserLabel,
-              email: '-',
-              phone: null,
-            }
-          };
-        }
-      })
+      transactions.map((transaction) => enrichTransactionWithActors(transaction))
     );
 
     res.json({
@@ -220,17 +362,9 @@ router.get('/:id', requireModulePermission('users', 'view'), async (req: AuthReq
       return;
     }
 
-    // Lấy thông tin user
-    const userInfo = await subscriptionTransactionService.getUserInfo(transaction.userId);
+    const enrichedTransaction = await enrichTransactionWithActors(transaction);
 
-    res.json({
-      ...transaction,
-      userInfo: {
-        fullName: userInfo?.fullName || 'N/A',
-        email: userInfo?.email || 'N/A',
-        phone: userInfo?.phone || null,
-      }
-    });
+    res.json(enrichedTransaction);
   } catch (error) {
     console.error('Get subscription transaction error:', error);
     res.status(500).json({ error: 'Failed to get subscription transaction' });

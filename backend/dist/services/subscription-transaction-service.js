@@ -12,22 +12,70 @@ const db_1 = require("../db");
  * Service xử lý giao dịch gói dịch vụ
  */
 class SubscriptionTransactionService {
+    auditSchemaEnsured = false;
+    async ensureSubscriptionTransactionAuditSchema() {
+        if (this.auditSchemaEnsured) {
+            return;
+        }
+        await (0, db_1.query)(`
+      IF OBJECT_ID('SubscriptionTransactions', 'U') IS NOT NULL
+      BEGIN
+        IF COL_LENGTH('SubscriptionTransactions', 'processed_by_name') IS NULL
+          ALTER TABLE SubscriptionTransactions ADD processed_by_name NVARCHAR(255) NULL;
+
+        IF COL_LENGTH('SubscriptionTransactions', 'processed_by_email') IS NULL
+          ALTER TABLE SubscriptionTransactions ADD processed_by_email NVARCHAR(255) NULL;
+
+        IF COL_LENGTH('SubscriptionTransactions', 'user_name_snapshot') IS NULL
+          ALTER TABLE SubscriptionTransactions ADD user_name_snapshot NVARCHAR(255) NULL;
+
+        IF COL_LENGTH('SubscriptionTransactions', 'user_email_snapshot') IS NULL
+          ALTER TABLE SubscriptionTransactions ADD user_email_snapshot NVARCHAR(255) NULL;
+
+        IF COL_LENGTH('SubscriptionTransactions', 'metadata') IS NULL
+          ALTER TABLE SubscriptionTransactions ADD metadata NVARCHAR(MAX) NULL;
+      END
+    `);
+        this.auditSchemaEnsured = true;
+    }
+    parseMetadata(rawMetadata) {
+        if (!rawMetadata) {
+            return undefined;
+        }
+        if (typeof rawMetadata === 'object') {
+            return rawMetadata;
+        }
+        if (typeof rawMetadata !== 'string') {
+            return undefined;
+        }
+        try {
+            return JSON.parse(rawMetadata);
+        }
+        catch {
+            return undefined;
+        }
+    }
     /**
      * Tạo giao dịch mới
      */
     async createTransaction(input) {
+        await this.ensureSubscriptionTransactionAuditSchema();
         const transactionId = crypto.randomUUID();
         const insertQuery = `
       INSERT INTO SubscriptionTransactions (
         id, user_id, tenant_id, transaction_type, plan_id, previous_plan_id,
         max_stores, amount, currency, payment_method, payment_status,
         transaction_reference, start_date, end_date, auto_renewal,
-        processed_by, processed_by_role, notes, metadata, created_at, updated_at
+        processed_by, processed_by_role, processed_by_name, processed_by_email,
+        user_name_snapshot, user_email_snapshot,
+        notes, metadata, created_at, updated_at
       ) VALUES (
         @transactionId, @userId, @tenantId, @transactionType, @planId, @previousPlanId,
         @maxStores, @amount, 'VND', @paymentMethod, @paymentStatus,
         @transactionReference, @startDate, @endDate, @autoRenewal,
-        @processedBy, @processedByRole, @notes, @metadata, GETDATE(), GETDATE()
+        @processedBy, @processedByRole, @processedByName, @processedByEmail,
+        @userNameSnapshot, @userEmailSnapshot,
+        @notes, @metadata, GETDATE(), GETDATE()
       )
     `;
         await (0, db_1.query)(insertQuery, {
@@ -47,6 +95,10 @@ class SubscriptionTransactionService {
             autoRenewal: input.autoRenewal !== false,
             processedBy: input.processedBy || null,
             processedByRole: input.processedByRole,
+            processedByName: input.processedByName || null,
+            processedByEmail: input.processedByEmail || null,
+            userNameSnapshot: input.userNameSnapshot || null,
+            userEmailSnapshot: input.userEmailSnapshot || null,
             notes: input.notes || null,
             metadata: input.metadata ? JSON.stringify(input.metadata) : null,
         });
@@ -333,6 +385,25 @@ class SubscriptionTransactionService {
      * Map database record to entity
      */
     mapToEntity(record) {
+        const metadata = this.parseMetadata(record.metadata || record.Metadata);
+        const assignedBy = metadata && typeof metadata.assignedBy === 'object'
+            ? metadata.assignedBy
+            : null;
+        const assignedTo = metadata && typeof metadata.assignedTo === 'object'
+            ? metadata.assignedTo
+            : null;
+        const metadataProcessedByName = assignedBy && typeof assignedBy.fullName === 'string'
+            ? assignedBy.fullName
+            : undefined;
+        const metadataProcessedByEmail = assignedBy && typeof assignedBy.email === 'string'
+            ? assignedBy.email
+            : undefined;
+        const metadataUserName = assignedTo && typeof assignedTo.fullName === 'string'
+            ? assignedTo.fullName
+            : undefined;
+        const metadataUserEmail = assignedTo && typeof assignedTo.email === 'string'
+            ? assignedTo.email
+            : undefined;
         return {
             id: record.id,
             userId: (record.user_id || record.UserId || ''),
@@ -351,8 +422,12 @@ class SubscriptionTransactionService {
             autoRenewal: Boolean(record.auto_renewal ?? record.AutoRenewal),
             processedBy: (record.processed_by || record.ProcessedBy),
             processedByRole: (record.processed_by_role || record.ProcessedByRole || 'system'),
+            processedByName: (record.processed_by_name || record.ProcessedByName || metadataProcessedByName),
+            processedByEmail: (record.processed_by_email || record.ProcessedByEmail || metadataProcessedByEmail),
+            userNameSnapshot: (record.user_name_snapshot || record.UserNameSnapshot || metadataUserName),
+            userEmailSnapshot: (record.user_email_snapshot || record.UserEmailSnapshot || metadataUserEmail),
             notes: record.notes,
-            metadata: record.metadata ? JSON.parse(record.metadata) : undefined,
+            metadata,
             createdAt: new Date(record.created_at || record.CreatedAt || Date.now()),
             updatedAt: new Date(record.updated_at || record.UpdatedAt || record.created_at || record.CreatedAt || Date.now()),
         };

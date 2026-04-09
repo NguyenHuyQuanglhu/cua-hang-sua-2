@@ -38,9 +38,18 @@ interface SubscriptionTransactionItem {
   amount: number;
   paymentMethod: string;
   paymentStatus: 'pending' | 'completed' | 'failed' | 'refunded';
+  processedBy?: string;
   processedByRole?: 'system' | 'admin' | 'owner' | 'company_manager';
+  processedByName?: string;
+  processedByEmail?: string;
   notes?: string;
   createdAt: string;
+  userNameSnapshot?: string;
+  userEmailSnapshot?: string;
+  processedByInfo?: {
+    fullName?: string;
+    email?: string;
+  };
   userInfo?: {
     fullName?: string;
     email?: string;
@@ -83,6 +92,26 @@ function getPaymentMethodLabel(method: string): string {
   if (normalized === 'credit_card') return 'Thẻ tín dụng';
   if (normalized === 'auto_payment') return 'Tự động trích phí';
   return method || 'N/A';
+}
+
+function getAssignedByAdminLabel(item: SubscriptionTransactionItem): string | null {
+  const isAdminAssigned =
+    isAssignedTransaction(item) ||
+    String(item.paymentMethod || '').toLowerCase() === 'admin_assign';
+
+  if (!isAdminAssigned) {
+    return null;
+  }
+
+  const rawName = String(item.processedByInfo?.fullName || item.processedByName || '').trim();
+  const rawEmail = String(item.processedByInfo?.email || item.processedByEmail || '').trim();
+  const name = rawName && !/^ID:\s*[A-F0-9]{8}$/i.test(rawName) ? rawName : '';
+  const email = rawEmail && rawEmail !== '-' ? rawEmail : '';
+
+  if (name && email) return `${name} (${email})`;
+  if (name) return name;
+  if (email) return email;
+  return null;
 }
 
 export default function SubscriptionHistoryReportPage() {
@@ -190,8 +219,19 @@ export default function SubscriptionHistoryReportPage() {
       const resolvedUser = resolveUserInfo(item);
       const notes = item.notes || '';
       const planId = item.planId || '';
+      const processedByName = item.processedByInfo?.fullName || item.processedByName || '';
+      const processedByEmail = item.processedByInfo?.email || item.processedByEmail || '';
 
-      return [userName, userEmail, resolvedUser.name, resolvedUser.email, notes, planId]
+      return [
+        userName,
+        userEmail,
+        resolvedUser.name,
+        resolvedUser.email,
+        notes,
+        planId,
+        processedByName,
+        processedByEmail,
+      ]
         .join(' ')
         .toLowerCase()
         .includes(keyword);
@@ -289,28 +329,36 @@ export default function SubscriptionHistoryReportPage() {
                   </TableRow>
                 )}
 
-                {filteredTransactions.map((item) => (
-                  <TableRow key={item.id}>
-                    <TableCell>
-                      {item.createdAt
-                        ? format(new Date(item.createdAt), 'dd/MM/yyyy HH:mm', { locale: vi })
-                        : '-'}
-                    </TableCell>
-                    <TableCell>
-                      <div className="font-medium">{resolveUserInfo(item).name}</div>
-                      <div className="text-xs text-muted-foreground">{resolveUserInfo(item).email}</div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{getTransactionLabel(item)}</Badge>
-                    </TableCell>
-                    <TableCell className="font-medium uppercase">{item.planId}</TableCell>
-                    <TableCell>
-                      <div className="text-sm">{getPaymentMethodLabel(item.paymentMethod)}</div>
-                      <div className="text-xs text-muted-foreground">{getStatusLabel(item.paymentStatus)}</div>
-                    </TableCell>
-                    <TableCell className="text-right font-semibold">{formatCurrency(Number(item.amount || 0))}</TableCell>
-                  </TableRow>
-                ))}
+                {filteredTransactions.map((item) => {
+                  const resolvedUser = resolveUserInfo(item);
+                  const assignedByLabel = getAssignedByAdminLabel(item);
+
+                  return (
+                    <TableRow key={item.id}>
+                      <TableCell>
+                        {item.createdAt
+                          ? format(new Date(item.createdAt), 'dd/MM/yyyy HH:mm', { locale: vi })
+                          : '-'}
+                      </TableCell>
+                      <TableCell>
+                        <div className="font-medium">{resolvedUser.name}</div>
+                        <div className="text-xs text-muted-foreground">{resolvedUser.email}</div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{getTransactionLabel(item)}</Badge>
+                      </TableCell>
+                      <TableCell className="font-medium uppercase">{item.planId}</TableCell>
+                      <TableCell>
+                        <div className="text-sm">{getPaymentMethodLabel(item.paymentMethod)}</div>
+                        {assignedByLabel && (
+                          <div className="text-xs text-muted-foreground">Bởi: {assignedByLabel}</div>
+                        )}
+                        <div className="text-xs text-muted-foreground">{getStatusLabel(item.paymentStatus)}</div>
+                      </TableCell>
+                      <TableCell className="text-right font-semibold">{formatCurrency(Number(item.amount || 0))}</TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>

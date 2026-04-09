@@ -104,6 +104,72 @@ async function getPlanPriority(planId: string): Promise<number> {
   return PLAN_PRIORITY_FALLBACK[planId] || 0;
 }
 
+function buildUserDisplayName(
+  displayName: string | null | undefined,
+  email: string | null | undefined,
+  fallbackId?: string
+): string {
+  const normalizedDisplayName = String(displayName || '').trim();
+  if (normalizedDisplayName) {
+    return normalizedDisplayName;
+  }
+
+  const normalizedEmail = String(email || '').trim();
+  if (normalizedEmail) {
+    return normalizedEmail.includes('@') ? normalizedEmail.split('@')[0] : normalizedEmail;
+  }
+
+  return fallbackId ? `ID: ${fallbackId.slice(0, 8)}` : 'Nguoi dung khong xac dinh';
+}
+
+async function ensureSubscriptionTransactionAuditColumns(): Promise<void> {
+  await query(`
+    IF OBJECT_ID('SubscriptionTransactions', 'U') IS NOT NULL
+    BEGIN
+      IF COL_LENGTH('SubscriptionTransactions', 'processed_by_name') IS NULL
+        ALTER TABLE SubscriptionTransactions ADD processed_by_name NVARCHAR(255) NULL;
+
+      IF COL_LENGTH('SubscriptionTransactions', 'processed_by_email') IS NULL
+        ALTER TABLE SubscriptionTransactions ADD processed_by_email NVARCHAR(255) NULL;
+
+      IF COL_LENGTH('SubscriptionTransactions', 'user_name_snapshot') IS NULL
+        ALTER TABLE SubscriptionTransactions ADD user_name_snapshot NVARCHAR(255) NULL;
+
+      IF COL_LENGTH('SubscriptionTransactions', 'user_email_snapshot') IS NULL
+        ALTER TABLE SubscriptionTransactions ADD user_email_snapshot NVARCHAR(255) NULL;
+
+      IF COL_LENGTH('SubscriptionTransactions', 'metadata') IS NULL
+        ALTER TABLE SubscriptionTransactions ADD metadata NVARCHAR(MAX) NULL;
+    END
+  `);
+}
+
+async function dropSubscriptionUserForeignKeysForHistoryRetention(): Promise<void> {
+  await query(`
+    DECLARE @dropSql NVARCHAR(MAX) = N'';
+
+    SELECT @dropSql = @dropSql
+      + N'ALTER TABLE ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id))
+      + N'.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id))
+      + N' DROP CONSTRAINT ' + QUOTENAME(fk.name) + N';'
+    FROM sys.foreign_keys fk
+    INNER JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
+    INNER JOIN sys.columns parent_col
+      ON parent_col.object_id = fkc.parent_object_id
+      AND parent_col.column_id = fkc.parent_column_id
+    INNER JOIN sys.columns ref_col
+      ON ref_col.object_id = fkc.referenced_object_id
+      AND ref_col.column_id = fkc.referenced_column_id
+    WHERE OBJECT_NAME(fk.parent_object_id) IN ('SubscriptionTransactions', 'SubscriptionHistory')
+      AND parent_col.name = 'user_id'
+      AND OBJECT_NAME(fk.referenced_object_id) = 'Users'
+      AND ref_col.name = 'id';
+
+    IF LEN(@dropSql) > 0
+      EXEC sp_executesql @dropSql;
+  `);
+}
+
 
 /**
  * GET /api/users/roles/assignable - Get roles that current user can assign
@@ -416,15 +482,51 @@ router.post('/', requireModulePermission('users', 'add'), storeContext, async (r
           }
         );
 
+        await ensureSubscriptionTransactionAuditColumns();
+
+        const assignedByName = buildUserDisplayName(
+          currentUser.displayName,
+          currentUser.email,
+          currentUser.id
+        );
+        const assignedByEmail = String(currentUser.email || '').trim() || null;
+        const assignedToName = buildUserDisplayName(
+          newUser.display_name as string | null,
+          newUser.email as string | null,
+          String(newUser.id || '')
+        );
+        const assignedToEmail = String(newUser.email || '').trim() || null;
+
+        const metadata = JSON.stringify({
+          source: 'admin_assign',
+          assignedBy: {
+            id: currentUser.id,
+            fullName: assignedByName,
+            email: assignedByEmail || '',
+            role: currentUser.role,
+          },
+          assignedTo: {
+            id: String(newUser.id || ''),
+            fullName: assignedToName,
+            email: assignedToEmail || '',
+            role: targetRole,
+          },
+          action: 'create_user',
+        });
+
         await query(
           `IF EXISTS (SELECT * FROM sysobjects WHERE name='SubscriptionTransactions' AND xtype='U')
            BEGIN
              INSERT INTO SubscriptionTransactions
                (id, user_id, transaction_type, plan_id, max_stores, amount, currency, payment_method, payment_status,
-                start_date, end_date, auto_renewal, processed_by, processed_by_role, notes, created_at, updated_at)
+                start_date, end_date, auto_renewal, processed_by, processed_by_role,
+                processed_by_name, processed_by_email, user_name_snapshot, user_email_snapshot,
+                notes, metadata, created_at, updated_at)
              VALUES
-               (NEWID(), @userId, 'manual_purchase', @planId, @maxStores, @amount, 'VND', 'cash', 'completed',
-                @startDate, @endDate, @autoRenewal, @processedBy, @processedByRole, @notes, GETDATE(), GETDATE())
+               (NEWID(), @userId, 'manual_purchase', @planId, @maxStores, @amount, 'VND', 'admin_assign', 'completed',
+                @startDate, @endDate, @autoRenewal, @processedBy, @processedByRole,
+                @processedByName, @processedByEmail, @userNameSnapshot, @userEmailSnapshot,
+                @notes, @metadata, GETDATE(), GETDATE())
            END`,
           {
             userId: newUser.id,
@@ -436,7 +538,12 @@ router.post('/', requireModulePermission('users', 'add'), storeContext, async (r
             autoRenewal: resolvedAutoRenewal ? 1 : 0,
             processedBy: currentUser.id,
             processedByRole: currentUser.role,
-            notes: `Cap goi khi tao tai khoan (${targetRole})`,
+            processedByName: assignedByName,
+            processedByEmail: assignedByEmail,
+            userNameSnapshot: assignedToName,
+            userEmailSnapshot: assignedToEmail,
+            notes: `Cấp gói khi tạo tài khoản (${targetRole})`,
+            metadata,
           }
         );
       } catch (subscriptionLogError) {
@@ -805,15 +912,51 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
           }
         );
 
+        await ensureSubscriptionTransactionAuditColumns();
+
+        const assignedByName = buildUserDisplayName(
+          currentUser.displayName,
+          currentUser.email,
+          currentUser.id
+        );
+        const assignedByEmail = String(currentUser.email || '').trim() || null;
+        const assignedToName = buildUserDisplayName(
+          typeof displayName === 'string' ? displayName : user.display_name,
+          user.email,
+          id
+        );
+        const assignedToEmail = String(user.email || '').trim() || null;
+
+        const metadata = JSON.stringify({
+          source: 'admin_assign',
+          assignedBy: {
+            id: currentUser.id,
+            fullName: assignedByName,
+            email: assignedByEmail || '',
+            role: currentUser.role,
+          },
+          assignedTo: {
+            id,
+            fullName: assignedToName,
+            email: assignedToEmail || '',
+            role: normalizedTargetRole,
+          },
+          action: 'update_user',
+        });
+
         await query(
           `IF EXISTS (SELECT * FROM sysobjects WHERE name='SubscriptionTransactions' AND xtype='U')
            BEGIN
              INSERT INTO SubscriptionTransactions
                (id, user_id, transaction_type, plan_id, max_stores, amount, currency, payment_method, payment_status,
-                start_date, end_date, auto_renewal, processed_by, processed_by_role, notes, created_at, updated_at)
+                start_date, end_date, auto_renewal, processed_by, processed_by_role,
+                processed_by_name, processed_by_email, user_name_snapshot, user_email_snapshot,
+                notes, metadata, created_at, updated_at)
              VALUES
-               (NEWID(), @userId, 'manual_purchase', @planId, @maxStores, @amount, 'VND', 'cash', 'completed',
-                @startDate, @endDate, @autoRenewal, @processedBy, @processedByRole, @notes, GETDATE(), GETDATE())
+               (NEWID(), @userId, 'manual_purchase', @planId, @maxStores, @amount, 'VND', 'admin_assign', 'completed',
+                @startDate, @endDate, @autoRenewal, @processedBy, @processedByRole,
+                @processedByName, @processedByEmail, @userNameSnapshot, @userEmailSnapshot,
+                @notes, @metadata, GETDATE(), GETDATE())
            END`,
           {
             userId: id,
@@ -825,7 +968,12 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
             autoRenewal: subscriptionUpdateLog.autoRenewal,
             processedBy: currentUser.id,
             processedByRole: currentUser.role,
-            notes: `Cap goi khi cap nhat tai khoan (${normalizedTargetRole})`,
+            processedByName: assignedByName,
+            processedByEmail: assignedByEmail,
+            userNameSnapshot: assignedToName,
+            userEmailSnapshot: assignedToEmail,
+            notes: `Cấp gói khi cập nhật tài khoản (${normalizedTargetRole})`,
+            metadata,
           }
         );
       } catch (subscriptionLogError) {
@@ -1278,17 +1426,46 @@ router.delete('/:id', requireModulePermission('users', 'delete'), async (req: Au
       }
     }
 
+    const deletedUserNameSnapshot = buildUserDisplayName(user.display_name, user.email, id);
+    const deletedUserEmailSnapshot = String(user.email || '').trim() || null;
+
+    await ensureSubscriptionTransactionAuditColumns();
     await query(
       `IF OBJECT_ID('SubscriptionTransactions', 'U') IS NOT NULL
-       DELETE FROM SubscriptionTransactions WHERE user_id = @userId`,
-      { userId: id }
+       BEGIN
+         UPDATE st
+         SET
+           processed_by_name = CASE
+             WHEN st.processed_by = @userId
+               THEN COALESCE(NULLIF(st.processed_by_name, ''), @snapshotName)
+             ELSE st.processed_by_name
+           END,
+           processed_by_email = CASE
+             WHEN st.processed_by = @userId
+               THEN COALESCE(NULLIF(st.processed_by_email, ''), @snapshotEmail)
+             ELSE st.processed_by_email
+           END,
+           user_name_snapshot = CASE
+             WHEN st.user_id = @userId
+               THEN COALESCE(NULLIF(st.user_name_snapshot, ''), @snapshotName)
+             ELSE st.user_name_snapshot
+           END,
+           user_email_snapshot = CASE
+             WHEN st.user_id = @userId
+               THEN COALESCE(NULLIF(st.user_email_snapshot, ''), @snapshotEmail)
+             ELSE st.user_email_snapshot
+           END
+         FROM SubscriptionTransactions st
+         WHERE st.processed_by = @userId OR st.user_id = @userId;
+       END`,
+      {
+        userId: id,
+        snapshotName: deletedUserNameSnapshot,
+        snapshotEmail: deletedUserEmailSnapshot,
+      }
     );
 
-    await query(
-      `IF OBJECT_ID('SubscriptionHistory', 'U') IS NOT NULL
-       DELETE FROM SubscriptionHistory WHERE user_id = @userId`,
-      { userId: id }
-    );
+    await dropSubscriptionUserForeignKeysForHistoryRetention();
 
     await query('DELETE FROM Users WHERE id = @id', { id });
     invalidateUserPermissionCache(id);

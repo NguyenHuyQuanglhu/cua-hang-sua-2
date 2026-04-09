@@ -15,7 +15,7 @@ export type PaymentStatus = 'pending' | 'completed' | 'failed' | 'refunded';
 /**
  * Phương thức thanh toán
  */
-export type PaymentMethod = 'auto_payment' | 'bank_transfer' | 'credit_card' | 'cash';
+export type PaymentMethod = 'auto_payment' | 'bank_transfer' | 'credit_card' | 'cash' | 'admin_assign';
 /**
  * Vai trò người xử lý
  */
@@ -41,6 +41,10 @@ export interface SubscriptionTransaction {
     autoRenewal: boolean;
     processedBy?: string;
     processedByRole: ProcessedByRole;
+    processedByName?: string;
+    processedByEmail?: string;
+    userNameSnapshot?: string;
+    userEmailSnapshot?: string;
     notes?: string;
     metadata?: Record<string, any>;
     createdAt: Date;
@@ -65,6 +69,10 @@ export interface CreateSubscriptionTransactionInput {
     autoRenewal?: boolean;
     processedBy?: string;
     processedByRole: ProcessedByRole;
+    processedByName?: string;
+    processedByEmail?: string;
+    userNameSnapshot?: string;
+    userEmailSnapshot?: string;
     notes?: string;
     metadata?: Record<string, any>;
 }
@@ -109,6 +117,9 @@ export interface SubscriptionTransactionStats {
  * Service xử lý giao dịch gói dịch vụ
  */
 export declare class SubscriptionTransactionService {
+    private auditSchemaEnsured;
+    private ensureSubscriptionTransactionAuditSchema;
+    private parseMetadata;
     /**
      * Tạo giao dịch mới
      */
