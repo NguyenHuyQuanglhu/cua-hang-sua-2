@@ -308,8 +308,11 @@ class SubscriptionTransactionService {
             email,
             phone
           FROM Users
-          WHERE CAST(id AS NVARCHAR(64)) = @userIdText
+          WHERE (
+            CAST(id AS NVARCHAR(64)) = @userIdText
              OR LEFT(CAST(id AS NVARCHAR(64)), 8) = @userIdText
+          )
+            AND (COL_LENGTH('Users', 'status') IS NULL OR status = 'active')
           ORDER BY CASE WHEN CAST(id AS NVARCHAR(64)) = @userIdText THEN 0 ELSE 1 END
         ELSE
           SELECT TOP 1
@@ -317,8 +320,11 @@ class SubscriptionTransactionService {
             email,
             CAST(NULL AS NVARCHAR(50)) AS phone
           FROM Users
-          WHERE CAST(id AS NVARCHAR(64)) = @userIdText
+          WHERE (
+            CAST(id AS NVARCHAR(64)) = @userIdText
              OR LEFT(CAST(id AS NVARCHAR(64)), 8) = @userIdText
+          )
+            AND (COL_LENGTH('Users', 'status') IS NULL OR status = 'active')
           ORDER BY CASE WHEN CAST(id AS NVARCHAR(64)) = @userIdText THEN 0 ELSE 1 END
       END
       ELSE IF OBJECT_ID('TenantUsers', 'U') IS NOT NULL
@@ -330,8 +336,11 @@ class SubscriptionTransactionService {
             u.phone
           FROM TenantUsers tu
           JOIN Users u ON LOWER(u.email) = LOWER(tu.email)
-          WHERE CAST(tu.id AS NVARCHAR(64)) = @userIdText
+          WHERE (
+            CAST(tu.id AS NVARCHAR(64)) = @userIdText
              OR LEFT(CAST(tu.id AS NVARCHAR(64)), 8) = @userIdText
+          )
+            AND (COL_LENGTH('Users', 'status') IS NULL OR u.status = 'active')
           ORDER BY CASE WHEN CAST(tu.id AS NVARCHAR(64)) = @userIdText THEN 0 ELSE 1 END
         ELSE
           SELECT TOP 1
@@ -340,8 +349,11 @@ class SubscriptionTransactionService {
             CAST(NULL AS NVARCHAR(50)) AS phone
           FROM TenantUsers tu
           JOIN Users u ON LOWER(u.email) = LOWER(tu.email)
-          WHERE CAST(tu.id AS NVARCHAR(64)) = @userIdText
+          WHERE (
+            CAST(tu.id AS NVARCHAR(64)) = @userIdText
              OR LEFT(CAST(tu.id AS NVARCHAR(64)), 8) = @userIdText
+          )
+            AND (COL_LENGTH('Users', 'status') IS NULL OR u.status = 'active')
           ORDER BY CASE WHEN CAST(tu.id AS NVARCHAR(64)) = @userIdText THEN 0 ELSE 1 END
       END
       ELSE IF OBJECT_ID('Tenants', 'U') IS NOT NULL
@@ -353,8 +365,11 @@ class SubscriptionTransactionService {
             u.phone
           FROM Tenants t
           JOIN Users u ON LOWER(u.email) = LOWER(t.email)
-          WHERE CAST(t.id AS NVARCHAR(64)) = @userIdText
+          WHERE (
+            CAST(t.id AS NVARCHAR(64)) = @userIdText
              OR LEFT(CAST(t.id AS NVARCHAR(64)), 8) = @userIdText
+          )
+            AND (COL_LENGTH('Users', 'status') IS NULL OR u.status = 'active')
           ORDER BY CASE WHEN CAST(t.id AS NVARCHAR(64)) = @userIdText THEN 0 ELSE 1 END
         ELSE
           SELECT TOP 1
@@ -363,8 +378,11 @@ class SubscriptionTransactionService {
             CAST(NULL AS NVARCHAR(50)) AS phone
           FROM Tenants t
           JOIN Users u ON LOWER(u.email) = LOWER(t.email)
-          WHERE CAST(t.id AS NVARCHAR(64)) = @userIdText
+          WHERE (
+            CAST(t.id AS NVARCHAR(64)) = @userIdText
              OR LEFT(CAST(t.id AS NVARCHAR(64)), 8) = @userIdText
+          )
+            AND (COL_LENGTH('Users', 'status') IS NULL OR u.status = 'active')
           ORDER BY CASE WHEN CAST(t.id AS NVARCHAR(64)) = @userIdText THEN 0 ELSE 1 END
       END
     `;

@@ -24,6 +24,18 @@ interface TransactionPersonInfo {
   phone: string | null;
 }
 
+const DELETED_OR_INACTIVE_USER_LABEL = 'Người dùng đã bị xóa hoặc không hoạt động';
+const UNKNOWN_USER_LABEL = 'Người dùng không xác định';
+
+function normalizeDisplayLabel(rawValue: string, fallbackLabel: string): string {
+  const normalized = String(rawValue || '').trim();
+  if (!normalized) {
+    return '';
+  }
+
+  return /^ID:\s*[A-F0-9]{8}$/i.test(normalized) ? fallbackLabel : normalized;
+}
+
 function extractMetadataPerson(
   metadata: Record<string, any> | undefined,
   key: 'assignedBy' | 'assignedTo'
@@ -54,12 +66,14 @@ async function enrichTransactionWithActors(
   const assignedToSnapshot = extractMetadataPerson(transaction.metadata, 'assignedTo');
 
   const fallbackUserLabel = transaction.userId
-    ? `ID: ${String(transaction.userId).slice(0, 8)}`
-    : 'Nguoi dung khong xac dinh';
+    ? DELETED_OR_INACTIVE_USER_LABEL
+    : UNKNOWN_USER_LABEL;
 
-  const fallbackUserName = String(
-    transaction.userNameSnapshot || assignedToSnapshot.fullName || ''
-  ).trim() || fallbackUserLabel;
+  const fallbackUserName =
+    normalizeDisplayLabel(
+      String(transaction.userNameSnapshot || assignedToSnapshot.fullName || ''),
+      DELETED_OR_INACTIVE_USER_LABEL
+    ) || fallbackUserLabel;
   const fallbackUserEmail = String(
     transaction.userEmailSnapshot || assignedToSnapshot.email || ''
   ).trim() || '-';
@@ -88,12 +102,14 @@ async function enrichTransactionWithActors(
   const hasProcessedBy = Boolean(transaction.processedBy && String(transaction.processedBy).trim());
   const processedById = hasProcessedBy ? String(transaction.processedBy).trim() : '';
   const processedByFallbackLabel = hasProcessedBy
-    ? `ID: ${processedById.slice(0, 8)}`
+    ? DELETED_OR_INACTIVE_USER_LABEL
     : (transaction.processedByRole === 'system' ? 'He thong' : 'Quan tri vien');
 
-  const fallbackProcessedByName = String(
-    transaction.processedByName || assignedBySnapshot.fullName || ''
-  ).trim() || processedByFallbackLabel;
+  const fallbackProcessedByName =
+    normalizeDisplayLabel(
+      String(transaction.processedByName || assignedBySnapshot.fullName || ''),
+      DELETED_OR_INACTIVE_USER_LABEL
+    ) || processedByFallbackLabel;
   const fallbackProcessedByEmail = String(
     transaction.processedByEmail || assignedBySnapshot.email || ''
   ).trim() || '-';

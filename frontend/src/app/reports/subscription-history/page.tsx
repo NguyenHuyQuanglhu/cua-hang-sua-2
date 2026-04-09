@@ -64,6 +64,8 @@ interface UserLookupItem {
 
 type FilterType = 'all' | 'assigned' | 'manual_purchase' | 'manual_upgrade' | 'auto_renewal';
 
+const DELETED_OR_INACTIVE_USER_LABEL = 'Người dùng đã bị xóa hoặc không hoạt động';
+
 function isAssignedTransaction(item: SubscriptionTransactionItem): boolean {
   const notes = (item.notes || '').toLowerCase();
   return notes.includes('cap goi') || notes.includes('cấp gói');
@@ -196,7 +198,7 @@ export default function SubscriptionHistoryReportPage() {
     }
 
     return {
-      name: backendName && !isIdLabel ? backendName : `ID: ${rawUserId.slice(0, 8)}`,
+      name: backendName && !isIdLabel ? backendName : DELETED_OR_INACTIVE_USER_LABEL,
       email: backendEmail || '-',
     };
   };
