@@ -1115,7 +1115,8 @@ export default function POSPage() {
     setIsSubmitting(false)
   }
 
-  // Auto-focus barcode input
+  // Auto-focus barcode input only once on mount.
+  // This avoids stealing focus when the cart updates (e.g. editing quantity).
   useEffect(() => {
     barcodeInputRef.current?.focus();
     // Fallback focus with timeout for when the component first mounts
@@ -1123,7 +1124,7 @@ export default function POSPage() {
       barcodeInputRef.current?.focus();
     }, 300);
     return () => clearTimeout(timer);
-  }, [cart]);
+  }, []);
 
   // Redirect if not logged in
   useEffect(() => {
