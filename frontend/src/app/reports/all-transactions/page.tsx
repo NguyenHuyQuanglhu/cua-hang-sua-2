@@ -262,6 +262,13 @@ export default function AllTransactionsPage() {
     // Add sales
     sales.forEach(sale => {
       const invoiceCode = normalizeInvoiceCode(sale.invoiceNumber);
+      const contractorName = String((sale as any).contractorName || '').trim();
+      const customerName = String((sale as any).customerName || '').trim();
+      const hasBothPartner = Boolean(contractorName && customerName);
+      const resolvedPartnerName = hasBothPartner
+        ? `${contractorName} / KH: ${customerName}`
+        : contractorName || customerName || ((sale as any).contractorId ? 'Nhà thầu' : 'Khách lẻ');
+      const resolvedPartnerId = String((sale as any).contractorId || sale.customerId || '');
       if (invoiceCode) {
         saleInvoiceSet.add(invoiceCode);
       }
@@ -270,8 +277,8 @@ export default function AllTransactionsPage() {
         id: `sale-${sale.id}`,
         date: new Date(sale.transactionDate),
         type: 'sale',
-        partnerName: (sale as any).customerName || 'Khách lẻ',
-        partnerId: sale.customerId || '',
+        partnerName: resolvedPartnerName,
+        partnerId: resolvedPartnerId,
         reference: sale.invoiceNumber || '',
         amount: sale.finalAmount || 0,
         notes: (sale as any).notes,

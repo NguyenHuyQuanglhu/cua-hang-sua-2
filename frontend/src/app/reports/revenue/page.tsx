@@ -36,9 +36,10 @@ import * as xlsx from 'xlsx';
 import { exportToPDF, formatCurrencyForExport, formatDateForExport } from "@/lib/export-utils"
 import { RevenueChart } from "./components/revenue-chart"
 import Link from "next/link"
+import { useToast } from "@/hooks/use-toast"
 
-export type MonthlyRevenue = {
-  month: string;
+export type RevenueChartPoint = {
+  label: string;
   revenue: number;
   salesCount: number;
 }
@@ -94,6 +95,7 @@ export default function RevenueReportPage() {
   const [error, setError] = useState<string | null>(null);
 
   const { currentStore } = useStore();
+  const { toast } = useToast();
 
   const fetchReport = useCallback(async () => {
     if (!currentStore?.id) return;
@@ -125,15 +127,54 @@ export default function RevenueReportPage() {
     fetchReport();
   }, [fetchReport]);
 
-  const monthlyData = useMemo((): MonthlyRevenue[] => {
+  const isSingleMonthSelected = useMemo(() => {
+    const from = dateRange?.from;
+    const to = dateRange?.to || dateRange?.from;
+    if (!from || !to) {
+      return false;
+    }
+
+    return from.getFullYear() === to.getFullYear() && from.getMonth() === to.getMonth();
+  }, [dateRange]);
+
+  const chartData = useMemo((): RevenueChartPoint[] => {
     if (!reportData?.dailySummary) return [];
 
-    return reportData.dailySummary.map(s => ({
-      month: format(new Date(s.date), "yyyy-MM"),
-      revenue: s.netRevenue,
-      salesCount: s.totalSales,
-    }));
-  }, [reportData]);
+    const sortedDailySummary = [...reportData.dailySummary].sort((a, b) =>
+      new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
+
+    if (isSingleMonthSelected) {
+      return sortedDailySummary.map((summary) => ({
+        label: format(new Date(summary.date), "dd/MM"),
+        revenue: summary.netRevenue,
+        salesCount: summary.totalSales,
+      }));
+    }
+
+    const groupedByMonth = new Map<string, { revenue: number; salesCount: number }>();
+
+    sortedDailySummary.forEach((summary) => {
+      const key = format(new Date(summary.date), "yyyy-MM");
+      const current = groupedByMonth.get(key) || { revenue: 0, salesCount: 0 };
+      current.revenue += summary.netRevenue;
+      current.salesCount += summary.totalSales;
+      groupedByMonth.set(key, current);
+    });
+
+    return Array.from(groupedByMonth.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([monthKey, values]) => {
+        const [year, month] = monthKey.split("-");
+        return {
+          label: `Tháng ${Number(month)}/${year}`,
+          revenue: values.revenue,
+          salesCount: values.salesCount,
+        };
+      });
+  }, [isSingleMonthSelected, reportData]);
+
+  const chartTitle = isSingleMonthSelected ? 'Biểu đồ doanh thu theo ngày' : 'Biểu đồ doanh thu theo tháng';
 
   const filteredSales = useMemo(() => {
     return reportData?.details || [];
@@ -144,19 +185,34 @@ export default function RevenueReportPage() {
 
   const setDatePreset = (preset: 'this_week' | 'this_month' | 'this_quarter' | 'this_year') => {
     const now = new Date();
+    let nextRange: DateRange | undefined;
+    let presetLabel = '';
+
     switch (preset) {
       case 'this_week':
-        setDateRange({ from: startOfWeek(now, { weekStartsOn: 1 }), to: endOfWeek(now, { weekStartsOn: 1 }) });
+        nextRange = { from: startOfWeek(now, { weekStartsOn: 1 }), to: endOfWeek(now, { weekStartsOn: 1 }) };
+        presetLabel = 'Tuần này';
         break;
       case 'this_month':
-        setDateRange({ from: startOfMonth(now), to: endOfMonth(now) });
+        nextRange = { from: startOfMonth(now), to: endOfMonth(now) };
+        presetLabel = 'Tháng này';
         break;
       case 'this_quarter':
-        setDateRange({ from: startOfQuarter(now), to: endOfQuarter(now) });
+        nextRange = { from: startOfQuarter(now), to: endOfQuarter(now) };
+        presetLabel = 'Quý này';
         break;
       case 'this_year':
-        setDateRange({ from: startOfYear(now), to: endOfYear(now) });
+        nextRange = { from: startOfYear(now), to: endOfYear(now) };
+        presetLabel = 'Năm này';
         break;
+    }
+
+    if (nextRange?.from && nextRange?.to) {
+      setDateRange(nextRange);
+      toast({
+        title: 'Đã chọn ngày thành công',
+        description: `${presetLabel}: ${format(nextRange.from, "dd/MM/yyyy")} - ${format(nextRange.to, "dd/MM/yyyy")}`,
+      });
     }
   }
 
@@ -286,8 +342,8 @@ export default function RevenueReportPage() {
           </div>
            
           <div className="mb-8">
-            <h3 className="text-lg font-semibold mb-2">Biểu đồ doanh thu theo tháng</h3>
-            <RevenueChart data={monthlyData} />
+            <h3 className="text-lg font-semibold mb-2">{chartTitle}</h3>
+            <RevenueChart data={chartData} />
           </div>
 
           <h3 className="text-lg font-semibold mb-2">Chi tiết các đơn hàng</h3>

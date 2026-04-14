@@ -14,6 +14,7 @@ export interface CreateSaleItemInput {
  */
 export interface CreateSaleInput {
     customerId?: string;
+    contractorId?: string;
     shiftId?: string;
     projectName?: string;
     items: CreateSaleItemInput[];

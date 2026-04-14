@@ -83,6 +83,20 @@ export type Supplier = {
   updatedAt: string;
 }
 
+export type Contractor = {
+  id: string;
+  name: string;
+  contactPerson?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  taxCode?: string;
+  identityNumber?: string;
+  description?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type Customer = {
   id: string;
   name: string;
@@ -118,6 +132,7 @@ export type Sale = {
   id: string;
   invoiceNumber: string;
   customerId: string;
+  contractorId?: string;
   projectName?: string;
   shiftId?: string; // Add shiftId to Sale
   transactionDate: string; // ISO 8601 date string
@@ -274,6 +289,8 @@ export type PurchaseOrder = {
   id: string;
   orderNumber: string;
   supplierId?: string;
+  contractorId?: string;
+  contractorName?: string;
   importDate: string; // ISO date string
   items: PurchaseOrderItem[];
   totalAmount: number;

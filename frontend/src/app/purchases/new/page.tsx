@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from "react";
-import { Product, Unit, SalesItem, PurchaseOrderItem, Supplier } from "@/lib/types";
+import { Product, Unit, SalesItem, PurchaseOrderItem, Supplier, Contractor } from "@/lib/types";
 import { PurchaseOrderForm } from "../components/purchase-order-form";
 import { useSearchParams } from "next/navigation";
 import { useStore } from "@/contexts/store-context";
@@ -12,6 +12,7 @@ export default function NewPurchasePage() {
     
     const [products, setProducts] = useState<Product[]>([]);
     const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+    const [contractors, setContractors] = useState<Contractor[]>([]);
     const [units, setUnits] = useState<Unit[]>([]);
     const [allSalesItems, setAllSalesItems] = useState<SalesItem[]>([]);
     const [draftItems, setDraftItems] = useState<PurchaseOrderItem[]>([]);
@@ -58,6 +59,17 @@ export default function NewPurchasePage() {
                     setSuppliers(suppliersList);
                 } else {
                     console.error('Suppliers fetch failed:', suppliersResponse.status, suppliersResponse.statusText);
+                }
+
+                // Fetch contractors
+                const contractorsResponse = await fetch('/api/proxy/contractors', { headers });
+                if (contractorsResponse.ok) {
+                    const contractorsResult = await contractorsResponse.json();
+                    const contractorsList = Array.isArray(contractorsResult) ? contractorsResult : (contractorsResult.data || []);
+                    console.log('Setting contractors:', contractorsList.length, 'items');
+                    setContractors(contractorsList);
+                } else {
+                    console.error('Contractors fetch failed:', contractorsResponse.status, contractorsResponse.statusText);
                 }
                 
                 // Fetch units
@@ -116,6 +128,7 @@ export default function NewPurchasePage() {
             units={units}
             allSalesItems={allSalesItems}
             suppliers={suppliers}
+            contractors={contractors}
             draftItems={draftItems}
         />
     );

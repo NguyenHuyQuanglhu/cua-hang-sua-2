@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, use } from "react";
-import { Product, Unit, SalesItem, PurchaseOrder, Supplier } from "@/lib/types";
+import { Product, Unit, SalesItem, PurchaseOrder, Supplier, Contractor } from "@/lib/types";
 import { PurchaseOrderForm } from "../../components/purchase-order-form";
 import { notFound } from "next/navigation";
 import { useStore } from "@/contexts/store-context";
@@ -14,6 +14,7 @@ export default function EditPurchasePage({ params }: { params: Promise<{ id: str
     const [purchaseOrder, setPurchaseOrder] = useState<PurchaseOrder | null>(null);
     const [products, setProducts] = useState<Product[]>([]);
     const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+    const [contractors, setContractors] = useState<Contractor[]>([]);
     const [units, setUnits] = useState<Unit[]>([]);
     const [allSalesItems, setAllSalesItems] = useState<SalesItem[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -69,6 +70,15 @@ export default function EditPurchasePage({ params }: { params: Promise<{ id: str
                     const suppliersResult = await suppliersResponse.json();
                     // Backend returns { success: true, data: [...] }
                     setSuppliers(suppliersResult.data || suppliersResult.suppliers || []);
+                }
+
+                // Fetch contractors
+                const contractorsResponse = await fetch('/api/proxy/contractors', {
+                    headers,
+                });
+                if (contractorsResponse.ok) {
+                    const contractorsResult = await contractorsResponse.json();
+                    setContractors(contractorsResult.data || []);
                 }
                 
                 // Fetch units
@@ -128,6 +138,7 @@ export default function EditPurchasePage({ params }: { params: Promise<{ id: str
             units={units}
             allSalesItems={allSalesItems}
             suppliers={suppliers}
+            contractors={contractors}
             purchaseOrder={purchaseOrder}
         />
     );

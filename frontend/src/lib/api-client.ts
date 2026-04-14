@@ -150,6 +150,7 @@ class ApiClient {
       method,
       headers: requestHeaders,
       body: body ? JSON.stringify(body) : undefined,
+      cache: 'no-store',
     });
 
     if (!response.ok) {
@@ -409,6 +410,34 @@ class ApiClient {
 
   async deleteSupplier(id: string) {
     return this.request<{ success: boolean }>(`/suppliers/${id}`, { method: 'DELETE' });
+  }
+
+  // ==================== Contractors ====================
+  async getContractors() {
+    return this.request<{
+      success: boolean;
+      data: Array<Record<string, unknown>>;
+      total: number;
+      page: number;
+      pageSize: number;
+      totalPages: number;
+    }>('/contractors');
+  }
+
+  async getContractor(id: string) {
+    return this.request<Record<string, unknown>>(`/contractors/${id}`);
+  }
+
+  async createContractor(data: Record<string, unknown>) {
+    return this.request('/contractors', { method: 'POST', body: data });
+  }
+
+  async updateContractor(id: string, data: Record<string, unknown>) {
+    return this.request(`/contractors/${id}`, { method: 'PUT', body: data });
+  }
+
+  async deleteContractor(id: string) {
+    return this.request<{ success: boolean }>(`/contractors/${id}`, { method: 'DELETE' });
   }
 
   // ==================== Supplier Payments ====================

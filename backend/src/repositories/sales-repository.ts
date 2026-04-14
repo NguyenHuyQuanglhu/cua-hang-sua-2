@@ -20,6 +20,7 @@ export interface Sale {
   storeId: string;
   invoiceNumber: string;
   customerId?: string;
+  contractorId?: string;
   shiftId?: string;
   projectName?: string;
   transactionDate: string;
@@ -61,6 +62,7 @@ interface SaleRecord {
   store_id: string;
   invoice_number: string;
   customer_id: string | null;
+  contractor_id: string | null;
   shift_id: string | null;
   project_name: string | null;
   transaction_date: Date;
@@ -109,6 +111,7 @@ export class SalesRepository extends BaseRepository<Sale> {
       storeId: r.store_id,
       invoiceNumber: r.invoice_number,
       customerId: r.customer_id || undefined,
+      contractorId: r.contractor_id || undefined,
       shiftId: r.shift_id || undefined,
       projectName: r.project_name || undefined,
       transactionDate: r.transaction_date

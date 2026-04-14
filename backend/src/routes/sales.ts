@@ -69,6 +69,30 @@
       `);
     }
 
+    async function ensureSalesContractorInfra(): Promise<void> {
+      await query(`
+        IF COL_LENGTH('Sales', 'contractor_id') IS NULL
+        BEGIN
+          ALTER TABLE Sales ADD contractor_id UNIQUEIDENTIFIER NULL;
+        END
+
+        IF OBJECT_ID('Contractors', 'U') IS NOT NULL
+           AND COL_LENGTH('Sales', 'contractor_id') IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_Sales_Contractors')
+        BEGIN
+          ALTER TABLE Sales WITH NOCHECK
+          ADD CONSTRAINT FK_Sales_Contractors
+          FOREIGN KEY (contractor_id) REFERENCES Contractors(id);
+        END
+
+        IF COL_LENGTH('Sales', 'contractor_id') IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Sales_contractor_id' AND object_id = OBJECT_ID('Sales'))
+        BEGIN
+          CREATE INDEX IX_Sales_contractor_id ON Sales(contractor_id);
+        END
+      `);
+    }
+
     async function ensureCustomerDiscountInfra(): Promise<void> {
       await query(`
         IF OBJECT_ID('CustomerDiscountProfiles', 'U') IS NULL
@@ -364,7 +388,9 @@
         const { page = '1', pageSize = '20', search, status, customerId, dateFrom, dateTo } = req.query;
 
         await ensureSalesProjectInfra();
+        await ensureSalesContractorInfra();
         const salesStoreColumn = await resolveStoreColumnName('Sales');
+        const discountStoreColumn = await resolveStoreColumnName('CustomerDiscountTransactions');
 
         const pageNum = parseInt(page as string);
         const pageSizeNum = parseInt(pageSize as string);
@@ -409,6 +435,8 @@
         // Get item counts for all paginated sales in a single query (fix N+1)
         let itemCountMap: Record<string, number> = {};
         let projectNameMap: Record<string, string | null> = {};
+        let contractorIdMap: Record<string, string | null> = {};
+        const contractorNameById: Record<string, string> = {};
         if (paginatedSales.length > 0) {
           const saleIds = paginatedSales.map(s => s.id);
           const placeholders = saleIds.map((_, i) => `@id${i}`).join(',');
@@ -427,11 +455,16 @@
         itemCountMap[r.sales_transaction_id] = r.item_count;
       });
 
-      const projectRows = await query<{ id: string; project_name: string | null }>(
-        `SELECT id, project_name
-         FROM Sales
-         WHERE ${salesStoreColumn} = @storeId
-           AND id IN (${placeholders})`,
+      const projectRows = await query<{ id: string; project_name: string | null; contractor_id: string | null }>(
+        `SELECT s.id,
+                COALESCE(cdt.project_name, s.project_name) AS project_name,
+                s.contractor_id
+         FROM Sales s
+         LEFT JOIN CustomerDiscountTransactions cdt
+           ON cdt.source_sale_id = s.id
+          AND cdt.${discountStoreColumn} = s.${salesStoreColumn}
+         WHERE s.${salesStoreColumn} = @storeId
+           AND s.id IN (${placeholders})`,
         {
           ...params,
           storeId,
@@ -440,14 +473,56 @@
 
       projectRows.forEach((row) => {
         projectNameMap[row.id] = row.project_name || null;
+        contractorIdMap[row.id] = row.contractor_id || null;
       });
+
+      const contractorIds = Array.from(
+        new Set(projectRows.map((row) => row.contractor_id).filter((id): id is string => Boolean(id)))
+      );
+
+      if (contractorIds.length > 0) {
+        const contractorsTableState = await queryOne<{ table_exists: number }>(
+          `SELECT CASE WHEN OBJECT_ID('Contractors', 'U') IS NULL THEN 0 ELSE 1 END AS table_exists`
+        );
+
+        if (Number(contractorsTableState?.table_exists || 0) === 1) {
+          const contractorsStoreColumn = await resolveStoreColumnName('Contractors');
+          const contractorPlaceholders = contractorIds.map((_, i) => `@contractorId${i}`).join(',');
+          const contractorParams: Record<string, unknown> = { storeId };
+          contractorIds.forEach((id, i) => {
+            contractorParams[`contractorId${i}`] = id;
+          });
+
+          const contractorRows = await query<{ id: string; name: string }>(
+            `SELECT id, name
+             FROM Contractors
+             WHERE id IN (${contractorPlaceholders})
+               AND ${contractorsStoreColumn} = @storeId`,
+            contractorParams
+          );
+
+          contractorRows.forEach((row) => {
+            contractorNameById[row.id] = row.name || '';
+          });
+        }
+      }
     }
 
-    const salesWithItemCount = paginatedSales.map(s => ({
-      ...s,
-      itemCount: itemCountMap[s.id] || 0,
-      projectName: projectNameMap[s.id] || (s as any).projectName || null,
-    }));
+    const salesWithItemCount = paginatedSales.map((s) => {
+      const resolvedContractorId = contractorIdMap[s.id] || (s as any).contractorId || null;
+      const resolvedContractorName =
+        (resolvedContractorId ? contractorNameById[resolvedContractorId] : '') ||
+        (s as any).contractorName ||
+        null;
+
+      return {
+        ...s,
+        itemCount: itemCountMap[s.id] || 0,
+        contractorId: resolvedContractorId,
+        contractorName: resolvedContractorName,
+        projectName: projectNameMap[s.id] || (s as any).projectName || null,
+      };
+    });
 
     res.json({
       success: true,
@@ -457,6 +532,8 @@
         invoiceNumber: s.invoiceNumber,
         customerId: s.customerId,
         customerName: s.customerName,
+        contractorId: (s as any).contractorId || null,
+        contractorName: (s as any).contractorName || null,
         shiftId: s.shiftId,
         transactionDate: s.transactionDate,
         status: s.status,
@@ -548,6 +625,7 @@ router.get('/project-names', async (req: AuthRequest, res: Response) => {
     const salesStoreColumn = await resolveStoreColumnName('Sales');
 
     await ensureSalesProjectInfra();
+    await ensureSalesContractorInfra();
 
     const rows = await query<{
       project_name: string;
@@ -590,6 +668,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const storeId = req.storeId!;
     const salesStoreColumn = await resolveStoreColumnName('Sales');
+    const discountStoreColumn = await resolveStoreColumnName('CustomerDiscountTransactions');
 
     await ensureSalesProjectInfra();
 
@@ -602,12 +681,39 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
     }
 
     const { sale, items } = result;
-    const projectRow = await queryOne<{ project_name: string | null }>(
-      `SELECT project_name
-       FROM Sales
-       WHERE id = @id AND ${salesStoreColumn} = @storeId`,
+    const saleMetaRow = await queryOne<{ project_name: string | null; contractor_id: string | null }>(
+      `SELECT COALESCE(cdt.project_name, s.project_name) AS project_name
+              ,s.contractor_id
+       FROM Sales s
+       LEFT JOIN CustomerDiscountTransactions cdt
+         ON cdt.source_sale_id = s.id
+        AND cdt.${discountStoreColumn} = s.${salesStoreColumn}
+       WHERE s.id = @id AND s.${salesStoreColumn} = @storeId`,
       { id, storeId }
     );
+
+    let contractorName: string | null = null;
+    if (saleMetaRow?.contractor_id) {
+      const contractorsTableState = await queryOne<{ table_exists: number }>(
+        `SELECT CASE WHEN OBJECT_ID('Contractors', 'U') IS NULL THEN 0 ELSE 1 END AS table_exists`
+      );
+
+      if (Number(contractorsTableState?.table_exists || 0) === 1) {
+        const contractorsStoreColumn = await resolveStoreColumnName('Contractors');
+        const contractorRow = await queryOne<{ name: string }>(
+          `SELECT TOP 1 name
+           FROM Contractors
+           WHERE id = @contractorId
+             AND ${contractorsStoreColumn} = @storeId`,
+          {
+            contractorId: saleMetaRow.contractor_id,
+            storeId,
+          }
+        );
+
+        contractorName = contractorRow?.name || null;
+      }
+    }
 
     res.json({
       sale: {
@@ -616,6 +722,8 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
         invoiceNumber: sale.invoiceNumber,
         customerId: sale.customerId,
         customerName: sale.customerName,
+        contractorId: saleMetaRow?.contractor_id || (sale as any).contractorId || null,
+        contractorName,
         shiftId: sale.shiftId,
         transactionDate: sale.transactionDate,
         status: sale.status,
@@ -632,7 +740,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
         customerPayment: sale.customerPayment,
         previousDebt: sale.previousDebt,
         remainingDebt: sale.remainingDebt,
-        projectName: projectRow?.project_name || (sale as any).projectName || null,
+        projectName: saleMetaRow?.project_name || (sale as any).projectName || null,
         items: items.map((item) => ({
           id: item.id,
           salesId: item.salesTransactionId,
@@ -690,16 +798,31 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
     const storeId = req.storeId!;
     const userId = req.user!.id;
     const {
-      customerId, shiftId, items, totalAmount, vatAmount, finalAmount,
+      customerId, contractorId, shiftId, items, totalAmount, vatAmount, finalAmount,
       discount, discountType, discountValue, customerPayment,
       previousDebt, remainingDebt, tierDiscountPercentage, tierDiscountAmount,
       pointsUsed, pointsDiscount, status, projectName
     } = req.body;
 
     await ensureSalesProjectInfra();
+    await ensureSalesContractorInfra();
 
     const normalizedProjectName = typeof projectName === 'string' ? projectName.trim() : '';
     const projectNameValue = normalizedProjectName ? normalizedProjectName.slice(0, 200) : null;
+    const contractorIdValue = typeof contractorId === 'string' && contractorId.trim() ? contractorId.trim() : null;
+
+    if (contractorIdValue) {
+      const contractorsStoreColumn = await resolveStoreColumnName('Contractors');
+      const contractor = await queryOne<{ id: string }>(
+        `SELECT TOP 1 id FROM Contractors WHERE id = @contractorId AND ${contractorsStoreColumn} = @storeId`,
+        { contractorId: contractorIdValue, storeId }
+      );
+
+      if (!contractor) {
+        res.status(400).json({ error: 'Nhà thầu không hợp lệ hoặc không thuộc cửa hàng hiện tại.' });
+        return;
+      }
+    }
 
     // Convert previousDebt to number if it's a string
     const previousDebtAmount = previousDebt ? Number(previousDebt) : 0;
@@ -719,6 +842,7 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
 
     console.log('[POST /api/sales] Creating sale:', { 
       storeId, userId, customerId, shiftId, 
+      contractorId: contractorIdValue,
       itemsCount: items?.length, 
       totalAmount: totalAmountValue, 
       finalAmount, 
@@ -754,11 +878,11 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
         `INSERT INTO Sales (
           id, store_id, customer_id, shift_id, invoice_number, transaction_date,
           total_amount, discount, discount_type, discount_value, vat_amount, final_amount,
-          customer_payment, previous_debt, remaining_debt, status, project_name, CreatedBy, created_at, updated_at
+          customer_payment, previous_debt, remaining_debt, status, contractor_id, project_name, CreatedBy, created_at, updated_at
         ) VALUES (
           @id, @storeId, @customerId, @shiftId, @invoiceNumber, GETDATE(),
           @totalAmount, @discount, @discountType, @discountValue, @vatAmount, @finalAmount,
-          @customerPayment, @previousDebt, @remainingDebt, @status, @projectName, @createdBy, GETDATE(), GETDATE()
+          @customerPayment, @previousDebt, @remainingDebt, @status, @contractorId, @projectName, @createdBy, GETDATE(), GETDATE()
         )`,
         {
           id: saleId,
@@ -776,6 +900,7 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
           previousDebt: previousDebtAmount,
           remainingDebt: 0, // Debt is paid
           status: orderStatus,
+          contractorId: contractorIdValue,
           projectName: projectNameValue,
           createdBy: userId,
         }
@@ -885,6 +1010,7 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
         id: saleId,
         invoiceNumber,
         status: orderStatus,
+        contractorId: contractorIdValue,
         projectName: projectNameValue,
         finalAmount: 0,
         customerPayment: customerPaymentAmount,
@@ -908,6 +1034,7 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
     const result = await salesService.createSale(
       {
         customerId,
+        contractorId: contractorIdValue || undefined,
         shiftId,
         items: mappedItems,
         discount,
@@ -953,6 +1080,7 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
       id: result.sale.id,
       invoiceNumber: result.sale.invoiceNumber,
       status: result.sale.status,
+      contractorId: result.sale.contractorId || contractorIdValue,
       projectName: result.sale.projectName || projectNameValue,
       finalAmount: result.sale.finalAmount,
       conversions: result.conversions.map((c) => ({
@@ -1002,6 +1130,9 @@ router.put('/:id', validateAndNormalizeStatus, async (req: AuthRequest, res: Res
     const { id } = req.params;
     const storeId = req.storeId!;
     const { status, customerPayment, remainingDebt } = req.body;
+    const contractorId = typeof req.body.contractorId === 'string' && req.body.contractorId.trim()
+      ? req.body.contractorId.trim()
+      : undefined;
 
     console.log('[Sales PUT] Update request:', {
       id,
@@ -1009,10 +1140,11 @@ router.put('/:id', validateAndNormalizeStatus, async (req: AuthRequest, res: Res
       status,
       customerPayment,
       remainingDebt,
+      contractorId,
     });
 
     // Use SP Repository for status update if only status is being updated
-    if (status && !customerPayment && !remainingDebt) {
+    if (status && !customerPayment && !remainingDebt && !contractorId) {
       console.log('[Sales PUT] Using SP for status update');
       const updated = await salesSPRepository.updateStatus(id, storeId, status);
       console.log('[Sales PUT] SP result:', updated);
@@ -1033,9 +1165,10 @@ router.put('/:id', validateAndNormalizeStatus, async (req: AuthRequest, res: Res
         status = COALESCE(@status, status),
         customer_payment = COALESCE(@customerPayment, customer_payment),
         remaining_debt = COALESCE(@remainingDebt, remaining_debt),
+        contractor_id = COALESCE(@contractorId, contractor_id),
         updated_at = GETDATE()
        WHERE id = @id AND store_id = @storeId`,
-      { id, storeId, status, customerPayment, remainingDebt }
+      { id, storeId, status, customerPayment, remainingDebt, contractorId: contractorId || null }
     );
 
     res.json({ success: true });
@@ -1051,6 +1184,9 @@ router.patch('/:id', validateAndNormalizeStatus, async (req: AuthRequest, res: R
     const { id } = req.params;
     const storeId = req.storeId!;
     const { status, customerPayment, remainingDebt } = req.body;
+    const contractorId = typeof req.body.contractorId === 'string' && req.body.contractorId.trim()
+      ? req.body.contractorId.trim()
+      : undefined;
 
     console.log('[Sales PATCH] Update request:', {
       id,
@@ -1058,10 +1194,11 @@ router.patch('/:id', validateAndNormalizeStatus, async (req: AuthRequest, res: R
       status,
       customerPayment,
       remainingDebt,
+      contractorId,
     });
 
     // Use SP Repository for status update if only status is being updated
-    if (status && !customerPayment && !remainingDebt) {
+    if (status && !customerPayment && !remainingDebt && !contractorId) {
       console.log('[Sales PATCH] Using SP for status update');
       const updated = await salesSPRepository.updateStatus(id, storeId, status);
       console.log('[Sales PATCH] SP result:', updated);
@@ -1082,9 +1219,10 @@ router.patch('/:id', validateAndNormalizeStatus, async (req: AuthRequest, res: R
         status = COALESCE(@status, status),
         customer_payment = COALESCE(@customerPayment, customer_payment),
         remaining_debt = COALESCE(@remainingDebt, remaining_debt),
+        contractor_id = COALESCE(@contractorId, contractor_id),
         updated_at = GETDATE()
        WHERE id = @id AND store_id = @storeId`,
-      { id, storeId, status, customerPayment, remainingDebt }
+      { id, storeId, status, customerPayment, remainingDebt, contractorId: contractorId || null }
     );
 
     res.json({ success: true });

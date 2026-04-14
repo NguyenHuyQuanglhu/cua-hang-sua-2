@@ -10,7 +10,7 @@ router.use(storeContext);
 /**
  * GET /api/purchases
  * Lấy danh sách đơn nhập hàng với pagination và filter
- * Query params: page, pageSize, search, supplierId, dateFrom, dateTo
+ * Query params: page, pageSize, search, supplierId, contractorId, dateFrom, dateTo
  * Requirements: 2.1, 2.2, 2.3
  */
 router.get('/', async (req: AuthRequest, res: Response) => {
@@ -22,6 +22,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     const pageSize = parseInt(req.query.pageSize as string) || 20;
     const search = req.query.search as string | undefined;
     const supplierId = req.query.supplierId as string | undefined;
+    const contractorId = req.query.contractorId as string | undefined;
     const dateFrom = req.query.dateFrom as string | undefined;
     const dateTo = req.query.dateTo as string | undefined;
 
@@ -30,6 +31,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       pageSize,
       search,
       supplierId,
+      contractorId,
       dateFrom,
       dateTo,
     });
@@ -41,6 +43,10 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 
     res.json({
       data: result.data,
+      total: result.total,
+      page: result.page,
+      pageSize: result.pageSize,
+      totalPages: result.totalPages,
       pagination: {
         page: result.page,
         pageSize: result.pageSize,
@@ -98,7 +104,7 @@ router.post('/quick', async (req: AuthRequest, res: Response) => {
   try {
     const storeId = req.storeId!;
     const userId = req.user?.id;
-    const { supplierId, productId, quantity, cost, unitId, importDate, baseQuantity, baseCost, baseUnitId, paidAmount, paymentMethod } = req.body;
+    const { supplierId, contractorId, productId, quantity, cost, unitId, importDate, baseQuantity, baseCost, baseUnitId, paidAmount, paymentMethod } = req.body;
 
     // Validate required fields
     if (!supplierId) {
@@ -138,6 +144,7 @@ router.post('/quick', async (req: AuthRequest, res: Response) => {
 
     const input: CreatePurchaseOrderInput = {
       supplierId,
+      contractorId,
       importDate,
       notes: 'Nhập hàng nhanh',
       totalAmount,
@@ -173,7 +180,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
   try {
     const storeId = req.storeId!;
     const userId = req.user?.id;
-    const { supplierId, importDate, notes, items } = req.body;
+    const { supplierId, contractorId, importDate, notes, items } = req.body;
 
     // Validate required fields
     if (!supplierId) {
@@ -205,6 +212,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
 
     const input: CreatePurchaseOrderInput = {
       supplierId,
+      contractorId,
       importDate,
       notes,
       totalAmount,
@@ -246,7 +254,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const storeId = req.storeId!;
-    const { supplierId, importDate, notes, items } = req.body;
+    const { supplierId, contractorId, importDate, notes, items } = req.body;
 
     // Validate required fields
     if (!importDate) {
@@ -273,6 +281,7 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
 
     const input = {
       supplierId,
+      contractorId,
       importDate,
       notes,
       totalAmount,

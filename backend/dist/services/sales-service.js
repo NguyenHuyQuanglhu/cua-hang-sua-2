@@ -139,12 +139,14 @@ class SalesService {
           status, total_amount, vat_amount, final_amount, discount, discount_type, 
           discount_value, tier_discount_percentage, tier_discount_amount, 
           points_used, points_discount, customer_payment, previous_debt,
+          contractor_id,
           project_name,
           remaining_debt, CreatedBy, created_at, updated_at)
          VALUES (@id, @storeId, @invoiceNumber, @customerId, @shiftId, @transactionDate,
                  @status, @totalAmount, @vatAmount, @finalAmount, @discount, @discountType,
                  @discountValue, @tierDiscountPercentage, @tierDiscountAmount,
                  @pointsUsed, @pointsDiscount, @customerPayment, @previousDebt,
+                 @contractorId,
                  @projectName,
                  @remainingDebt, @createdBy, @createdAt, @updatedAt)`, {
                 id: saleId,
@@ -166,6 +168,7 @@ class SalesService {
                 pointsDiscount,
                 customerPayment,
                 previousDebt,
+                contractorId: saleData.contractorId || null,
                 projectName: saleData.projectName || null,
                 remainingDebt,
                 createdBy: userId || null,
@@ -443,6 +446,7 @@ class SalesService {
             storeId: record.store_id,
             invoiceNumber: record.invoice_number,
             customerId: record.customer_id || undefined,
+            contractorId: record.contractor_id || record.ContractorId || undefined,
             shiftId: record.shift_id || undefined,
             transactionDate: record.transaction_date
                 ? record.transaction_date instanceof Date

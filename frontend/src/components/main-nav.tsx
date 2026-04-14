@@ -134,7 +134,7 @@ export function MainNav() {
              <Collapsible asChild>
               <SidebarMenuItem>
                 <CollapsibleTrigger asChild>
-                    <SidebarMenuButton className="w-full justify-start" isActive={isActive('/categories') || isActive('/units') || isActive('/customers') || isActive('/suppliers')} tooltip="Danh mục">
+                    <SidebarMenuButton className="w-full justify-start" isActive={isActive('/categories') || isActive('/units') || isActive('/customers') || isActive('/suppliers') || isActive('/contractors')} tooltip="Danh mục">
                       <div className="flex items-center gap-2 flex-1">
                         <Folder />
                         {state === 'expanded' && <span>Danh mục</span>}
@@ -169,6 +169,13 @@ export function MainNav() {
                         <SidebarMenuSubItem>
                           <SidebarMenuSubButton asChild isActive={isActive('/suppliers')}>
                             <Link href="/suppliers" className='flex items-center gap-2'><Building className="h-4 w-4" />Nhà cung cấp</Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      )}
+                      {hasPermission('suppliers', 'view') && (
+                        <SidebarMenuSubItem>
+                          <SidebarMenuSubButton asChild isActive={isActive('/contractors')}>
+                            <Link href="/contractors" className='flex items-center gap-2'><Briefcase className="h-4 w-4" />Nhà thầu</Link>
                           </SidebarMenuSubButton>
                         </SidebarMenuSubItem>
                       )}

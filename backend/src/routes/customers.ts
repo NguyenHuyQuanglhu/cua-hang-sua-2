@@ -1259,6 +1259,8 @@ router.get('/:id/discounts/projects', validateUUID(), async (req: AuthRequest, r
         payout_summary AS (
           SELECT
             LTRIM(RTRIM(COALESCE(cdt.project_name, s.project_name))) AS project_name,
+            COUNT(*) AS transaction_count,
+            SUM(ISNULL(cdt.amount, 0)) AS total_discount,
             SUM(CASE WHEN cdt.status = 'pending' THEN ISNULL(cdt.amount, 0) ELSE 0 END) AS pending_amount,
             SUM(CASE WHEN cdt.status = 'paid' THEN ISNULL(cdt.amount, 0) ELSE 0 END) AS paid_amount
           FROM CustomerDiscountTransactions cdt
@@ -1273,17 +1275,32 @@ router.get('/:id/discounts/projects', validateUUID(), async (req: AuthRequest, r
         )
         SELECT
           COALESCE(ss.project_name, ps.project_name) AS project_name,
-          ISNULL(ss.sale_count, 0) AS sale_count,
-          ISNULL(ss.total_discount, 0) AS total_discount,
+          CASE
+            WHEN ISNULL(ps.transaction_count, 0) > 0 THEN ISNULL(ps.transaction_count, 0)
+            ELSE ISNULL(ss.sale_count, 0)
+          END AS sale_count,
+          CASE
+            WHEN ISNULL(ps.total_discount, 0) > 0 THEN ISNULL(ps.total_discount, 0)
+            ELSE ISNULL(ss.total_discount, 0)
+          END AS total_discount,
           ISNULL(ps.pending_amount, 0) AS pending_amount,
           ISNULL(ps.paid_amount, 0) AS paid_amount
         FROM sales_summary ss
         FULL OUTER JOIN payout_summary ps
           ON ss.project_name = ps.project_name
         WHERE ISNULL(ss.total_discount, 0) > 0
+           OR ISNULL(ps.total_discount, 0) > 0
            OR ISNULL(ps.pending_amount, 0) > 0
            OR ISNULL(ps.paid_amount, 0) > 0
-        ORDER BY ISNULL(ss.total_discount, 0) DESC, ISNULL(ss.sale_count, 0) DESC`,
+        ORDER BY
+          CASE
+            WHEN ISNULL(ps.total_discount, 0) > 0 THEN ISNULL(ps.total_discount, 0)
+            ELSE ISNULL(ss.total_discount, 0)
+          END DESC,
+          CASE
+            WHEN ISNULL(ps.transaction_count, 0) > 0 THEN ISNULL(ps.transaction_count, 0)
+            ELSE ISNULL(ss.sale_count, 0)
+          END DESC`,
       { customerId: id, storeId }
     );
 
@@ -1394,6 +1411,21 @@ router.put('/:id/discounts/:discountId', validateUUID(), async (req: AuthRequest
 
     await ensureCustomerDiscountTables();
 
+    const existing = await queryOne<{ project_name: string | null }>(
+      `SELECT TOP 1 project_name
+       FROM CustomerDiscountTransactions
+       WHERE id = @discountId AND customer_id = @customerId AND store_id = @storeId AND status = 'pending'`,
+      {
+        discountId,
+        customerId: id,
+        storeId,
+      }
+    );
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Không tìm thấy bản ghi chiết khấu cần cập nhật hoặc bản ghi đã thanh toán.' });
+    }
+
     const updated = await queryOne<{ affected: number }>(
       `UPDATE CustomerDiscountTransactions
        SET amount = @amount,
@@ -1414,6 +1446,104 @@ router.put('/:id/discounts/:discountId', validateUUID(), async (req: AuthRequest
 
     if (!updated || Number(updated.affected || 0) <= 0) {
       return res.status(404).json({ error: 'Không tìm thấy bản ghi chiết khấu cần cập nhật hoặc bản ghi đã thanh toán.' });
+    }
+
+    const oldProjectName = String(existing.project_name || '').trim();
+    const newProjectName = String(projectName || '').trim();
+
+    // If user renamed the project label, propagate rename in this customer/store scope
+    // so POS project suggestions no longer keep stale names.
+    if (oldProjectName && newProjectName && oldProjectName.toLowerCase() !== newProjectName.toLowerCase()) {
+      const salesStoreColumn = await resolveStoreColumnName('Sales');
+      const discountStoreColumn = await resolveStoreColumnName('CustomerDiscountTransactions');
+
+      // Detect legacy aliases on sales rows linked to this project via source sale
+      // (example: old placeholder names like A/B), so renaming updates all related rows.
+      const legacyAliasRows = await query<{ legacy_project_name: string }>(
+        `SELECT DISTINCT LTRIM(RTRIM(s.project_name)) AS legacy_project_name
+         FROM CustomerDiscountTransactions cdt
+         INNER JOIN Sales s
+           ON cdt.source_sale_id = s.id
+          AND s.${salesStoreColumn} = cdt.${discountStoreColumn}
+         WHERE cdt.customer_id = @customerId
+           AND cdt.${discountStoreColumn} = @storeId
+           AND cdt.project_name IS NOT NULL
+           AND LTRIM(RTRIM(cdt.project_name)) = @oldProjectName
+           AND s.project_name IS NOT NULL
+           AND LTRIM(RTRIM(s.project_name)) <> ''
+           AND LTRIM(RTRIM(s.project_name)) <> @oldProjectName`,
+        {
+          customerId: id,
+          storeId,
+          oldProjectName,
+        }
+      );
+
+      const legacyAliases = Array.from(
+        new Set(
+          legacyAliasRows
+            .map((row) => String(row.legacy_project_name || '').trim())
+            .filter(Boolean)
+            .filter((name) => name.toLowerCase() !== newProjectName.toLowerCase())
+        )
+      );
+
+      await query(
+        `UPDATE CustomerDiscountTransactions
+         SET project_name = @newProjectName,
+             updated_at = GETDATE()
+         WHERE customer_id = @customerId
+           AND store_id = @storeId
+           AND project_name IS NOT NULL
+           AND LTRIM(RTRIM(project_name)) = @oldProjectName`,
+        {
+          customerId: id,
+          storeId,
+          oldProjectName,
+          newProjectName,
+        }
+      );
+
+      if (legacyAliases.length > 0) {
+        const aliasParams: Record<string, unknown> = {
+          customerId: id,
+          storeId,
+          oldProjectName,
+          newProjectName,
+        };
+        const aliasPlaceholders = legacyAliases.map((_, index) => `@legacyAlias${index}`);
+        legacyAliases.forEach((alias, index) => {
+          aliasParams[`legacyAlias${index}`] = alias;
+        });
+
+        await query(
+          `UPDATE Sales
+           SET project_name = @newProjectName
+           WHERE customer_id = @customerId
+             AND ${salesStoreColumn} = @storeId
+             AND project_name IS NOT NULL
+             AND (
+               LTRIM(RTRIM(project_name)) = @oldProjectName
+               OR LTRIM(RTRIM(project_name)) IN (${aliasPlaceholders.join(',')})
+             )`,
+          aliasParams
+        );
+      } else {
+        await query(
+          `UPDATE Sales
+           SET project_name = @newProjectName
+           WHERE customer_id = @customerId
+             AND ${salesStoreColumn} = @storeId
+             AND project_name IS NOT NULL
+             AND LTRIM(RTRIM(project_name)) = @oldProjectName`,
+          {
+            customerId: id,
+            storeId,
+            oldProjectName,
+            newProjectName,
+          }
+        );
+      }
     }
 
     res.json({ success: true });

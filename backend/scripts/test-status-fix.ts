@@ -9,6 +9,7 @@ import { query } from '../src/db';
 async function testStatusFix() {
   try {
     console.log('🧪 Testing automatic status fix...\n');
+    const { salesService } = await import('../src/services/sales-service');
 
     // Get a store and product for testing
     const store = await query(`
@@ -40,8 +41,8 @@ async function testStatusFix() {
     console.log(`\n🧪 Test Case 1: Full payment, no status specified`);
     
     const testSale1 = {
-      customerId: null,
-      shiftId: null,
+      customerId: undefined,
+      shiftId: undefined,
       items: [{
         productId: productId,
         quantity: 1,
@@ -54,9 +55,6 @@ async function testStatusFix() {
     };
 
     try {
-      // Simulate API call by calling the sales service directly
-      const { salesService } = await import('../src/services/sales-service');
-      
       const result1 = await salesService.createSale({
         customerId: testSale1.customerId,
         shiftId: testSale1.shiftId,
@@ -88,8 +86,8 @@ async function testStatusFix() {
     
     try {
       const result2 = await salesService.createSale({
-        customerId: null,
-        shiftId: null,
+        customerId: undefined,
+        shiftId: undefined,
         items: [{
           productId: productId,
           quantity: 1,

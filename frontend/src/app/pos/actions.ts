@@ -1,6 +1,7 @@
 'use client';
 
 import { apiClient } from '@/lib/api-client';
+import type { Contractor } from '@/lib/types';
 
 /**
  * Get products for POS
@@ -156,6 +157,46 @@ export async function getCustomers(params?: { pageSize?: number }): Promise<{
 }> {
   const result = await getPOSCustomers();
   return { success: result.success, data: result.customers, error: result.error };
+}
+
+/**
+ * Get contractors for POS
+ */
+export async function getContractors(): Promise<{
+  success: boolean;
+  data?: Contractor[];
+  error?: string;
+}> {
+  try {
+    const response = await apiClient.getContractors();
+    const rawRows = response.data || [];
+
+    const contractors: Contractor[] = rawRows.map((row) => {
+      const contractor = (row || {}) as Record<string, unknown>;
+
+      return {
+        id: String(contractor.id || ''),
+        name: String(contractor.name || ''),
+        contactPerson: contractor.contactPerson as string | undefined,
+        email: contractor.email as string | undefined,
+        phone: contractor.phone as string | undefined,
+        address: contractor.address as string | undefined,
+        taxCode: contractor.taxCode as string | undefined,
+        identityNumber: contractor.identityNumber as string | undefined,
+        description: contractor.description as string | undefined,
+        createdAt: String(contractor.createdAt || ''),
+        updatedAt: String(contractor.updatedAt || ''),
+      };
+    });
+
+    return { success: true, data: contractors };
+  } catch (error: unknown) {
+    console.error('Error fetching contractors:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Đã xảy ra lỗi khi lấy danh sách nhà thầu',
+    };
+  }
 }
 
 /**

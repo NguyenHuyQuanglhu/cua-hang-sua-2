@@ -393,6 +393,8 @@ router.delete('/:id/permanent', async (req, res) => {
             await (0, db_1.query)('DELETE FROM Customers WHERE store_id = @id', { id });
             // Delete suppliers
             await (0, db_1.query)('DELETE FROM Suppliers WHERE store_id = @id', { id });
+            // Delete contractors
+            await (0, db_1.query)('DELETE FROM Contractors WHERE store_id = @id', { id }).catch(() => { });
             // Delete categories
             await (0, db_1.query)('DELETE FROM Categories WHERE store_id = @id', { id });
             // Delete units

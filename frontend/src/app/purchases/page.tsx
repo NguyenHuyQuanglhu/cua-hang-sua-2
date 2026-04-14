@@ -72,13 +72,14 @@ import { deletePurchaseOrder, generatePurchaseOrdersExcel } from "./actions"
 import { useToast } from "@/hooks/use-toast"
 import { Calendar } from "@/components/ui/calendar"
 import { useStore } from "@/contexts/store-context"
-import { PurchaseOrder, Supplier } from "@/lib/types"
+import { PurchaseOrder, Supplier, Contractor } from "@/lib/types"
 import { EditPurchaseDialog } from "./components/edit-purchase-dialog"
 
 type SortKey = 'orderNumber' | 'importDate' | 'totalAmount' | 'itemCount' | 'notes' | 'supplier';
 
 interface PurchaseOrderWithSupplier extends PurchaseOrder {
   supplierName?: string;
+  contractorName?: string;
   itemCount?: number;
 }
 
@@ -99,9 +100,11 @@ export default function PurchasesPage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [isExporting, startExportingTransition] = useTransition();
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
+  const [selectedContractorId, setSelectedContractorId] = useState<string>('all');
   
   const [purchases, setPurchases] = useState<PurchaseOrderWithSupplier[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [contractors, setContractors] = useState<Contractor[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [pagination, setPagination] = useState<Pagination>({
     page: 1,
@@ -124,6 +127,9 @@ export default function PurchasesPage() {
       params.set('pageSize', pageSize.toString());
       if (searchTerm) {
         params.set('search', searchTerm);
+      }
+      if (selectedContractorId !== 'all') {
+        params.set('contractorId', selectedContractorId);
       }
       if (dateRange?.from) {
         params.set('dateFrom', dateRange.from.toISOString());
@@ -171,7 +177,7 @@ export default function PurchasesPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [currentStore?.id, dateRange, searchTerm, toast]);
+  }, [currentStore?.id, dateRange, searchTerm, selectedContractorId, toast]);
 
   // Fetch suppliers
   const fetchSuppliers = useCallback(async () => {
@@ -193,17 +199,44 @@ export default function PurchasesPage() {
       
       if (response.ok) {
         const result = await response.json();
-        setSuppliers(result.suppliers || []);
+        setSuppliers(result.data || result.suppliers || []);
       }
     } catch (error) {
       console.error('Error fetching suppliers:', error);
     }
   }, [currentStore?.id]);
 
+  const fetchContractors = useCallback(async () => {
+    if (!currentStore?.id) return;
+    
+    try {
+      const token = localStorage.getItem('auth_token');
+      const headers: Record<string, string> = {
+        'X-Store-Id': currentStore.id,
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
+      const response = await fetch('/api/proxy/contractors', {
+        headers,
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        setContractors(result.data || []);
+      }
+    } catch (error) {
+      console.error('Error fetching contractors:', error);
+    }
+  }, [currentStore?.id]);
+
   useEffect(() => {
     fetchPurchases(pagination.page, pagination.pageSize);
     fetchSuppliers();
-  }, [fetchPurchases, fetchSuppliers, pagination.page, pagination.pageSize]);
+    fetchContractors();
+  }, [fetchPurchases, fetchSuppliers, fetchContractors, pagination.page, pagination.pageSize]);
 
   // Debounced search effect
   useEffect(() => {
@@ -213,12 +246,17 @@ export default function PurchasesPage() {
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
+  useEffect(() => {
+    fetchPurchases(1, pagination.pageSize);
+  }, [selectedContractorId]);
+
   // Reset to page 1 when date range changes
   useEffect(() => {
     fetchPurchases(1, pagination.pageSize);
   }, [dateRange]);
 
   const suppliersMap = useMemo(() => new Map(suppliers?.map(s => [s.id, s.name])), [suppliers]);
+  const contractorsMap = useMemo(() => new Map(contractors?.map(c => [c.id, c.name])), [contractors]);
 
   // Client-side filtering is now minimal since server handles search
   const filteredPurchases = purchases;
@@ -458,12 +496,25 @@ export default function PurchasesPage() {
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input
                     type="search"
-                    placeholder="Tìm theo mã đơn, nhà cung cấp..."
+                    placeholder="Tìm theo mã đơn, nhà cung cấp, nhà thầu..."
                     className="w-full rounded-lg bg-background pl-8 md:w-64"
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                 />
               </div>
+              <Select value={selectedContractorId} onValueChange={setSelectedContractorId}>
+                <SelectTrigger className="w-[220px]">
+                  <SelectValue placeholder="Lọc theo nhà thầu" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Tất cả nhà thầu</SelectItem>
+                  {contractors.map((contractor) => (
+                    <SelectItem key={contractor.id} value={contractor.id}>
+                      {contractor.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Popover>
                   <PopoverTrigger asChild>
                       <Button
@@ -531,12 +582,15 @@ export default function PurchasesPage() {
                       {new Date(order.importDate).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}
                     </TableCell>
                     <TableCell className="max-w-[200px]">
-                      <span className="text-sm" title={productNames}>
+                     <span className="text-sm" title={productNames}>
                         {displayProducts}
                       </span>
                     </TableCell>
                      <TableCell>
-                      {order.supplierName || suppliersMap.get(order.supplierId || '') || 'N/A'}
+                      <div>{order.supplierName || suppliersMap.get(order.supplierId || '') || 'N/A'}</div>
+                      <div className="text-xs text-muted-foreground">
+                        Nhà thầu: {order.contractorName || contractorsMap.get(order.contractorId || '') || 'Chưa gắn'}
+                      </div>
                     </TableCell>
                     <TableCell className="text-right">
                       {order.itemCount ?? order.items?.length ?? 0}

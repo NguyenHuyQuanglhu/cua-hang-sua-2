@@ -29,6 +29,7 @@ interface InvoicePrintDialogProps {
   customerPayment: number
   customerName?: string
   customerPhone?: string
+  contractorName?: string
   projectName?: string
   settings: ThemeSettings | null
   storeName?: string
@@ -48,6 +49,7 @@ export function InvoicePrintDialog({
   customerPayment,
   customerName,
   customerPhone,
+  contractorName,
   projectName,
   settings,
   storeName,
@@ -130,6 +132,8 @@ export function InvoicePrintDialog({
   const change = customerPayment - finalAmount
   const invoiceFormat = settings?.invoiceFormat || 'A4'
   const isThermal = invoiceFormat === '80mm' || invoiceFormat === '58mm'
+  const displayBuyerLabel = customerName ? 'Khách hàng' : contractorName ? 'Nhà thầu' : 'Khách hàng'
+  const displayBuyerName = customerName || contractorName || 'Khách lẻ'
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -176,7 +180,8 @@ export function InvoicePrintDialog({
 
           {/* Customer Info */}
           <div className="customer-info text-sm mb-4">
-            <p><strong>Khách hàng:</strong> {customerName || 'Khách lẻ'}</p>
+            <p><strong>{displayBuyerLabel}:</strong> {displayBuyerName}</p>
+            {customerName && contractorName && <p><strong>Nhà thầu:</strong> {contractorName}</p>}
             {customerPhone && <p><strong>SĐT:</strong> {customerPhone}</p>}
             {projectName && <p><strong>Công trình:</strong> {projectName}</p>}
           </div>

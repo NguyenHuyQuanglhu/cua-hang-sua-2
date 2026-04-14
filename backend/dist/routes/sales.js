@@ -87,6 +87,29 @@ async function ensureSalesProjectInfra() {
         END
       `);
 }
+async function ensureSalesContractorInfra() {
+    await (0, db_1.query)(`
+        IF COL_LENGTH('Sales', 'contractor_id') IS NULL
+        BEGIN
+          ALTER TABLE Sales ADD contractor_id UNIQUEIDENTIFIER NULL;
+        END
+
+        IF OBJECT_ID('Contractors', 'U') IS NOT NULL
+           AND COL_LENGTH('Sales', 'contractor_id') IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_Sales_Contractors')
+        BEGIN
+          ALTER TABLE Sales WITH NOCHECK
+          ADD CONSTRAINT FK_Sales_Contractors
+          FOREIGN KEY (contractor_id) REFERENCES Contractors(id);
+        END
+
+        IF COL_LENGTH('Sales', 'contractor_id') IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Sales_contractor_id' AND object_id = OBJECT_ID('Sales'))
+        BEGIN
+          CREATE INDEX IX_Sales_contractor_id ON Sales(contractor_id);
+        END
+      `);
+}
 async function ensureCustomerDiscountInfra() {
     await (0, db_1.query)(`
         IF OBJECT_ID('CustomerDiscountProfiles', 'U') IS NULL
@@ -315,6 +338,7 @@ router.get('/', validateStatus_1.validateStatusQuery, async (req, res) => {
         const { page = '1', pageSize = '20', search, status, customerId, dateFrom, dateTo } = req.query;
         await ensureSalesProjectInfra();
         const salesStoreColumn = await resolveStoreColumnName('Sales');
+        const discountStoreColumn = await resolveStoreColumnName('CustomerDiscountTransactions');
         const pageNum = parseInt(page);
         const pageSizeNum = parseInt(pageSize);
         // Use SP Repository to get sales with filters
@@ -361,10 +385,14 @@ router.get('/', validateStatus_1.validateStatusQuery, async (req, res) => {
             countResults.forEach(r => {
                 itemCountMap[r.sales_transaction_id] = r.item_count;
             });
-            const projectRows = await (0, db_1.query)(`SELECT id, project_name
-         FROM Sales
-         WHERE ${salesStoreColumn} = @storeId
-           AND id IN (${placeholders})`, {
+            const projectRows = await (0, db_1.query)(`SELECT s.id,
+                COALESCE(cdt.project_name, s.project_name) AS project_name
+         FROM Sales s
+         LEFT JOIN CustomerDiscountTransactions cdt
+           ON cdt.source_sale_id = s.id
+          AND cdt.${discountStoreColumn} = s.${salesStoreColumn}
+         WHERE s.${salesStoreColumn} = @storeId
+           AND s.id IN (${placeholders})`, {
                 ...params,
                 storeId,
             });
@@ -500,6 +528,7 @@ router.get('/:id', async (req, res) => {
         const { id } = req.params;
         const storeId = req.storeId;
         const salesStoreColumn = await resolveStoreColumnName('Sales');
+        const discountStoreColumn = await resolveStoreColumnName('CustomerDiscountTransactions');
         await ensureSalesProjectInfra();
         // Use SP Repository instead of inline query
         const result = await sales_sp_repository_1.salesSPRepository.getById(id, storeId);
@@ -508,9 +537,12 @@ router.get('/:id', async (req, res) => {
             return;
         }
         const { sale, items } = result;
-        const projectRow = await (0, db_1.queryOne)(`SELECT project_name
-       FROM Sales
-       WHERE id = @id AND ${salesStoreColumn} = @storeId`, { id, storeId });
+        const projectRow = await (0, db_1.queryOne)(`SELECT COALESCE(cdt.project_name, s.project_name) AS project_name
+       FROM Sales s
+       LEFT JOIN CustomerDiscountTransactions cdt
+         ON cdt.source_sale_id = s.id
+        AND cdt.${discountStoreColumn} = s.${salesStoreColumn}
+       WHERE s.id = @id AND s.${salesStoreColumn} = @storeId`, { id, storeId });
         res.json({
             sale: {
                 id: sale.id,
@@ -588,10 +620,20 @@ router.post('/', validateStatus_1.validateAndNormalizeStatus, async (req, res) =
     try {
         const storeId = req.storeId;
         const userId = req.user.id;
-        const { customerId, shiftId, items, totalAmount, vatAmount, finalAmount, discount, discountType, discountValue, customerPayment, previousDebt, remainingDebt, tierDiscountPercentage, tierDiscountAmount, pointsUsed, pointsDiscount, status, projectName } = req.body;
+        const { customerId, contractorId, shiftId, items, totalAmount, vatAmount, finalAmount, discount, discountType, discountValue, customerPayment, previousDebt, remainingDebt, tierDiscountPercentage, tierDiscountAmount, pointsUsed, pointsDiscount, status, projectName } = req.body;
         await ensureSalesProjectInfra();
+        await ensureSalesContractorInfra();
         const normalizedProjectName = typeof projectName === 'string' ? projectName.trim() : '';
         const projectNameValue = normalizedProjectName ? normalizedProjectName.slice(0, 200) : null;
+        const contractorIdValue = typeof contractorId === 'string' && contractorId.trim() ? contractorId.trim() : null;
+        if (contractorIdValue) {
+            const contractorsStoreColumn = await resolveStoreColumnName('Contractors');
+            const contractor = await (0, db_1.queryOne)(`SELECT TOP 1 id FROM Contractors WHERE id = @contractorId AND ${contractorsStoreColumn} = @storeId`, { contractorId: contractorIdValue, storeId });
+            if (!contractor) {
+                res.status(400).json({ error: 'Nhà thầu không hợp lệ hoặc không thuộc cửa hàng hiện tại.' });
+                return;
+            }
+        }
         // Convert previousDebt to number if it's a string
         const previousDebtAmount = previousDebt ? Number(previousDebt) : 0;
         const customerPaymentAmount = customerPayment ? Number(customerPayment) : 0;
@@ -607,6 +649,7 @@ router.post('/', validateStatus_1.validateAndNormalizeStatus, async (req, res) =
         }
         console.log('[POST /api/sales] Creating sale:', {
             storeId, userId, customerId, shiftId,
+            contractorId: contractorIdValue,
             itemsCount: items?.length,
             totalAmount: totalAmountValue,
             finalAmount,
@@ -636,11 +679,11 @@ router.post('/', validateStatus_1.validateAndNormalizeStatus, async (req, res) =
             await (0, db_1.query)(`INSERT INTO Sales (
           id, store_id, customer_id, shift_id, invoice_number, transaction_date,
           total_amount, discount, discount_type, discount_value, vat_amount, final_amount,
-          customer_payment, previous_debt, remaining_debt, status, project_name, CreatedBy, created_at, updated_at
+          customer_payment, previous_debt, remaining_debt, status, contractor_id, project_name, CreatedBy, created_at, updated_at
         ) VALUES (
           @id, @storeId, @customerId, @shiftId, @invoiceNumber, GETDATE(),
           @totalAmount, @discount, @discountType, @discountValue, @vatAmount, @finalAmount,
-          @customerPayment, @previousDebt, @remainingDebt, @status, @projectName, @createdBy, GETDATE(), GETDATE()
+          @customerPayment, @previousDebt, @remainingDebt, @status, @contractorId, @projectName, @createdBy, GETDATE(), GETDATE()
         )`, {
                 id: saleId,
                 storeId,
@@ -657,6 +700,7 @@ router.post('/', validateStatus_1.validateAndNormalizeStatus, async (req, res) =
                 previousDebt: previousDebtAmount,
                 remainingDebt: 0, // Debt is paid
                 status: orderStatus,
+                contractorId: contractorIdValue,
                 projectName: projectNameValue,
                 createdBy: userId,
             });
@@ -737,6 +781,7 @@ router.post('/', validateStatus_1.validateAndNormalizeStatus, async (req, res) =
                 id: saleId,
                 invoiceNumber,
                 status: orderStatus,
+                contractorId: contractorIdValue,
                 projectName: projectNameValue,
                 finalAmount: 0,
                 customerPayment: customerPaymentAmount,
@@ -757,6 +802,7 @@ router.post('/', validateStatus_1.validateAndNormalizeStatus, async (req, res) =
         // Note: SalesService handles complex inventory deduction logic
         const result = await services_1.salesService.createSale({
             customerId,
+            contractorId: contractorIdValue || undefined,
             shiftId,
             items: mappedItems,
             discount,
@@ -797,6 +843,7 @@ router.post('/', validateStatus_1.validateAndNormalizeStatus, async (req, res) =
             id: result.sale.id,
             invoiceNumber: result.sale.invoiceNumber,
             status: result.sale.status,
+            contractorId: result.sale.contractorId || contractorIdValue,
             projectName: result.sale.projectName || projectNameValue,
             finalAmount: result.sale.finalAmount,
             conversions: result.conversions.map((c) => ({
@@ -842,15 +889,19 @@ router.put('/:id', validateStatus_1.validateAndNormalizeStatus, async (req, res)
         const { id } = req.params;
         const storeId = req.storeId;
         const { status, customerPayment, remainingDebt } = req.body;
+        const contractorId = typeof req.body.contractorId === 'string' && req.body.contractorId.trim()
+            ? req.body.contractorId.trim()
+            : undefined;
         console.log('[Sales PUT] Update request:', {
             id,
             storeId,
             status,
             customerPayment,
             remainingDebt,
+            contractorId,
         });
         // Use SP Repository for status update if only status is being updated
-        if (status && !customerPayment && !remainingDebt) {
+        if (status && !customerPayment && !remainingDebt && !contractorId) {
             console.log('[Sales PUT] Using SP for status update');
             const updated = await sales_sp_repository_1.salesSPRepository.updateStatus(id, storeId, status);
             console.log('[Sales PUT] SP result:', updated);
@@ -868,8 +919,9 @@ router.put('/:id', validateStatus_1.validateAndNormalizeStatus, async (req, res)
         status = COALESCE(@status, status),
         customer_payment = COALESCE(@customerPayment, customer_payment),
         remaining_debt = COALESCE(@remainingDebt, remaining_debt),
+        contractor_id = COALESCE(@contractorId, contractor_id),
         updated_at = GETDATE()
-       WHERE id = @id AND store_id = @storeId`, { id, storeId, status, customerPayment, remainingDebt });
+       WHERE id = @id AND store_id = @storeId`, { id, storeId, status, customerPayment, remainingDebt, contractorId: contractorId || null });
         res.json({ success: true });
     }
     catch (error) {
@@ -883,15 +935,19 @@ router.patch('/:id', validateStatus_1.validateAndNormalizeStatus, async (req, re
         const { id } = req.params;
         const storeId = req.storeId;
         const { status, customerPayment, remainingDebt } = req.body;
+        const contractorId = typeof req.body.contractorId === 'string' && req.body.contractorId.trim()
+            ? req.body.contractorId.trim()
+            : undefined;
         console.log('[Sales PATCH] Update request:', {
             id,
             storeId,
             status,
             customerPayment,
             remainingDebt,
+            contractorId,
         });
         // Use SP Repository for status update if only status is being updated
-        if (status && !customerPayment && !remainingDebt) {
+        if (status && !customerPayment && !remainingDebt && !contractorId) {
             console.log('[Sales PATCH] Using SP for status update');
             const updated = await sales_sp_repository_1.salesSPRepository.updateStatus(id, storeId, status);
             console.log('[Sales PATCH] SP result:', updated);
@@ -909,8 +965,9 @@ router.patch('/:id', validateStatus_1.validateAndNormalizeStatus, async (req, re
         status = COALESCE(@status, status),
         customer_payment = COALESCE(@customerPayment, customer_payment),
         remaining_debt = COALESCE(@remainingDebt, remaining_debt),
+        contractor_id = COALESCE(@contractorId, contractor_id),
         updated_at = GETDATE()
-       WHERE id = @id AND store_id = @storeId`, { id, storeId, status, customerPayment, remainingDebt });
+       WHERE id = @id AND store_id = @storeId`, { id, storeId, status, customerPayment, remainingDebt, contractorId: contractorId || null });
         res.json({ success: true });
     }
     catch (error) {

@@ -35,6 +35,7 @@ import { useToast } from "@/hooks/use-toast"
 
 const quickImportSchema = z.object({
   supplierId: z.string().min(1, "Vui lòng chọn nhà cung cấp"),
+  contractorId: z.string().optional(),
   unitId: z.string().min(1, "Vui lòng chọn đơn vị"),
   quantity: z.coerce.number().min(1, "Số lượng phải lớn hơn 0"),
   cost: z.coerce.number().min(0, "Giá nhập không được âm"),
@@ -46,6 +47,11 @@ const quickImportSchema = z.object({
 type QuickImportFormValues = z.infer<typeof quickImportSchema>
 
 interface Supplier {
+  id: string;
+  name: string;
+}
+
+interface Contractor {
   id: string;
   name: string;
 }
@@ -89,6 +95,7 @@ export function QuickImportDialog({
   onSuccess,
 }: QuickImportDialogProps) {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [contractors, setContractors] = useState<Contractor[]>([]);
   const [units, setUnits] = useState<Unit[]>([]);
   const [productUnitConfig, setProductUnitConfig] = useState<ProductUnitConfig | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -101,6 +108,7 @@ export function QuickImportDialog({
     resolver: zodResolver(quickImportSchema),
     defaultValues: {
       supplierId: "",
+      contractorId: "",
       unitId: product.unitId || "",
       quantity: 10,
       cost: product.costPrice || 0,
@@ -110,7 +118,7 @@ export function QuickImportDialog({
     },
   })
 
-  // Fetch suppliers, units, and product unit configuration
+  // Fetch suppliers, contractors, units, and product unit configuration
   useEffect(() => {
     const fetchData = async () => {
       if (!currentStore?.id) return;
@@ -134,6 +142,15 @@ export function QuickImportDialog({
           setSuppliers(suppliersResult.data || []); // API trả về 'data' không phải 'suppliers'
         } else {
           console.error('[QuickImport] Failed to fetch suppliers:', suppliersResponse.status);
+        }
+
+        // Fetch contractors
+        const contractorsResponse = await fetch('/api/proxy/contractors', { headers });
+        if (contractorsResponse.ok) {
+          const contractorsResult = await contractorsResponse.json();
+          setContractors(contractorsResult.data || []);
+        } else {
+          console.error('[QuickImport] Failed to fetch contractors:', contractorsResponse.status);
         }
 
         // Fetch units
@@ -169,6 +186,7 @@ export function QuickImportDialog({
       // Reset form with product data
       form.reset({
         supplierId: "",
+        contractorId: "",
         unitId: product.unitId || "",
         quantity: 10,
         cost: product.costPrice || 0,
@@ -221,6 +239,7 @@ export function QuickImportDialog({
 
       const payload = {
         supplierId: data.supplierId,
+        contractorId: data.contractorId || undefined,
         productId: product.id,
         quantity: data.quantity,
         cost: data.cost,
@@ -347,6 +366,36 @@ export function QuickImportDialog({
                           </SelectItem>
                         ))
                       )}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="contractorId"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Nhà thầu</FormLabel>
+                  <Select
+                    onValueChange={(value) => field.onChange(value === '__none__' ? '' : value)}
+                    value={field.value || '__none__'}
+                    disabled={isLoading}
+                  >
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Không chọn" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent className="max-h-[200px]">
+                      <SelectItem value="__none__">Không chọn</SelectItem>
+                      {contractors.map((contractor) => (
+                        <SelectItem key={contractor.id} value={contractor.id}>
+                          {contractor.name}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                   <FormMessage />

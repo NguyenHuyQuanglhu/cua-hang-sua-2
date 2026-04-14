@@ -20,6 +20,11 @@ interface Supplier {
   name: string;
 }
 
+interface Contractor {
+  id: string;
+  name: string;
+}
+
 interface Unit {
   id: string;
   name: string;
@@ -49,12 +54,14 @@ export function BulkImportDialog({
   onSuccess,
 }: BulkImportDialogProps) {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [contractors, setContractors] = useState<Contractor[]>([]);
   const [units, setUnits] = useState<Unit[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   
   // Default values for bulk import
   const [selectedSupplierId, setSelectedSupplierId] = useState<string>("");
+  const [selectedContractorId, setSelectedContractorId] = useState<string>("");
   const [defaultQuantity, setDefaultQuantity] = useState<number>(10);
   
   const { currentStore } = useStore();
@@ -82,6 +89,13 @@ export function BulkImportDialog({
           setSuppliers(suppliersResult.data || []);
         }
 
+        // Fetch contractors
+        const contractorsResponse = await fetch('/api/proxy/contractors', { headers });
+        if (contractorsResponse.ok) {
+          const contractorsResult = await contractorsResponse.json();
+          setContractors(contractorsResult.data || []);
+        }
+
         // Fetch units
         const unitsResponse = await fetch('/api/units', { headers });
         if (unitsResponse.ok) {
@@ -102,6 +116,7 @@ export function BulkImportDialog({
     if (open) {
       fetchData();
       setSelectedSupplierId("");
+      setSelectedContractorId("");
       setDefaultQuantity(10);
     }
   }, [open, currentStore?.id]);
@@ -145,6 +160,7 @@ export function BulkImportDialog({
 
       const payload = {
         supplierId: selectedSupplierId,
+        contractorId: selectedContractorId || undefined,
         importDate: new Date().toISOString().split('T')[0],
         notes: "Nhập hàng hàng loạt (Bulk Import)",
         items: items
@@ -213,6 +229,21 @@ export function BulkImportDialog({
               <option value="" disabled>Chọn nhà cung cấp</option>
               {suppliers.map(s => (
                 <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Nhà thầu chung</label>
+            <select
+              className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+              value={selectedContractorId}
+              onChange={(e) => setSelectedContractorId(e.target.value)}
+              disabled={isLoading || isSubmitting}
+            >
+              <option value="">Không chọn</option>
+              {contractors.map((contractor) => (
+                <option key={contractor.id} value={contractor.id}>{contractor.name}</option>
               ))}
             </select>
           </div>

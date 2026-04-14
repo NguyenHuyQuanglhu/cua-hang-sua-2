@@ -26,6 +26,7 @@ class SalesRepository extends base_repository_1.BaseRepository {
             storeId: r.store_id,
             invoiceNumber: r.invoice_number,
             customerId: r.customer_id || undefined,
+            contractorId: r.contractor_id || undefined,
             shiftId: r.shift_id || undefined,
             projectName: r.project_name || undefined,
             transactionDate: r.transaction_date

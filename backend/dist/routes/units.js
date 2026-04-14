@@ -6,6 +6,60 @@ const auth_1 = require("../middleware/auth");
 const units_sp_repository_1 = require("../repositories/units-sp-repository");
 const product_units_repository_1 = require("../repositories/product-units-repository");
 const router = (0, express_1.Router)();
+function extractUnitDeleteErrorInfo(error) {
+    if (!error || typeof error !== 'object') {
+        return { message: '' };
+    }
+    const err = error;
+    const parsedNumber = Number(err.number ?? err.originalError?.info?.number ?? err.originalError?.number);
+    const message = String(err.message ?? err.originalError?.info?.message ?? err.originalError?.message ?? '').trim();
+    return {
+        number: Number.isFinite(parsedNumber) ? parsedNumber : undefined,
+        message,
+    };
+}
+function getIdentifierTail(identifier) {
+    const normalized = identifier.replace(/[\[\]"]/g, '');
+    const parts = normalized.split('.').filter(Boolean);
+    return parts.length > 0 ? parts[parts.length - 1] : normalized;
+}
+function mapUnitDeleteError(error) {
+    const { number, message } = extractUnitDeleteErrorInfo(error);
+    if (!message) {
+        return null;
+    }
+    if (/unit not found/i.test(message)) {
+        return {
+            status: 404,
+            message: 'Không tìm thấy đơn vị tính.',
+        };
+    }
+    const isConstraintError = number === 547 ||
+        /reference constraint|foreign key|conflicted with the reference constraint/i.test(message);
+    if (!isConstraintError) {
+        return null;
+    }
+    const tableRaw = message.match(/table\s+"([^"]+)"/i)?.[1];
+    const columnRaw = message.match(/column\s+'([^']+)'/i)?.[1];
+    const table = tableRaw ? getIdentifierTail(tableRaw) : undefined;
+    const column = columnRaw ? getIdentifierTail(columnRaw) : undefined;
+    if (table && column) {
+        return {
+            status: 409,
+            message: `Không thể xóa đơn vị tính vì đang được sử dụng ở ${table}.${column}. Vui lòng cập nhật hoặc xóa dữ liệu liên quan trước.`,
+        };
+    }
+    if (table) {
+        return {
+            status: 409,
+            message: `Không thể xóa đơn vị tính vì đang được sử dụng ở bảng ${table}. Vui lòng cập nhật hoặc xóa dữ liệu liên quan trước.`,
+        };
+    }
+    return {
+        status: 409,
+        message: 'Không thể xóa đơn vị tính vì đang được sử dụng trong dữ liệu. Vui lòng cập nhật hoặc xóa dữ liệu liên quan trước.',
+    };
+}
 router.use(auth_1.authenticate);
 router.use(auth_1.storeContext);
 // GET /api/units
@@ -133,6 +187,11 @@ router.delete('/:id', async (req, res) => {
     }
     catch (error) {
         console.error('Delete unit error:', error);
+        const mapped = mapUnitDeleteError(error);
+        if (mapped) {
+            res.status(mapped.status).json({ error: mapped.message });
+            return;
+        }
         res.status(500).json({ error: 'Failed to delete unit' });
     }
 });

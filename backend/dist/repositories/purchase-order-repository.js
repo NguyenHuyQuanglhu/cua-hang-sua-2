@@ -16,6 +16,7 @@ class PurchaseOrderRepository extends base_repository_1.BaseRepository {
             storeId: r.store_id,
             orderNumber: r.order_number,
             supplierId: r.supplier_id || undefined,
+            contractorId: r.contractor_id || undefined,
             importDate: r.import_date instanceof Date ? r.import_date.toISOString() : String(r.import_date),
             totalAmount: r.total_amount,
             paidAmount: r.paid_amount ?? 0,
@@ -35,6 +36,8 @@ class PurchaseOrderRepository extends base_repository_1.BaseRepository {
             record.order_number = entity.orderNumber;
         if (entity.supplierId !== undefined)
             record.supplier_id = entity.supplierId || null;
+        if (entity.contractorId !== undefined)
+            record.contractor_id = entity.contractorId || null;
         if (entity.importDate !== undefined)
             record.import_date = new Date(entity.importDate);
         if (entity.totalAmount !== undefined)
@@ -106,6 +109,7 @@ class PurchaseOrderRepository extends base_repository_1.BaseRepository {
                 store_id: storeId,
                 order_number: orderNumber,
                 supplier_id: input.supplierId || null,
+                contractor_id: input.contractorId || null,
                 import_date: new Date(input.importDate),
                 total_amount: input.totalAmount,
                 paid_amount: paidAmount,
@@ -197,7 +201,16 @@ class PurchaseOrderRepository extends base_repository_1.BaseRepository {
         });
     }
     async findByIdWithDetails(purchaseOrderId, storeId) {
-        const orderQuery = `SELECT po.*, s.name as supplier_name FROM PurchaseOrders po LEFT JOIN Suppliers s ON po.supplier_id = s.id WHERE po.id = @purchaseOrderId AND po.store_id = @storeId`;
+        const orderQuery = `
+      SELECT
+        po.*,
+        s.name as supplier_name,
+        c.name as contractor_name
+      FROM PurchaseOrders po
+      LEFT JOIN Suppliers s ON po.supplier_id = s.id
+      LEFT JOIN Contractors c ON po.contractor_id = c.id
+      WHERE po.id = @purchaseOrderId AND po.store_id = @storeId
+    `;
         const orderResult = await (0, db_1.queryOne)(orderQuery, { purchaseOrderId, storeId });
         if (!orderResult)
             return null;
@@ -206,6 +219,7 @@ class PurchaseOrderRepository extends base_repository_1.BaseRepository {
         return {
             ...this.mapToEntity(orderResult),
             supplierName: orderResult.supplier_name || undefined,
+            contractorName: orderResult.contractor_name || undefined,
             items: itemsResult.map(item => ({ ...this.mapItemToEntity(item), productName: item.product_name || undefined, unitName: item.unit_name || undefined })),
         };
     }
@@ -216,12 +230,16 @@ class PurchaseOrderRepository extends base_repository_1.BaseRepository {
         const conditions = ['po.store_id = @storeId'];
         const params = { storeId };
         if (options?.search) {
-            conditions.push('(po.order_number LIKE @search OR po.notes LIKE @search OR s.name LIKE @search)');
+            conditions.push('(po.order_number LIKE @search OR po.notes LIKE @search OR s.name LIKE @search OR c.name LIKE @search)');
             params.search = `%${options.search}%`;
         }
         if (options?.supplierId) {
             conditions.push('po.supplier_id = @supplierId');
             params.supplierId = options.supplierId;
+        }
+        if (options?.contractorId) {
+            conditions.push('po.contractor_id = @contractorId');
+            params.contractorId = options.contractorId;
         }
         if (options?.dateFrom) {
             conditions.push('po.import_date >= @dateFrom');
@@ -232,12 +250,12 @@ class PurchaseOrderRepository extends base_repository_1.BaseRepository {
             params.dateTo = new Date(options.dateTo);
         }
         const whereClause = conditions.join(' AND ');
-        const countQuery = `SELECT COUNT(*) as total FROM PurchaseOrders po LEFT JOIN Suppliers s ON po.supplier_id = s.id WHERE ${whereClause}`;
+        const countQuery = `SELECT COUNT(*) as total FROM PurchaseOrders po LEFT JOIN Suppliers s ON po.supplier_id = s.id LEFT JOIN Contractors c ON po.contractor_id = c.id WHERE ${whereClause}`;
         const countResult = await (0, db_1.queryOne)(countQuery, params);
         const total = countResult?.total ?? 0;
         const orderBy = options?.orderBy || 'po.import_date';
         const direction = options?.orderDirection || 'DESC';
-        const dataQuery = `SELECT po.*, ISNULL(s.name, N'[Chưa có NCC]') as supplier_name, (SELECT COUNT(*) FROM PurchaseOrderItems WHERE purchase_order_id = po.id) as item_count FROM PurchaseOrders po LEFT JOIN Suppliers s ON po.supplier_id = s.id WHERE ${whereClause} ORDER BY ${orderBy} ${direction} OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`;
+        const dataQuery = `SELECT po.*, ISNULL(s.name, N'[Chưa có NCC]') as supplier_name, c.name as contractor_name, (SELECT COUNT(*) FROM PurchaseOrderItems WHERE purchase_order_id = po.id) as item_count FROM PurchaseOrders po LEFT JOIN Suppliers s ON po.supplier_id = s.id LEFT JOIN Contractors c ON po.contractor_id = c.id WHERE ${whereClause} ORDER BY ${orderBy} ${direction} OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`;
         const results = await (0, db_1.query)(dataQuery, { ...params, offset, pageSize });
         // Fetch items for each purchase order
         const purchaseOrdersWithItems = await Promise.all(results.map(async (r) => {
@@ -246,6 +264,7 @@ class PurchaseOrderRepository extends base_repository_1.BaseRepository {
             return {
                 ...this.mapToEntity(r),
                 supplierName: r.supplier_name || undefined,
+                contractorName: r.contractor_name || undefined,
                 itemCount: r.item_count,
                 items: items.map(item => ({ ...this.mapItemToEntity(item), productName: item.product_name || undefined, unitName: item.unit_name || undefined }))
             };
@@ -259,8 +278,8 @@ class PurchaseOrderRepository extends base_repository_1.BaseRepository {
                 throw new Error('Purchase order not found or access denied');
             await (0, transaction_1.transactionQuery)(transaction, `DELETE FROM PurchaseLots WHERE purchase_order_id = @purchaseOrderId`, { purchaseOrderId });
             await (0, transaction_1.transactionQuery)(transaction, `DELETE FROM PurchaseOrderItems WHERE purchase_order_id = @purchaseOrderId`, { purchaseOrderId });
-            const updateQuery = `UPDATE PurchaseOrders SET supplier_id = @supplierId, import_date = @importDate, total_amount = @totalAmount, notes = @notes, updated_at = GETDATE() OUTPUT INSERTED.* WHERE id = @purchaseOrderId AND store_id = @storeId`;
-            const updatedOrder = await (0, transaction_1.transactionQueryOne)(transaction, updateQuery, { purchaseOrderId, storeId, supplierId: input.supplierId || null, importDate: new Date(input.importDate), totalAmount: input.totalAmount, notes: input.notes || null });
+            const updateQuery = `UPDATE PurchaseOrders SET supplier_id = @supplierId, contractor_id = @contractorId, import_date = @importDate, total_amount = @totalAmount, notes = @notes, updated_at = GETDATE() OUTPUT INSERTED.* WHERE id = @purchaseOrderId AND store_id = @storeId`;
+            const updatedOrder = await (0, transaction_1.transactionQueryOne)(transaction, updateQuery, { purchaseOrderId, storeId, supplierId: input.supplierId || null, contractorId: input.contractorId || null, importDate: new Date(input.importDate), totalAmount: input.totalAmount, notes: input.notes || null });
             if (!updatedOrder)
                 throw new Error('Failed to update purchase order');
             const items = [];

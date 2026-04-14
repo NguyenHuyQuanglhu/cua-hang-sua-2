@@ -14,11 +14,13 @@ export async function fetchWithAuth(url: string, options: RequestInit = {}): Pro
     ...(options.headers as Record<string, string> || {}),
   };
 
-  if (token) {
+  const hasAuthHeader = Object.keys(headers).some((key) => key.toLowerCase() === 'authorization');
+  if (token && !hasAuthHeader) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  if (storeId) {
+  const hasStoreHeader = Object.keys(headers).some((key) => key.toLowerCase() === 'x-store-id');
+  if (storeId && !hasStoreHeader) {
     headers['X-Store-Id'] = storeId;
   }
 

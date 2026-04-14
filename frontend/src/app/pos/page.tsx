@@ -26,6 +26,7 @@ import { useReactToPrint } from 'react-to-print';
 import { useStore } from '@/contexts/store-context'
 import { getPostShiftRedirectPath } from '@/lib/navigation'
 import {
+  Contractor,
   Customer,
   Payment,
   Product,
@@ -40,6 +41,7 @@ import { upsertSaleTransaction, updateSaleStatus } from '@/app/sales/actions'
 import {
   getProducts,
   getProductByBarcode,
+  getContractors,
   getCustomers,
   getUnits,
   getStoreSettings,
@@ -137,6 +139,7 @@ type CartItem = {
 }
 
 const WALK_IN_CUSTOMER_ID = 'walk-in-customer'
+const NO_CUSTOMER_LABEL = 'Không chọn khách hàng'
 
 const FormattedNumberInput = ({ value, onChange, ...props }: { value: number; onChange: (value: number) => void;[key: string]: any }) => {
   const [displayValue, setDisplayValue] = useState(value?.toLocaleString('en-US') || '');
@@ -171,6 +174,7 @@ export default function POSPage() {
   // Data state
   const [products, setProducts] = useState<ProductWithStock[]>([])
   const [customers, setCustomers] = useState<CustomerWithDebt[]>([])
+  const [contractors, setContractors] = useState<Contractor[]>([])
   const [units, setUnits] = useState<Unit[]>([])
   const [settings, setSettings] = useState<ThemeSettings | null>(null)
   const [activeShift, setActiveShift] = useState<Shift | null>(null)
@@ -184,12 +188,15 @@ export default function POSPage() {
 
   // Cart and UI state
   const [cart, setCart] = useState<CartItem[]>([])
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string>(WALK_IN_CUSTOMER_ID)
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>('')
+  const [selectedContractorId, setSelectedContractorId] = useState<string>('')
   const [customerSearchOpen, setCustomerSearchOpen] = useState(false)
   const [productSearchOpen, setProductSearchOpen] = useState(false)
   const [barcode, setBarcode] = useState('')
   const [projectName, setProjectName] = useState('')
   const [projectOptions, setProjectOptions] = useState<string[]>([])
+  const [projectDropdownOpen, setProjectDropdownOpen] = useState(false)
+  const [projectSearch, setProjectSearch] = useState('')
   const [customerPayment, setCustomerPayment] = useState(0)
   const [includeDebtPayment, setIncludeDebtPayment] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -216,6 +223,7 @@ export default function POSPage() {
   useEffect(() => {
     const savedCart = safeStorage.getItem(cartStorageKey);
     const savedCustomerId = safeStorage.getItem('pos-customer-id');
+    const savedContractorId = safeStorage.getItem('pos-contractor-id');
     const savedDiscountType = safeStorage.getItem('pos-discount-type');
     const savedDiscountValue = safeStorage.getItem('pos-discount-value');
     const savedPointsUsed = safeStorage.getItem('pos-points-used');
@@ -230,7 +238,16 @@ export default function POSPage() {
     } else {
       setCart([]);
     }
-    if (savedCustomerId) setSelectedCustomerId(savedCustomerId);
+    if (savedCart && savedCustomerId && savedCustomerId !== WALK_IN_CUSTOMER_ID) {
+      setSelectedCustomerId(savedCustomerId);
+    } else {
+      setSelectedCustomerId('');
+    }
+    if (savedCart && savedContractorId) {
+      setSelectedContractorId(savedContractorId);
+    } else {
+      setSelectedContractorId('');
+    }
     if (savedDiscountType) setDiscountType(savedDiscountType as 'percentage' | 'amount');
     if (savedDiscountValue) setDiscountValue(Number(savedDiscountValue));
     if (savedPointsUsed) setPointsUsed(Number(savedPointsUsed));
@@ -289,6 +306,10 @@ export default function POSPage() {
   }, [selectedCustomerId]);
 
   useEffect(() => {
+    safeStorage.setItem('pos-contractor-id', selectedContractorId);
+  }, [selectedContractorId]);
+
+  useEffect(() => {
     safeStorage.setItem('pos-discount-type', discountType);
   }, [discountType]);
 
@@ -318,6 +339,7 @@ export default function POSPage() {
     customerPayment: number;
     customerName?: string;
     customerPhone?: string;
+    contractorName?: string;
     projectName?: string;
   } | null>(null);
 
@@ -373,6 +395,20 @@ export default function POSPage() {
     }
   }, [toast]);
 
+  const fetchContractors = useCallback(async () => {
+    try {
+      const result = await getContractors();
+      if (result.success && result.data) {
+        setContractors(result.data);
+      } else {
+        setContractors([]);
+      }
+    } catch (error) {
+      console.error('Error fetching contractors:', error);
+      setContractors([]);
+    }
+  }, []);
+
   // Fetch units from SQL Server
   const fetchUnits = useCallback(async () => {
     setUnitsLoading(true);
@@ -427,33 +463,49 @@ export default function POSPage() {
 
   const fetchProjectNames = useCallback(async () => {
     try {
-      const response = await apiClient.request<{
+      if (!selectedCustomerId || selectedCustomerId === WALK_IN_CUSTOMER_ID) {
+        setProjectOptions([]);
+        return;
+      }
+
+      const customerResponse = await apiClient.request<{
         success: boolean;
         data?: Array<{ projectName?: string }>;
-      }>('/sales/project-names');
+      }>(`/customers/${selectedCustomerId}/discounts/projects`);
 
-      if (response?.success && Array.isArray(response.data)) {
-        const names = response.data
+      if (customerResponse?.success && Array.isArray(customerResponse.data)) {
+        const customerNames = customerResponse.data
           .map((item) => String(item.projectName || '').trim())
           .filter(Boolean);
-        setProjectOptions([...new Set(names)]);
+
+        setProjectOptions([...new Set(customerNames)]);
+        return;
       }
+
+      setProjectOptions([]);
     } catch (error) {
       console.error('Error fetching project names:', error);
+      setProjectOptions([]);
     }
-  }, []);
+  }, [selectedCustomerId]);
 
   // Initial data fetch
   useEffect(() => {
     if (user) {
       fetchProducts();
       fetchCustomers();
+      fetchContractors();
       fetchUnits();
       fetchSettings();
       fetchActiveShift();
+    }
+  }, [user, fetchProducts, fetchCustomers, fetchContractors, fetchUnits, fetchSettings, fetchActiveShift]);
+
+  useEffect(() => {
+    if (user) {
       fetchProjectNames();
     }
-  }, [user, fetchProducts, fetchCustomers, fetchUnits, fetchSettings, fetchActiveShift, fetchProjectNames]);
+  }, [user, fetchProjectNames]);
 
   // Memos for data mapping
   const unitsMap = useMemo(() => new Map(units?.map((u) => [u.id, u])), [units])
@@ -481,6 +533,33 @@ export default function POSPage() {
 
   const allCustomers = useMemo(() => (customers ? [walkInCustomer, ...customers] : [walkInCustomer]), [customers])
   const selectedCustomer = useMemo(() => allCustomers.find(c => c.id === selectedCustomerId), [allCustomers, selectedCustomerId]);
+  const selectedCustomerIdForApi = selectedCustomerId && selectedCustomerId !== WALK_IN_CUSTOMER_ID ? selectedCustomerId : undefined;
+  const selectedContractorIdForApi = useMemo(() => {
+    const normalized = String(selectedContractorId || '').trim();
+    return normalized ? normalized : undefined;
+  }, [selectedContractorId]);
+  const normalizedProjectName = useMemo(() => String(projectName || '').trim(), [projectName]);
+  const isCustomerUnselected = !selectedCustomerId || selectedCustomerId === WALK_IN_CUSTOMER_ID;
+  const filteredProjectOptions = useMemo(() => {
+    const keyword = String(projectSearch || '').trim().toLowerCase();
+    const options = projectOptions.map((name) => String(name || '').trim()).filter(Boolean);
+    if (!keyword) {
+      return options;
+    }
+    return options.filter((name) => name.toLowerCase().includes(keyword));
+  }, [projectOptions, projectSearch]);
+  const hasExactProjectOption = useMemo(() => {
+    if (!normalizedProjectName) {
+      return false;
+    }
+    const needle = normalizedProjectName.toLowerCase();
+    return projectOptions.some((name) => String(name || '').trim().toLowerCase() === needle);
+  }, [projectOptions, normalizedProjectName]);
+  const hasSelectedContractor = useMemo(
+    () => contractors.some((contractor) => contractor.id === selectedContractorId),
+    [contractors, selectedContractorId]
+  );
+  const contractorSelectValue = hasSelectedContractor ? selectedContractorId : 'none';
 
   // Unit info helper
   const getUnitInfo = useCallback((unitId: string): { baseUnit?: Unit; conversionFactor: number; name: string } => {
@@ -749,7 +828,7 @@ export default function POSPage() {
           method: 'POST',
           body: {
             items,
-            customerId: selectedCustomerId !== WALK_IN_CUSTOMER_ID ? selectedCustomerId : undefined,
+            customerId: selectedCustomerIdForApi,
             subtotal: totalAmount,
           },
         }) as any;
@@ -764,7 +843,7 @@ export default function POSPage() {
     };
 
     calculateAutoPromotions();
-  }, [cart, totalAmount, selectedCustomerId]);
+  }, [cart, totalAmount, selectedCustomerIdForApi]);
 
   // Calculate points that will be earned from this purchase
   const pointsPerAmount = settings?.loyalty?.pointsPerAmount || 0;
@@ -906,6 +985,7 @@ export default function POSPage() {
       // Create a sale record with no items (debt payment only)
       const saleData: Partial<Sale> & { isChangeReturned?: boolean; items?: any[] } = {
         customerId: selectedCustomerId,
+        contractorId: selectedContractorIdForApi,
         projectName: projectName.trim() || undefined,
         shiftId: activeShift?.id,
         transactionDate: new Date().toISOString(),
@@ -954,7 +1034,8 @@ export default function POSPage() {
         // Reset state
         setCustomerPayment(0);
         setIncludeDebtPayment(false);
-        setSelectedCustomerId(WALK_IN_CUSTOMER_ID);
+        setSelectedCustomerId('');
+        setSelectedContractorId('');
         setProjectName('');
         setSelectedPaymentMethod(null);
         safeStorage.removeItem('pos-project-name');
@@ -988,7 +1069,8 @@ export default function POSPage() {
     }))
 
     const saleData: Partial<Sale> & { isChangeReturned?: boolean; items?: typeof itemsData } = {
-      customerId: selectedCustomerId === WALK_IN_CUSTOMER_ID ? undefined : selectedCustomerId,
+      customerId: selectedCustomerIdForApi,
+      contractorId: selectedContractorIdForApi,
       projectName: projectName.trim() || undefined,
       shiftId: activeShift?.id,
       transactionDate: new Date().toISOString(),
@@ -1065,6 +1147,7 @@ export default function POSPage() {
 
       // Save sale data for invoice dialog
       const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
+      const selectedContractor = contractors.find(c => c.id === selectedContractorId);
       setLastSaleData({
         saleId: result.saleData.id as string,
         invoiceNumber,
@@ -1077,6 +1160,7 @@ export default function POSPage() {
         customerPayment,
         customerName: selectedCustomer?.name,
         customerPhone: selectedCustomer?.phone,
+        contractorName: selectedContractor?.name,
         projectName: projectName.trim() || undefined,
       });
 
@@ -1119,7 +1203,8 @@ export default function POSPage() {
       setCart([])
       setCustomerPayment(0)
       setIncludeDebtPayment(false)
-      setSelectedCustomerId(WALK_IN_CUSTOMER_ID)
+      setSelectedCustomerId('')
+      setSelectedContractorId('')
       setProjectName('')
       setDiscountValue(0)
       setDiscountType('amount')
@@ -1131,6 +1216,7 @@ export default function POSPage() {
       // Clear localStorage with error handling
       safeStorage.removeItem('pos-cart');
       safeStorage.removeItem('pos-customer-id');
+      safeStorage.removeItem('pos-contractor-id');
       safeStorage.removeItem('pos-discount-type');
       safeStorage.removeItem('pos-discount-value');
       safeStorage.removeItem('pos-points-used');
@@ -1251,11 +1337,12 @@ export default function POSPage() {
         />
       )}
       <div className="flex flex-col h-[calc(100vh-5rem)] w-full -m-6 bg-muted/30 overflow-x-hidden">
-        <header className="p-4 border-b bg-background flex items-center gap-3 flex-wrap shrink-0 w-full">
+        <header className="p-4 border-b bg-background shrink-0 w-full space-y-2">
+          <div className="flex items-center gap-2 flex-nowrap overflow-x-auto">
           <Button variant="ghost" size="icon" onClick={toggleSidebar} className='shrink-0'>
             <PanelLeft />
           </Button>
-          <div className="relative flex-1 min-w-[200px] max-w-sm">
+          <div className="relative flex-1 min-w-[120px] max-w-[200px]">
             <Barcode className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
             <Input
               ref={barcodeInputRef}
@@ -1275,6 +1362,7 @@ export default function POSPage() {
             onClick={() => {
               fetchProducts();
               fetchCustomers();
+              fetchContractors();
               fetchProjectNames();
               toast({
                 title: 'Đã cập nhật',
@@ -1288,10 +1376,9 @@ export default function POSPage() {
           </Button>
           <Popover open={productSearchOpen} onOpenChange={setProductSearchOpen}>
             <PopoverTrigger asChild>
-              <Button type="button" variant="outline" className="h-12 shrink-0" disabled={isLocked}>
+              <Button type="button" variant="outline" className="h-12 shrink-0 px-3" disabled={isLocked}>
                 <PlusCircle className="mr-2 h-4 w-4" />
-                <span className="hidden sm:inline">Thêm thủ công</span>
-                <span className="sm:hidden">Thêm</span>
+                <span>Thêm</span>
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-[400px] p-0" align="start">
@@ -1346,14 +1433,14 @@ export default function POSPage() {
                 role="combobox"
                 disabled={isLocked || !canViewCustomers}
                 className={cn(
-                  'min-w-[150px] max-w-[250px] justify-between h-12 shrink-0',
+                  'min-w-[130px] max-w-[200px] justify-between h-12 shrink-0',
                   !selectedCustomerId && 'text-muted-foreground'
                 )}
               >
                 <span className="truncate">
                   {selectedCustomerId
                     ? allCustomers.find((c) => c.id === selectedCustomerId)?.name
-                    : 'Chọn khách hàng...'}
+                    : NO_CUSTOMER_LABEL}
                 </span>
                 <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
               </Button>
@@ -1364,11 +1451,49 @@ export default function POSPage() {
                 <CommandList>
                   <CommandEmpty>Không tìm thấy khách hàng.</CommandEmpty>
                   <CommandGroup>
-                    {allCustomers.map((customer) => {
+                    <CommandItem
+                      value={`${NO_CUSTOMER_LABEL} bo qua khach hang`}
+                      key="none-customer"
+                      onSelect={() => {
+                        setSelectedCustomerId('')
+                        setIncludeDebtPayment(false)
+                        setCustomerSearchOpen(false)
+                      }}
+                    >
+                      <Check
+                        className={cn(
+                          'mr-2 h-4 w-4',
+                          !selectedCustomerId ? 'opacity-100' : 'opacity-0'
+                        )}
+                      />
+                      <div>
+                        <p>{NO_CUSTOMER_LABEL}</p>
+                      </div>
+                    </CommandItem>
+                    <CommandItem
+                      value="khach le walk in"
+                      key={WALK_IN_CUSTOMER_ID}
+                      onSelect={() => {
+                        setSelectedCustomerId(WALK_IN_CUSTOMER_ID)
+                        setIncludeDebtPayment(false)
+                        setCustomerSearchOpen(false)
+                      }}
+                    >
+                      <Check
+                        className={cn(
+                          'mr-2 h-4 w-4',
+                          selectedCustomerId === WALK_IN_CUSTOMER_ID ? 'opacity-100' : 'opacity-0'
+                        )}
+                      />
+                      <div>
+                        <p>Khách lẻ</p>
+                      </div>
+                    </CommandItem>
+                    {allCustomers.filter((c) => c.id !== WALK_IN_CUSTOMER_ID).map((customer) => {
                       const debt = customer.currentDebt || 0;
                       return (
                         <CommandItem
-                          value={`${customer.name} ${customer.phone}`}
+                          value={`${customer.name} ${customer.phone || ''}`}
                           key={customer.id}
                           onSelect={() => {
                             setSelectedCustomerId(customer.id)
@@ -1386,9 +1511,11 @@ export default function POSPage() {
                           />
                           <div>
                             <p>{customer.name}</p>
-                            <p className="text-xs text-muted-foreground">
-                              {customer.phone}
-                            </p>
+                            {customer.phone && (
+                              <p className="text-xs text-muted-foreground">
+                                {customer.phone}
+                              </p>
+                            )}
                             {debt > 0 && (
                               <p className="text-xs text-destructive">Nợ: {formatCurrency(debt)}</p>
                             )}
@@ -1415,22 +1542,116 @@ export default function POSPage() {
               </Command>
             </PopoverContent>
           </Popover>
-          <div className="min-w-[170px] max-w-[260px] shrink-0">
+          <div className="min-w-[160px] max-w-[210px] shrink-0">
+            <Select
+              value={contractorSelectValue}
+              onValueChange={(value) => setSelectedContractorId(value === 'none' ? '' : value)}
+              disabled={isSubmitting || isLocked}
+            >
+              <SelectTrigger className="h-12">
+                <SelectValue placeholder="Nhà thầu (tùy chọn)" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Không gắn nhà thầu</SelectItem>
+                {contractors.map((contractor) => (
+                  <SelectItem key={contractor.id} value={contractor.id}>
+                    {contractor.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="min-w-[170px] max-w-[240px] shrink-0 flex">
             <Input
-              list="pos-project-options"
               value={projectName}
               onChange={(e) => setProjectName(e.target.value)}
-              placeholder="Công trình (tùy chọn)"
-              className="h-12"
+              placeholder="Tùy chọn"
+              className="h-12 rounded-r-none border-r-0"
               disabled={isSubmitting || isLocked}
             />
-            <datalist id="pos-project-options">
-              {projectOptions.map((name) => (
-                <option key={name} value={name} />
-              ))}
-            </datalist>
+            <Popover
+              open={projectDropdownOpen}
+              onOpenChange={(open) => {
+                setProjectDropdownOpen(open);
+                if (open) {
+                  setProjectSearch('');
+                }
+              }}
+            >
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-12 w-11 rounded-l-none"
+                  disabled={isSubmitting || isLocked}
+                  aria-label="Mở danh sách công trình"
+                >
+                  <ChevronsUpDown className="h-4 w-4 opacity-60" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[280px] p-0" align="end">
+                <Command shouldFilter={false}>
+                  <CommandInput
+                    placeholder="Tìm công trình..."
+                    value={projectSearch}
+                    onValueChange={setProjectSearch}
+                  />
+                  <CommandList>
+                    <CommandEmpty>
+                      {isCustomerUnselected
+                        ? 'Chưa chọn khách hàng. Bạn có thể nhập công trình mới ở ô bên trái.'
+                        : 'Chưa có công trình đã gán. Bạn có thể nhập mới ở ô bên trái.'}
+                    </CommandEmpty>
+                    {!isCustomerUnselected && (
+                      <CommandGroup heading="Công trình đã gán">
+                        {filteredProjectOptions.map((name) => (
+                          <CommandItem
+                            key={name}
+                            value={name}
+                            onSelect={() => {
+                              setProjectName(name);
+                              setProjectDropdownOpen(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                'mr-2 h-4 w-4',
+                                normalizedProjectName.toLowerCase() === name.toLowerCase() ? 'opacity-100' : 'opacity-0'
+                              )}
+                            />
+                            {name}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    )}
+                    {normalizedProjectName && !hasExactProjectOption && (
+                      <>
+                        <CommandSeparator />
+                        <CommandGroup heading="Nhập mới">
+                          <CommandItem
+                            value={`new-${normalizedProjectName}`}
+                            onSelect={() => {
+                              setProjectName(normalizedProjectName);
+                              setProjectDropdownOpen(false);
+                            }}
+                          >
+                            <PlusCircle className="mr-2 h-4 w-4" />
+                            Dùng: {normalizedProjectName}
+                          </CommandItem>
+                        </CommandGroup>
+                      </>
+                    )}
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
           </div>
-          {activeShift && <ShiftControls activeShift={activeShift} onShiftClosed={handleShiftClosed} />}
+          </div>
+          {activeShift && (
+            <div className="w-full flex justify-end">
+              <ShiftControls activeShift={activeShift} onShiftClosed={handleShiftClosed} />
+            </div>
+          )}
         </header>
 
         {/* Overtime Warning Banner */}
@@ -1679,7 +1900,7 @@ export default function POSPage() {
                   <Label>Mã giảm giá</Label>
                   <VoucherInput
                     subtotal={totalAmount}
-                    customerId={selectedCustomerId !== WALK_IN_CUSTOMER_ID ? selectedCustomerId : undefined}
+                    customerId={selectedCustomerIdForApi}
                     onVoucherApplied={handleVoucherApplied}
                     onVoucherRemoved={handleVoucherRemoved}
                     appliedVoucher={appliedVoucher}
@@ -1891,6 +2112,8 @@ export default function POSPage() {
                   setCart([])
                   setCustomerPayment(0)
                   setIncludeDebtPayment(false)
+                  setSelectedCustomerId('')
+                  setSelectedContractorId('')
                   setProjectName('')
                   setDiscountValue(0)
                   setAppliedVoucher(null)
@@ -1900,6 +2123,7 @@ export default function POSPage() {
                   // Clear localStorage with error handling
                   safeStorage.removeItem('pos-cart');
                   safeStorage.removeItem('pos-customer-id');
+                  safeStorage.removeItem('pos-contractor-id');
                   safeStorage.removeItem('pos-discount-type');
                   safeStorage.removeItem('pos-discount-value');
                   safeStorage.removeItem('pos-points-used');
@@ -1951,6 +2175,7 @@ export default function POSPage() {
           customerPayment={lastSaleData.customerPayment}
           customerName={lastSaleData.customerName}
           customerPhone={lastSaleData.customerPhone}
+          contractorName={lastSaleData.contractorName}
           projectName={lastSaleData.projectName}
           settings={settings}
           storeName={currentStore?.name}

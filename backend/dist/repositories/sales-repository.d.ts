@@ -13,6 +13,7 @@ export interface Sale {
     storeId: string;
     invoiceNumber: string;
     customerId?: string;
+    contractorId?: string;
     shiftId?: string;
     projectName?: string;
     transactionDate: string;

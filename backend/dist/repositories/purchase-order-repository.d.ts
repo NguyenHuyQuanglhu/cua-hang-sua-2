@@ -5,6 +5,7 @@ export interface PurchaseOrder {
     storeId: string;
     orderNumber: string;
     supplierId?: string;
+    contractorId?: string;
     importDate: string;
     totalAmount: number;
     paidAmount?: number;
@@ -38,6 +39,7 @@ export interface PurchaseLot {
 export interface PurchaseOrderWithDetails extends PurchaseOrder {
     items: PurchaseOrderItemWithProduct[];
     supplierName?: string;
+    contractorName?: string;
 }
 export interface PurchaseOrderItemWithProduct extends PurchaseOrderItem {
     productName?: string;
@@ -45,6 +47,7 @@ export interface PurchaseOrderItemWithProduct extends PurchaseOrderItem {
 }
 export interface CreatePurchaseOrderInput {
     supplierId?: string;
+    contractorId?: string;
     importDate: string;
     notes?: string;
     totalAmount: number;
@@ -74,10 +77,12 @@ export declare class PurchaseOrderRepository extends BaseRepository<PurchaseOrde
     findAllWithSupplier(storeId: string, options?: PaginationOptions & {
         search?: string;
         supplierId?: string;
+        contractorId?: string;
         dateFrom?: string;
         dateTo?: string;
     }): Promise<PaginatedResult<PurchaseOrder & {
         supplierName?: string;
+        contractorName?: string;
         itemCount: number;
         items?: PurchaseOrderItemWithProduct[];
     }>>;
