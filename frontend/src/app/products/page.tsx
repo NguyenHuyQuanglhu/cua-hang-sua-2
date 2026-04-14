@@ -472,6 +472,7 @@ export default function ProductsPage() {
         product={productForForm}
         categories={categories || []}
         units={units || []}
+        suppliers={suppliers || []}
       />
       <AlertDialog open={!!productToDelete} onOpenChange={(open) => !open && setProductToDelete(null)}>
         <AlertDialogContent>

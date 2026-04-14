@@ -7,6 +7,42 @@ const repositories_1 = require("../repositories");
 const products_sp_repository_1 = require("../repositories/products-sp-repository");
 const services_1 = require("../services");
 const router = (0, express_1.Router)();
+async function getUnitConversionForStore(unitId, storeId) {
+    try {
+        const unit = await (0, db_1.queryOne)(`SELECT id, base_unit_id as baseUnitId, conversion_factor as conversionFactor
+       FROM Units
+       WHERE id = @unitId AND store_id = @storeId`, { unitId, storeId });
+        if (!unit) {
+            throw new Error('not-found');
+        }
+        return {
+            baseUnitId: unit.baseUnitId || unit.id,
+            conversionFactor: Number(unit.conversionFactor || 1),
+        };
+    }
+    catch (error) {
+        const unit = await (0, db_1.queryOne)(`SELECT id, BaseUnitId as baseUnitId, ConversionFactor as conversionFactor
+       FROM Units
+       WHERE id = @unitId AND StoreId = @storeId`, { unitId, storeId });
+        if (!unit) {
+            throw error;
+        }
+        return {
+            baseUnitId: unit.baseUnitId || unit.id,
+            conversionFactor: Number(unit.conversionFactor || 1),
+        };
+    }
+}
+async function validateSupplierForStore(supplierId, storeId) {
+    try {
+        const supplier = await (0, db_1.queryOne)(`SELECT id FROM Suppliers WHERE id = @supplierId AND store_id = @storeId`, { supplierId, storeId });
+        return !!supplier;
+    }
+    catch (error) {
+        const supplier = await (0, db_1.queryOne)(`SELECT Id as id FROM Suppliers WHERE Id = @supplierId AND StoreId = @storeId`, { supplierId, storeId });
+        return !!supplier;
+    }
+}
 router.use(auth_1.authenticate);
 router.use(auth_1.storeContext);
 // GET /api/products/low-stock - Get products with low stock
@@ -175,10 +211,13 @@ router.get('/:id', async (req, res) => {
         pl.unit_id,
         u.name as unit_name,
         pl.purchase_order_id,
-        po.order_number
+        po.order_number,
+        po.supplier_id,
+        s.name as supplier_name
       FROM PurchaseLots pl
       LEFT JOIN Units u ON pl.unit_id = u.id
       LEFT JOIN PurchaseOrders po ON pl.purchase_order_id = po.id
+      LEFT JOIN Suppliers s ON po.supplier_id = s.id
       WHERE pl.product_id = @productId AND pl.store_id = @storeId AND pl.remaining_quantity > 0
       ORDER BY pl.import_date DESC
     `;
@@ -194,6 +233,8 @@ router.get('/:id', async (req, res) => {
             unitName: lot.unit_name,
             purchaseOrderId: lot.purchase_order_id,
             orderNumber: lot.order_number,
+            supplierId: lot.supplier_id,
+            supplierName: lot.supplier_name,
         }));
         res.json({
             id: product.id,
@@ -274,7 +315,7 @@ router.put('/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const storeId = req.storeId;
-        const { name, description, categoryId, price, costPrice, sku, unitId, images, status } = req.body;
+        const { name, description, categoryId, price, costPrice, sku, unitId, images, status, purchaseLots } = req.body;
         console.log('[PUT /api/products/:id] Request body:', req.body);
         console.log('[PUT /api/products/:id] unitId:', unitId);
         // Build update data, only include fields that are explicitly provided
@@ -304,6 +345,45 @@ router.put('/:id', async (req, res) => {
         if (!product) {
             res.status(404).json({ error: 'Không tìm thấy sản phẩm' });
             return;
+        }
+        if (Array.isArray(purchaseLots) && purchaseLots.length > 0) {
+            const newLots = purchaseLots.filter((lot) => !lot.id);
+            for (const lot of newLots) {
+                if (!lot.importDate || !lot.unitId || !lot.supplierId) {
+                    continue;
+                }
+                const quantity = Number(lot.quantity || 0);
+                const cost = Number(lot.cost || 0);
+                if (quantity <= 0 || cost < 0) {
+                    continue;
+                }
+                const supplierValid = await validateSupplierForStore(lot.supplierId, storeId);
+                if (!supplierValid) {
+                    continue;
+                }
+                const { baseUnitId, conversionFactor } = await getUnitConversionForStore(lot.unitId, storeId);
+                const safeFactor = conversionFactor > 0 ? conversionFactor : 1;
+                const baseQuantity = quantity * safeFactor;
+                const baseCost = cost / safeFactor;
+                await repositories_1.purchaseOrderRepository.createWithItems({
+                    supplierId: lot.supplierId,
+                    importDate: lot.importDate,
+                    notes: `Nhập hàng khi cập nhật sản phẩm ${product.name}`,
+                    totalAmount: baseQuantity * baseCost,
+                    createdBy: req.user?.id,
+                    items: [
+                        {
+                            productId: id,
+                            quantity,
+                            cost,
+                            unitId: lot.unitId,
+                            baseQuantity,
+                            baseCost,
+                            baseUnitId,
+                        },
+                    ],
+                }, storeId);
+            }
         }
         console.log('[PUT /api/products/:id] Updated product:', product);
         res.json({ success: true, product });

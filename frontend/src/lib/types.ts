@@ -53,6 +53,8 @@ export type PurchaseLot = {
   quantity: number;
   cost: number;
   unitId: string;
+  supplierId?: string;
+  supplierName?: string;
 }
 
 export type Product = {

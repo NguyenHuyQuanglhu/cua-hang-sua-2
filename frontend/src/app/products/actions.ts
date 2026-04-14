@@ -163,6 +163,20 @@ export async function getProduct(productId: string): Promise<{
 export async function upsertProduct(product: Record<string, unknown>): Promise<{ success: boolean; error?: string }> {
   try {
     const id = product.id as string | undefined;
+    const rawLots = Array.isArray(product.purchaseLots) ? product.purchaseLots : [];
+    const purchaseLots = rawLots
+      .map((lot) => {
+        const record = lot as Record<string, unknown>;
+        return {
+          id: typeof record.id === 'string' ? record.id : undefined,
+          importDate: record.importDate,
+          quantity: Number(record.quantity ?? 0),
+          cost: Number(record.cost ?? 0),
+          unitId: record.unitId,
+          supplierId: record.supplierId,
+        };
+      })
+      .filter((lot) => !!lot.importDate && !!lot.unitId && !!lot.supplierId && lot.quantity > 0);
     
     // Map frontend field names to backend field names
     const productData = {
@@ -176,6 +190,7 @@ export async function upsertProduct(product: Record<string, unknown>): Promise<{
       status: product.status,
       lowStockThreshold: product.lowStockThreshold,
       images: product.images,
+      purchaseLots,
     };
     
     console.log('[upsertProduct] Input:', { id, product });

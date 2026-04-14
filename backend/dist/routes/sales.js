@@ -65,6 +65,20 @@ async function resolveStoreColumnName(tableName) {
     }
     return 'store_id';
 }
+async function resolvePreferredColumnName(tableName, candidates) {
+    if (!candidates.length) {
+        return null;
+    }
+    const quotedCandidates = candidates.map((name) => `'${name.replace(/'/g, "''")}'`).join(',');
+    const row = await (0, db_1.queryOne)(`SELECT TOP 1 c.name AS column_name
+         FROM sys.columns c
+         INNER JOIN sys.objects o ON o.object_id = c.object_id
+         WHERE o.type = 'U'
+           AND o.name = @tableName
+           AND c.name IN (${quotedCandidates})
+         ORDER BY CASE c.name ${candidates.map((name, idx) => `WHEN '${name.replace(/'/g, "''")}' THEN ${idx + 1}`).join(' ')} ELSE ${candidates.length + 1} END`, { tableName });
+    return row?.column_name || null;
+}
 async function ensureCustomerDiscountInfra() {
     await (0, db_1.query)(`
         IF OBJECT_ID('CustomerDiscountProfiles', 'U') IS NULL
@@ -832,10 +846,16 @@ router.delete('/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const storeId = req.storeId;
+        const salesStoreColumn = await resolveStoreColumnName('Sales');
+        const salesItemsTransactionColumn = (await resolvePreferredColumnName('SalesItems', [
+            'sales_transaction_id',
+            'SalesTransactionId',
+            'SalesTransactionID',
+        ])) || 'sales_transaction_id';
         // Delete sale items first
-        await (0, db_1.query)('DELETE FROM SalesItems WHERE sales_transaction_id = @id', { id });
+        await (0, db_1.query)(`DELETE FROM SalesItems WHERE ${salesItemsTransactionColumn} = @id`, { id });
         // Delete sale
-        await (0, db_1.query)('DELETE FROM Sales WHERE id = @id AND store_id = @storeId', { id, storeId });
+        await (0, db_1.query)(`DELETE FROM Sales WHERE id = @id AND ${salesStoreColumn} = @storeId`, { id, storeId });
         res.json({ success: true });
     }
     catch (error) {

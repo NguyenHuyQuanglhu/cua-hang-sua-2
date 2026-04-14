@@ -4,12 +4,12 @@ import type { Customer, Product, Unit, ThemeSettings } from "@/lib/types"
 import { SaleInvoice } from "./components/sale-invoice";
 import { ThermalReceipt } from "./components/thermal-receipt";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
 
 async function getAuthHeaders() {
   const cookieStore = await cookies();
-  const token = cookieStore.get('auth-token')?.value;
-  const storeId = cookieStore.get('store-id')?.value;
+  const token = cookieStore.get('auth_token')?.value || cookieStore.get('auth-token')?.value;
+  const storeId = cookieStore.get('store_id')?.value || cookieStore.get('store-id')?.value;
   
   return {
     'Content-Type': 'application/json',
@@ -21,7 +21,8 @@ async function getAuthHeaders() {
 async function getSaleData(saleId: string) {
   try {
     const headers = await getAuthHeaders();
-    const storeId = (await cookies()).get('store-id')?.value;
+    const cookieStore = await cookies();
+    const storeId = cookieStore.get('store_id')?.value || cookieStore.get('store-id')?.value;
 
     // Fetch sale with details
     const saleResponse = await fetch(`${API_BASE_URL}/sales/${saleId}`, {
@@ -48,7 +49,7 @@ async function getSaleData(saleId: string) {
       });
       if (customerResponse.ok) {
         const customerData = await customerResponse.json();
-        customer = customerData.customer;
+        customer = (customerData.customer || customerData) as Customer;
       }
     }
 
@@ -64,7 +65,7 @@ async function getSaleData(saleId: string) {
       });
       if (productResponse.ok) {
         const productData = await productResponse.json();
-        productsMap.set(productId as string, productData.product);
+        productsMap.set(productId as string, (productData.product || productData) as Product);
       }
     }
 
@@ -77,7 +78,8 @@ async function getSaleData(saleId: string) {
     });
     if (unitsResponse.ok) {
       const unitsData = await unitsResponse.json();
-      (unitsData.data || []).forEach((unit: Unit) => {
+      const unitsArray = Array.isArray(unitsData) ? unitsData : (unitsData.data || unitsData.units || []);
+      unitsArray.forEach((unit: Unit) => {
         unitsMap.set(unit.id, unit);
       });
     }
