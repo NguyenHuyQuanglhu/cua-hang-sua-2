@@ -3,6 +3,10 @@
  */
 export declare class LoyaltyPointsService {
     private getConfiguredTiers;
+    private getEffectiveSettings;
+    private hasLoyaltyTransactionsTable;
+    private getCustomerSnapshot;
+    private getCurrentBalance;
     /**
      * Calculate points earned from a purchase amount
      */
@@ -15,6 +19,15 @@ export declare class LoyaltyPointsService {
      * Earn points from a sale
      */
     earnPoints(customerId: string, storeId: string, purchaseAmount: number, saleId: string, userId?: string): Promise<{
+        points: number;
+        newBalance: number;
+        newTier?: string;
+        tierUpgraded?: boolean;
+    }>;
+    /**
+     * Earn points from a direct customer payment (debt payment flow)
+     */
+    earnPointsFromPayment(customerId: string, storeId: string, paymentAmount: number, paymentId: string, userId?: string): Promise<{
         points: number;
         newBalance: number;
         newTier?: string;

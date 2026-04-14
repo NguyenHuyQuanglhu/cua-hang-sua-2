@@ -4,6 +4,7 @@ const express_1 = require("express");
 const db_1 = require("../db");
 const auth_1 = require("../middleware/auth");
 const cash_transaction_repository_1 = require("../repositories/cash-transaction-repository");
+const loyalty_points_service_1 = require("../services/loyalty-points-service");
 const router = (0, express_1.Router)();
 router.use(auth_1.authenticate);
 router.use(auth_1.storeContext);
@@ -46,6 +47,15 @@ router.post('/', async (req, res) => {
     try {
         const storeId = req.storeId;
         const { customerId, amount, paymentDate, notes } = req.body;
+        const paymentAmount = Number(amount);
+        if (!customerId) {
+            res.status(400).json({ error: 'customerId is required' });
+            return;
+        }
+        if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
+            res.status(400).json({ error: 'Số tiền thanh toán không hợp lệ' });
+            return;
+        }
         const paymentId = crypto.randomUUID();
         const paymentDateValue = paymentDate || new Date();
         // Insert payment record
@@ -54,7 +64,7 @@ router.post('/', async (req, res) => {
             paymentId,
             storeId,
             customerId,
-            amount,
+            amount: paymentAmount,
             paymentDate: paymentDateValue,
             notes: notes || null
         });
@@ -67,7 +77,22 @@ router.post('/', async (req, res) => {
          END,
          total_paid = ISNULL(total_paid, 0) + @amount,
          updated_at = GETDATE()
-         WHERE id = @customerId AND store_id = @storeId`, { customerId, amount, storeId });
+         WHERE id = @customerId AND store_id = @storeId`, { customerId, amount: paymentAmount, storeId });
+        }
+        let loyaltyResult = {
+            points: 0,
+            newBalance: 0,
+        };
+        // Award points for direct customer debt payments
+        try {
+            loyaltyResult = await loyalty_points_service_1.loyaltyPointsService.earnPointsFromPayment(customerId, storeId, paymentAmount, paymentId, req.user?.id);
+            if (loyaltyResult.points > 0) {
+                console.log(`[CustomerPayments] Customer ${customerId} earned ${loyaltyResult.points} points from payment ${paymentId}`);
+            }
+        }
+        catch (loyaltyError) {
+            // Do not block payment flow if loyalty processing fails
+            console.error('[CustomerPayments] Failed to award loyalty points:', loyaltyError);
         }
         // Get customer name for cash transaction description
         const customer = await (0, db_1.queryOne)(`SELECT full_name FROM Customers WHERE id = @customerId AND store_id = @storeId`, { customerId, storeId });
@@ -78,18 +103,24 @@ router.post('/', async (req, res) => {
                 storeId,
                 type: 'thu',
                 transactionDate: paymentDateValue instanceof Date ? paymentDateValue.toISOString() : new Date(paymentDateValue).toISOString(),
-                amount: amount,
+                amount: paymentAmount,
                 reason: `Thu tiền từ ${customerName}${notes ? ` - ${notes}` : ''}`,
                 category: 'Thu tiền khách hàng',
                 relatedInvoiceId: paymentId,
             }, storeId);
-            console.log(`[CustomerPayments] Created cash transaction for payment from ${customerName}: ${amount}`);
+            console.log(`[CustomerPayments] Created cash transaction for payment from ${customerName}: ${paymentAmount}`);
         }
         catch (cashError) {
             // Log but don't fail the payment if cash transaction fails
             console.error('[CustomerPayments] Failed to create cash transaction:', cashError);
         }
-        res.status(201).json({ success: true });
+        res.status(201).json({
+            success: true,
+            pointsEarned: loyaltyResult.points,
+            loyaltyBalance: loyaltyResult.newBalance,
+            newTier: loyaltyResult.newTier,
+            tierUpgraded: loyaltyResult.tierUpgraded,
+        });
     }
     catch (error) {
         console.error('Create customer payment error:', error);

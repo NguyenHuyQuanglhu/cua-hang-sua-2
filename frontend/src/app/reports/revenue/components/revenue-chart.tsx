@@ -11,8 +11,7 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts';
-import { format, parseISO } from 'date-fns';
-import { vi } from 'date-fns/locale';
+import { parseISO } from 'date-fns';
 import { formatCurrency } from '@/lib/utils';
 import type { MonthlyRevenue } from '../page';
 
@@ -29,11 +28,15 @@ export function RevenueChart({ data }: RevenueChartProps) {
         );
     }
   
-    const chartData = data.map(item => ({
-        name: format(parseISO(item.month + '-01'), "MMM", { locale: vi }),
-        "Doanh Thu": item.revenue,
-        "Doanh Số": item.salesCount,
-    }));
+    const chartData = data.map(item => {
+        const date = parseISO(item.month + '-01');
+        const monthNumber = date.getMonth() + 1;
+        return {
+            name: `Tháng ${monthNumber}`,
+            "Doanh Thu": item.revenue,
+            "Doanh Số": item.salesCount,
+        };
+    });
 
   return (
     <div style={{ width: '100%', height: 350 }}>

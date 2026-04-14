@@ -5,6 +5,7 @@ const uuid_1 = require("uuid");
 const auth_1 = require("../middleware/auth");
 const validate_uuid_1 = require("../middleware/validate-uuid");
 const customers_sp_repository_1 = require("../repositories/customers-sp-repository");
+const settings_sp_repository_1 = require("../repositories/settings-sp-repository");
 const db_1 = require("../db");
 const router = (0, express_1.Router)();
 router.use(auth_1.authenticate);
@@ -285,6 +286,69 @@ function normalizeCustomerSegment(input) {
     const raw = sanitizeSegmentKey(input);
     return raw || 'personal';
 }
+const DEFAULT_LOYALTY_TIER_RULES = [
+    { name: 'diamond', threshold: 10000 },
+    { name: 'gold', threshold: 5000 },
+    { name: 'silver', threshold: 1000 },
+    { name: 'bronze', threshold: 0 },
+];
+const LOYALTY_TIER_ALIAS_MAP = {
+    bronze: 'bronze',
+    dong: 'bronze',
+    hangdong: 'bronze',
+    silver: 'silver',
+    bac: 'silver',
+    hangbac: 'silver',
+    gold: 'gold',
+    vang: 'gold',
+    hangvang: 'gold',
+    diamond: 'diamond',
+    kimcuong: 'diamond',
+    hangkimcuong: 'diamond',
+};
+function normalizeLoyaltyTierName(value) {
+    const raw = String(value || '').trim().toLowerCase();
+    if (!raw) {
+        return null;
+    }
+    const compactRaw = raw.replace(/\s+/g, '');
+    const ascii = compactRaw
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/đ/g, 'd')
+        .replace(/[^a-z]/g, '');
+    return LOYALTY_TIER_ALIAS_MAP[compactRaw] || LOYALTY_TIER_ALIAS_MAP[ascii] || null;
+}
+async function getConfiguredLoyaltyTierRules(storeId) {
+    try {
+        const settings = await settings_sp_repository_1.settingsSPRepository.getByStore(storeId);
+        const tierThresholdMap = new Map();
+        for (const tier of settings?.loyalty?.tiers || []) {
+            const sourceName = tier.name ?? tier.vietnameseName;
+            const normalizedName = normalizeLoyaltyTierName(sourceName);
+            const threshold = Number(tier.threshold ?? 0);
+            if (!normalizedName || !Number.isFinite(threshold)) {
+                continue;
+            }
+            const currentThreshold = tierThresholdMap.get(normalizedName);
+            if (currentThreshold === undefined || threshold > currentThreshold) {
+                tierThresholdMap.set(normalizedName, threshold);
+            }
+        }
+        if (tierThresholdMap.size === 0) {
+            return DEFAULT_LOYALTY_TIER_RULES;
+        }
+        if (!tierThresholdMap.has('bronze')) {
+            tierThresholdMap.set('bronze', 0);
+        }
+        return Array.from(tierThresholdMap.entries())
+            .map(([name, threshold]) => ({ name, threshold }))
+            .sort((a, b) => b.threshold - a.threshold);
+    }
+    catch {
+        return DEFAULT_LOYALTY_TIER_RULES;
+    }
+}
 async function upsertCustomerDiscountProfile(customerId, storeId, customerSegment, discountRate) {
     await ensureCustomerDiscountTables();
     await (0, db_1.query)(`MERGE CustomerDiscountProfiles AS target
@@ -393,21 +457,12 @@ router.post('/segment-types', async (req, res) => {
         res.status(500).json({ error: 'Failed to create customer segment type' });
     }
 });
-/**
- * Calculate loyalty tier based on lifetime points
- * Default thresholds:
- * - Diamond: 10000+ points
- * - Gold: 5000+ points
- * - Silver: 1000+ points
- * - Bronze: < 1000 points
- */
-function calculateLoyaltyTier(lifetimePoints) {
-    if (lifetimePoints >= 10000)
-        return 'diamond';
-    if (lifetimePoints >= 5000)
-        return 'gold';
-    if (lifetimePoints >= 1000)
-        return 'silver';
+function calculateLoyaltyTier(lifetimePoints, tierRules) {
+    for (const tier of tierRules) {
+        if (lifetimePoints >= tier.threshold) {
+            return tier.name;
+        }
+    }
     return 'bronze';
 }
 // GET /api/customers
@@ -466,6 +521,7 @@ router.get('/', async (req, res) => {
             : [];
         const profileMap = new Map(profiles.map((p) => [p.customer_id, p]));
         const summaryMap = new Map(discountSummary.map((s) => [s.customer_id, s]));
+        const tierRules = await getConfiguredLoyaltyTierRules(storeId);
         res.json({
             success: true,
             data: paginatedCustomers.map((c) => {
@@ -496,7 +552,7 @@ router.get('/', async (req, res) => {
                     bankBranch: c.bankBranch,
                     creditLimit: c.creditLimit ?? 0,
                     status: c.status,
-                    loyaltyTier: calculateLoyaltyTier(lifetimePoints), // Use calculated tier
+                    loyaltyTier: calculateLoyaltyTier(lifetimePoints, tierRules),
                     loyaltyPoints: c.loyaltyPoints ?? 0,
                     lifetimePoints: lifetimePoints,
                     notes: c.notes,
@@ -532,9 +588,10 @@ router.get('/:id', (0, validate_uuid_1.validateUUID)(), validate_uuid_1.debugReq
             res.status(404).json({ error: 'Customer not found' });
             return;
         }
-        // Calculate tier based on lifetime points (auto-correct if mismatch)
+        const tierRules = await getConfiguredLoyaltyTierRules(storeId);
+        // Calculate tier based on configured thresholds
         const lifetimePoints = customer.lifetimePoints ?? 0;
-        const calculatedTier = calculateLoyaltyTier(lifetimePoints);
+        const calculatedTier = calculateLoyaltyTier(lifetimePoints, tierRules);
         const debt = customer.calculatedDebt ?? customer.totalDebt ?? 0;
         const profile = await (0, db_1.queryOne)(`SELECT p.customer_segment, p.discount_rate, s.segment_label
        FROM CustomerDiscountProfiles p

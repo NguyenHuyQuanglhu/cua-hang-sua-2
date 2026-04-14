@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { query, queryOne } from '../db';
 import { authenticate, storeContext, AuthRequest } from '../middleware/auth';
 import { cashTransactionRepository } from '../repositories/cash-transaction-repository';
+import { loyaltyPointsService } from '../services/loyalty-points-service';
 
 const router = Router();
 
@@ -52,6 +53,17 @@ router.post('/', async (req: AuthRequest, res: Response) => {
   try {
     const storeId = req.storeId!;
     const { customerId, amount, paymentDate, notes } = req.body;
+    const paymentAmount = Number(amount);
+
+    if (!customerId) {
+      res.status(400).json({ error: 'customerId is required' });
+      return;
+    }
+
+    if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
+      res.status(400).json({ error: 'Số tiền thanh toán không hợp lệ' });
+      return;
+    }
 
     const paymentId = crypto.randomUUID();
     const paymentDateValue = paymentDate || new Date();
@@ -64,7 +76,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
         paymentId,
         storeId,
         customerId,
-        amount,
+        amount: paymentAmount,
         paymentDate: paymentDateValue,
         notes: notes || null
       }
@@ -81,8 +93,31 @@ router.post('/', async (req: AuthRequest, res: Response) => {
          total_paid = ISNULL(total_paid, 0) + @amount,
          updated_at = GETDATE()
          WHERE id = @customerId AND store_id = @storeId`,
-        { customerId, amount, storeId }
+        { customerId, amount: paymentAmount, storeId }
       );
+    }
+
+    let loyaltyResult: { points: number; newBalance: number; newTier?: string; tierUpgraded?: boolean } = {
+      points: 0,
+      newBalance: 0,
+    };
+
+    // Award points for direct customer debt payments
+    try {
+      loyaltyResult = await loyaltyPointsService.earnPointsFromPayment(
+        customerId,
+        storeId,
+        paymentAmount,
+        paymentId,
+        req.user?.id
+      );
+
+      if (loyaltyResult.points > 0) {
+        console.log(`[CustomerPayments] Customer ${customerId} earned ${loyaltyResult.points} points from payment ${paymentId}`);
+      }
+    } catch (loyaltyError) {
+      // Do not block payment flow if loyalty processing fails
+      console.error('[CustomerPayments] Failed to award loyalty points:', loyaltyError);
     }
 
     // Get customer name for cash transaction description
@@ -99,20 +134,26 @@ router.post('/', async (req: AuthRequest, res: Response) => {
           storeId,
           type: 'thu',
           transactionDate: paymentDateValue instanceof Date ? paymentDateValue.toISOString() : new Date(paymentDateValue).toISOString(),
-          amount: amount,
+          amount: paymentAmount,
           reason: `Thu tiền từ ${customerName}${notes ? ` - ${notes}` : ''}`,
           category: 'Thu tiền khách hàng',
           relatedInvoiceId: paymentId,
         },
         storeId
       );
-      console.log(`[CustomerPayments] Created cash transaction for payment from ${customerName}: ${amount}`);
+      console.log(`[CustomerPayments] Created cash transaction for payment from ${customerName}: ${paymentAmount}`);
     } catch (cashError) {
       // Log but don't fail the payment if cash transaction fails
       console.error('[CustomerPayments] Failed to create cash transaction:', cashError);
     }
 
-    res.status(201).json({ success: true });
+    res.status(201).json({
+      success: true,
+      pointsEarned: loyaltyResult.points,
+      loyaltyBalance: loyaltyResult.newBalance,
+      newTier: loyaltyResult.newTier,
+      tierUpgraded: loyaltyResult.tierUpgraded,
+    });
   } catch (error) {
     console.error('Create customer payment error:', error);
     res.status(500).json({ error: 'Failed to create customer payment' });

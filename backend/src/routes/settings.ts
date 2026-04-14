@@ -12,6 +12,7 @@ import * as xlsx from 'xlsx';
  */
 interface LoyaltyTier {
   name: string;
+  vietnameseName?: string;
   threshold: number;
   discount?: number;
   discountPercentage?: number;
@@ -50,12 +51,16 @@ type CanonicalTierName = 'bronze' | 'silver' | 'gold' | 'diamond';
 const TIER_ALIAS_MAP: Record<string, CanonicalTierName> = {
   bronze: 'bronze',
   dong: 'bronze',
+  hangdong: 'bronze',
   silver: 'silver',
   bac: 'silver',
+  hangbac: 'silver',
   gold: 'gold',
   vang: 'gold',
+  hangvang: 'gold',
   diamond: 'diamond',
   kimcuong: 'diamond',
+  hangkimcuong: 'diamond',
 };
 
 const router = Router();
@@ -125,6 +130,7 @@ const normalizeTierName = (value: unknown): CanonicalTierName | null => {
   const ascii = compactRaw
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
     .replace(/[^a-z]/g, '');
 
   return TIER_ALIAS_MAP[compactRaw] || TIER_ALIAS_MAP[ascii] || null;
@@ -283,7 +289,7 @@ router.post('/recalculate-tiers', async (req: AuthRequest, res: Response) => {
     const tierThresholdMap = new Map<CanonicalTierName, number>();
 
     for (const tier of loyaltySettings.tiers || []) {
-      const normalizedName = normalizeTierName(tier.name);
+      const normalizedName = normalizeTierName(tier.name || tier.vietnameseName);
       const threshold = Number(tier.threshold || 0);
 
       if (!normalizedName || !Number.isFinite(threshold)) {

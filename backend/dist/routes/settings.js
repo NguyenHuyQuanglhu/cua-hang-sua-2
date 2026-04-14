@@ -44,12 +44,16 @@ const xlsx = __importStar(require("xlsx"));
 const TIER_ALIAS_MAP = {
     bronze: 'bronze',
     dong: 'bronze',
+    hangdong: 'bronze',
     silver: 'silver',
     bac: 'silver',
+    hangbac: 'silver',
     gold: 'gold',
     vang: 'gold',
+    hangvang: 'gold',
     diamond: 'diamond',
     kimcuong: 'diamond',
+    hangkimcuong: 'diamond',
 };
 const router = (0, express_1.Router)();
 router.use(auth_1.authenticate);
@@ -104,6 +108,7 @@ const normalizeTierName = (value) => {
     const ascii = compactRaw
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
+        .replace(/đ/g, 'd')
         .replace(/[^a-z]/g, '');
     return TIER_ALIAS_MAP[compactRaw] || TIER_ALIAS_MAP[ascii] || null;
 };
@@ -241,7 +246,7 @@ router.post('/recalculate-tiers', async (req, res) => {
         }
         const tierThresholdMap = new Map();
         for (const tier of loyaltySettings.tiers || []) {
-            const normalizedName = normalizeTierName(tier.name);
+            const normalizedName = normalizeTierName(tier.name || tier.vietnameseName);
             const threshold = Number(tier.threshold || 0);
             if (!normalizedName || !Number.isFinite(threshold)) {
                 continue;

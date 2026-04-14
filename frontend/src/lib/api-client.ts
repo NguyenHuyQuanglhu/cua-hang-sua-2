@@ -1139,6 +1139,28 @@ class ApiClient {
     return this.request(`/reports/customer-analytics?${searchParams.toString()}`);
   }
 
+  // ==================== Loyalty Points ====================
+  async getTierHistory(customerId: string, limit: number = 50) {
+    const searchParams = new URLSearchParams();
+    if (limit) searchParams.set('limit', String(limit));
+    return this.request<{
+      success: boolean;
+      data: Array<{
+        id: string;
+        type: string;
+        title: string;
+        message: string;
+        customerId: string;
+        customerName: string;
+        oldTier: string;
+        newTier: string;
+        lifetimePoints: number;
+        createdAt: string;
+      }>;
+      total: number;
+    }>(`/loyalty-points/tier-history/${customerId}?${searchParams.toString()}`);
+  }
+
 }
 
 export const apiClient = new ApiClient();

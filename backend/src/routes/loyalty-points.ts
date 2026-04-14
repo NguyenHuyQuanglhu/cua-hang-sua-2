@@ -1,7 +1,9 @@
 import { Router, Response } from 'express';
+import sql from 'mssql';
 import { authenticate, storeContext, AuthRequest } from '../middleware/auth';
 import { loyaltyPointsService } from '../services/loyalty-points-service';
 import { loyaltyPointsRepository } from '../repositories/loyalty-points-repository';
+import { getConnection } from '../db/connection';
 
 const router = Router();
 
@@ -207,6 +209,72 @@ router.post('/deploy-sp', async (req: AuthRequest, res: Response) => {
     console.error('Deploy SP error:', error);
     res.status(500).json({ 
       error: error instanceof Error ? error.message : 'Failed to deploy stored procedure' 
+    });
+  }
+});
+
+// GET /api/loyalty-points/tier-history/:customerId - Get customer tier upgrade history
+router.get('/tier-history/:customerId', async (req: AuthRequest, res: Response) => {
+  try {
+    const storeId = req.storeId!;
+    const { customerId } = req.params;
+    const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
+
+    const pool = await getConnection();
+    
+    // Query tier upgrade notifications for this customer
+    const result = await pool
+      .request()
+      .input('storeId', sql.UniqueIdentifier, storeId)
+      .input('customerId', sql.UniqueIdentifier, customerId)
+      .input('limit', sql.Int, limit)
+      .query(`
+        SELECT TOP (@limit)
+          id,
+          type,
+          title,
+          message,
+          data,
+          created_at as createdAt
+        FROM Notifications
+        WHERE store_id = @storeId
+          AND type = 'tier_upgrade'
+          AND JSON_VALUE(data, '$.customerId') = CONVERT(NVARCHAR(36), @customerId)
+        ORDER BY created_at DESC
+      `);
+
+    // Parse the tier upgrade history from notifications
+    const tierHistory = result.recordset.map((row: any) => {
+      let data: any = {};
+      try {
+        data = JSON.parse(row.data || '{}');
+      } catch (e) {
+        // Keep empty object if parsing fails
+      }
+      
+      return {
+        id: row.id,
+        type: row.type,
+        title: row.title,
+        message: row.message,
+        customerId: data?.customerId || customerId,
+        customerName: data?.customerName || '',
+        oldTier: data?.oldTier || '',
+        newTier: data?.newTier || '',
+        lifetimePoints: data?.lifetimePoints || 0,
+        createdAt: row.createdAt,
+      };
+    });
+
+    res.json({
+      success: true,
+      data: tierHistory,
+      total: tierHistory.length,
+    });
+  } catch (error) {
+    console.error('Get tier history error:', error);
+    res.status(500).json({ 
+      error: error instanceof Error ? error.message : 'Failed to get tier history' 
     });
   }
 });
