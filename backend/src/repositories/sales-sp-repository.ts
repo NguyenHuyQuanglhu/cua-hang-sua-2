@@ -18,6 +18,7 @@ interface SaleSPRecord {
   invoiceNumber: string;
   customerId: string | null;
   shiftId: string | null;
+  projectName?: string | null;
   transactionDate: Date;
   status: string;
   totalAmount: number;
@@ -145,6 +146,7 @@ export class SalesSPRepository extends SPBaseRepository<Sale> {
       invoiceNumber: record.invoiceNumber,
       customerId: record.customerId || undefined,
       shiftId: record.shiftId || undefined,
+      projectName: record.projectName || undefined,
       transactionDate: record.transactionDate
         ? record.transactionDate instanceof Date
           ? record.transactionDate.toISOString()

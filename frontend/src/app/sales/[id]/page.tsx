@@ -124,6 +124,7 @@ async function getSaleData(saleId: string) {
       id: sale.id,
       invoiceNumber: sale.invoiceNumber,
       customerId: sale.customerId,
+      projectName: sale.projectName,
       shiftId: sale.shiftId,
       transactionDate: sale.transactionDate,
       status: sale.status,

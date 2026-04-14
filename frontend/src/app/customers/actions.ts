@@ -228,6 +228,7 @@ export interface CustomerDiscountItem {
   invoice_date?: string | null;
   invoice_total_amount?: number | null;
   invoice_final_amount?: number | null;
+  project_name?: string | null;
   payout_id?: string | null;
   payment_note?: string | null;
   created_at: string;
@@ -249,6 +250,14 @@ export interface CustomerDiscountPayoutItem {
   paid_at: string;
   created_at: string;
   created_by?: string | null;
+}
+
+export interface CustomerProjectDiscountSummaryItem {
+  projectName: string;
+  saleCount: number;
+  totalDiscount: number;
+  pendingAmount: number;
+  paidAmount: number;
 }
 
 export async function getCustomerDiscounts(customerId: string): Promise<{
@@ -301,7 +310,40 @@ export async function getCustomerDiscountPayouts(customerId: string): Promise<{
   }
 }
 
-export async function createCustomerDiscount(customerId: string, amount: number, description?: string): Promise<{ success: boolean; error?: string }> {
+export async function getCustomerProjectDiscountSummary(customerId: string): Promise<{
+  success: boolean;
+  items?: CustomerProjectDiscountSummaryItem[];
+  error?: string;
+}> {
+  const normalizedCustomerId = normalizeUuid(customerId);
+  if (!normalizedCustomerId) {
+    return {
+      success: false,
+      error: 'ID khách hàng không hợp lệ (cần GUID chuẩn 8-4-4-4-12).',
+    };
+  }
+
+  try {
+    const response = await apiClient.request<{
+      success: boolean;
+      data: CustomerProjectDiscountSummaryItem[];
+    }>(`/customers/${normalizedCustomerId}/discounts/projects`);
+    return { success: true, items: response.data || [] };
+  } catch (error: unknown) {
+    console.error('Error fetching customer project discount summary:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Không thể lấy tổng hợp chiết khấu theo công trình',
+    };
+  }
+}
+
+export async function createCustomerDiscount(
+  customerId: string,
+  amount: number,
+  description?: string,
+  projectName?: string
+): Promise<{ success: boolean; error?: string }> {
   const normalizedCustomerId = normalizeUuid(customerId);
   if (!normalizedCustomerId) {
     return {
@@ -313,7 +355,7 @@ export async function createCustomerDiscount(customerId: string, amount: number,
   try {
     await apiClient.request(`/customers/${normalizedCustomerId}/discounts`, {
       method: 'POST',
-      body: { amount, description },
+      body: { amount, description, projectName },
     });
     return { success: true };
   } catch (error: unknown) {
@@ -329,7 +371,8 @@ export async function updateCustomerDiscount(
   customerId: string,
   discountId: string,
   amount: number,
-  description?: string
+  description?: string,
+  projectName?: string
 ): Promise<{ success: boolean; error?: string }> {
   const normalizedCustomerId = normalizeUuid(customerId);
   if (!normalizedCustomerId) {
@@ -342,7 +385,7 @@ export async function updateCustomerDiscount(
   try {
     await apiClient.request(`/customers/${normalizedCustomerId}/discounts/${discountId}`, {
       method: 'PUT',
-      body: { amount, description },
+      body: { amount, description, projectName },
     });
     return { success: true };
   } catch (error: unknown) {

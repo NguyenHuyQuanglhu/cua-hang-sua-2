@@ -22,6 +22,7 @@ export interface CreateSaleItemInput {
 export interface CreateSaleInput {
   customerId?: string;
   shiftId?: string;
+  projectName?: string;
   items: CreateSaleItemInput[];
   discount?: number;
   discountType?: 'percentage' | 'amount';
@@ -244,12 +245,14 @@ export class SalesService {
          (id, store_id, invoice_number, customer_id, shift_id, transaction_date, 
           status, total_amount, vat_amount, final_amount, discount, discount_type, 
           discount_value, tier_discount_percentage, tier_discount_amount, 
-          points_used, points_discount, customer_payment, previous_debt, 
+          points_used, points_discount, customer_payment, previous_debt,
+          project_name,
           remaining_debt, CreatedBy, created_at, updated_at)
          VALUES (@id, @storeId, @invoiceNumber, @customerId, @shiftId, @transactionDate,
                  @status, @totalAmount, @vatAmount, @finalAmount, @discount, @discountType,
                  @discountValue, @tierDiscountPercentage, @tierDiscountAmount,
                  @pointsUsed, @pointsDiscount, @customerPayment, @previousDebt,
+                 @projectName,
                  @remainingDebt, @createdBy, @createdAt, @updatedAt)`,
         {
           id: saleId,
@@ -271,6 +274,7 @@ export class SalesService {
           pointsDiscount,
           customerPayment,
           previousDebt,
+          projectName: saleData.projectName || null,
           remainingDebt,
           createdBy: userId || null,
           createdAt: now,
@@ -676,6 +680,7 @@ export class SalesService {
       pointsDiscount: record.points_discount || 0,
       customerPayment: record.customer_payment ?? undefined,
       previousDebt: record.previous_debt ?? undefined,
+      projectName: record.project_name || record.ProjectName || undefined,
       remainingDebt: record.remaining_debt ?? undefined,
       createdAt: record.created_at
         ? record.created_at instanceof Date

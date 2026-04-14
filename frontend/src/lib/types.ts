@@ -118,6 +118,7 @@ export type Sale = {
   id: string;
   invoiceNumber: string;
   customerId: string;
+  projectName?: string;
   shiftId?: string; // Add shiftId to Sale
   transactionDate: string; // ISO 8601 date string
   status: 'pending' | 'unprinted' | 'printed';

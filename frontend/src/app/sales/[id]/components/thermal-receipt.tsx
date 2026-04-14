@@ -79,6 +79,7 @@ const ThermalReceipt = (props: ThermalReceiptProps) => {
                 <div>
                     <p>KH: {customer?.name || 'Khách lẻ'}</p>
                     {customer?.phone && <p>ĐT: {customer.phone}</p>}
+                    {sale.projectName && <p>CT: {sale.projectName}</p>}
                 </div>
 
                 <table className="w-full mt-2">

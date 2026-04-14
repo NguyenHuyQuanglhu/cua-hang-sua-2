@@ -60,6 +60,15 @@
       return row?.column_name || null;
     }
 
+    async function ensureSalesProjectInfra(): Promise<void> {
+      await query(`
+        IF COL_LENGTH('Sales', 'project_name') IS NULL
+        BEGIN
+          ALTER TABLE Sales ADD project_name NVARCHAR(200) NULL;
+        END
+      `);
+    }
+
     async function ensureCustomerDiscountInfra(): Promise<void> {
       await query(`
         IF OBJECT_ID('CustomerDiscountProfiles', 'U') IS NULL
@@ -132,6 +141,10 @@
         IF COL_LENGTH('CustomerDiscountTransactions', 'discount_percent_of_invoice') IS NULL
         BEGIN
           ALTER TABLE CustomerDiscountTransactions ADD discount_percent_of_invoice DECIMAL(7,4) NULL;
+        END
+        IF COL_LENGTH('CustomerDiscountTransactions', 'project_name') IS NULL
+        BEGIN
+          ALTER TABLE CustomerDiscountTransactions ADD project_name NVARCHAR(200) NULL;
         END
       `);
 
@@ -255,6 +268,7 @@
       saleId: string;
       invoiceNumber: string;
       customerId?: string;
+      projectName?: string;
       storeId: string;
       userId: string;
       saleDate?: Date;
@@ -283,12 +297,12 @@
            INSERT INTO CustomerDiscountTransactions
              (id, customer_id, store_id, amount, description, status, created_by,
               source_sale_id, invoice_number, invoice_date, invoice_total_amount, invoice_final_amount,
-              discount_rate, discount_percent_of_invoice,
+              discount_rate, discount_percent_of_invoice, project_name,
               created_at, updated_at)
            VALUES
              (NEWID(), @customerId, @storeId, @amount, @description, 'pending', @createdBy,
               @saleId, @invoiceNumber, @invoiceDate, @invoiceTotalAmount, @invoiceFinalAmount,
-              @discountRate, @discountPercentOfInvoice,
+              @discountRate, @discountPercentOfInvoice, @projectName,
               GETDATE(), GETDATE())
          END`,
         {
@@ -303,7 +317,10 @@
           invoiceFinalAmount: Number(params.saleFinalAmount || 0),
           discountRate: Number(rate || 0),
           discountPercentOfInvoice: Number(rate || 0),
-          description: `Hoa hong tu dong ${rate}% tu hoa don ${params.invoiceNumber}`,
+          projectName: params.projectName || null,
+          description: params.projectName
+            ? `Hoa hong tu dong ${rate}% tu hoa don ${params.invoiceNumber} (Cong trinh: ${params.projectName})`
+            : `Hoa hong tu dong ${rate}% tu hoa don ${params.invoiceNumber}`,
         }
       );
     }
@@ -345,6 +362,9 @@
         const userId = req.user!.id;
         const userRole = req.user!.role;
         const { page = '1', pageSize = '20', search, status, customerId, dateFrom, dateTo } = req.query;
+
+        await ensureSalesProjectInfra();
+        const salesStoreColumn = await resolveStoreColumnName('Sales');
 
         const pageNum = parseInt(page as string);
         const pageSizeNum = parseInt(pageSize as string);
@@ -388,6 +408,7 @@
 
         // Get item counts for all paginated sales in a single query (fix N+1)
         let itemCountMap: Record<string, number> = {};
+        let projectNameMap: Record<string, string | null> = {};
         if (paginatedSales.length > 0) {
           const saleIds = paginatedSales.map(s => s.id);
           const placeholders = saleIds.map((_, i) => `@id${i}`).join(',');
@@ -405,11 +426,27 @@
       (countResults as Array<{ sales_transaction_id: string; item_count: number }>).forEach(r => {
         itemCountMap[r.sales_transaction_id] = r.item_count;
       });
+
+      const projectRows = await query<{ id: string; project_name: string | null }>(
+        `SELECT id, project_name
+         FROM Sales
+         WHERE ${salesStoreColumn} = @storeId
+           AND id IN (${placeholders})`,
+        {
+          ...params,
+          storeId,
+        }
+      );
+
+      projectRows.forEach((row) => {
+        projectNameMap[row.id] = row.project_name || null;
+      });
     }
 
     const salesWithItemCount = paginatedSales.map(s => ({
       ...s,
       itemCount: itemCountMap[s.id] || 0,
+      projectName: projectNameMap[s.id] || (s as any).projectName || null,
     }));
 
     res.json({
@@ -437,6 +474,7 @@
         previousDebt: s.previousDebt,
         remainingDebt: s.remainingDebt,
         paymentMethod: (s as any).paymentMethod,
+        projectName: (s as any).projectName,
         itemCount: s.itemCount,
         createdAt: s.createdAt,
         updatedAt: s.updatedAt,
@@ -503,11 +541,57 @@ router.get('/items/all', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// GET /api/sales/project-names - Get recently used project names for POS
+router.get('/project-names', async (req: AuthRequest, res: Response) => {
+  try {
+    const storeId = req.storeId!;
+    const salesStoreColumn = await resolveStoreColumnName('Sales');
+
+    await ensureSalesProjectInfra();
+
+    const rows = await query<{
+      project_name: string;
+      sale_count: number;
+      total_discount: number;
+      last_transaction_date: Date;
+    }>(
+      `SELECT TOP 100
+              project_name,
+              COUNT(*) AS sale_count,
+              SUM(ISNULL(discount, 0) + ISNULL(tier_discount_amount, 0) + ISNULL(points_discount, 0)) AS total_discount,
+              MAX(transaction_date) AS last_transaction_date
+       FROM Sales
+       WHERE ${salesStoreColumn} = @storeId
+         AND project_name IS NOT NULL
+         AND LTRIM(RTRIM(project_name)) <> ''
+       GROUP BY project_name
+       ORDER BY MAX(transaction_date) DESC`,
+      { storeId }
+    );
+
+    res.json({
+      success: true,
+      data: rows.map((row) => ({
+        projectName: row.project_name,
+        saleCount: Number(row.sale_count || 0),
+        totalDiscount: Number(row.total_discount || 0),
+        lastTransactionDate: row.last_transaction_date,
+      })),
+    });
+  } catch (error) {
+    console.error('Get sales project names error:', error);
+    res.status(500).json({ error: 'Failed to get project names' });
+  }
+});
+
 // GET /api/sales/:id
 router.get('/:id', async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const storeId = req.storeId!;
+    const salesStoreColumn = await resolveStoreColumnName('Sales');
+
+    await ensureSalesProjectInfra();
 
     // Use SP Repository instead of inline query
     const result = await salesSPRepository.getById(id, storeId);
@@ -518,6 +602,12 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
     }
 
     const { sale, items } = result;
+    const projectRow = await queryOne<{ project_name: string | null }>(
+      `SELECT project_name
+       FROM Sales
+       WHERE id = @id AND ${salesStoreColumn} = @storeId`,
+      { id, storeId }
+    );
 
     res.json({
       sale: {
@@ -542,6 +632,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
         customerPayment: sale.customerPayment,
         previousDebt: sale.previousDebt,
         remainingDebt: sale.remainingDebt,
+        projectName: projectRow?.project_name || (sale as any).projectName || null,
         items: items.map((item) => ({
           id: item.id,
           salesId: item.salesTransactionId,
@@ -602,8 +693,13 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
       customerId, shiftId, items, totalAmount, vatAmount, finalAmount,
       discount, discountType, discountValue, customerPayment,
       previousDebt, remainingDebt, tierDiscountPercentage, tierDiscountAmount,
-      pointsUsed, pointsDiscount, status
+      pointsUsed, pointsDiscount, status, projectName
     } = req.body;
+
+    await ensureSalesProjectInfra();
+
+    const normalizedProjectName = typeof projectName === 'string' ? projectName.trim() : '';
+    const projectNameValue = normalizedProjectName ? normalizedProjectName.slice(0, 200) : null;
 
     // Convert previousDebt to number if it's a string
     const previousDebtAmount = previousDebt ? Number(previousDebt) : 0;
@@ -628,6 +724,7 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
       finalAmount, 
       previousDebt: previousDebtAmount,
       customerPayment: customerPaymentAmount,
+      projectName: projectNameValue,
       status: orderStatus 
     });
 
@@ -657,11 +754,11 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
         `INSERT INTO Sales (
           id, store_id, customer_id, shift_id, invoice_number, transaction_date,
           total_amount, discount, discount_type, discount_value, vat_amount, final_amount,
-          customer_payment, previous_debt, remaining_debt, status, CreatedBy, created_at, updated_at
+          customer_payment, previous_debt, remaining_debt, status, project_name, CreatedBy, created_at, updated_at
         ) VALUES (
           @id, @storeId, @customerId, @shiftId, @invoiceNumber, GETDATE(),
           @totalAmount, @discount, @discountType, @discountValue, @vatAmount, @finalAmount,
-          @customerPayment, @previousDebt, @remainingDebt, @status, @createdBy, GETDATE(), GETDATE()
+          @customerPayment, @previousDebt, @remainingDebt, @status, @projectName, @createdBy, GETDATE(), GETDATE()
         )`,
         {
           id: saleId,
@@ -679,6 +776,7 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
           previousDebt: previousDebtAmount,
           remainingDebt: 0, // Debt is paid
           status: orderStatus,
+          projectName: projectNameValue,
           createdBy: userId,
         }
       );
@@ -787,6 +885,7 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
         id: saleId,
         invoiceNumber,
         status: orderStatus,
+        projectName: projectNameValue,
         finalAmount: 0,
         customerPayment: customerPaymentAmount,
         previousDebt: previousDebtAmount,
@@ -821,6 +920,7 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
         customerPayment,
         previousDebt,
         vatAmount,
+        projectName: projectNameValue || undefined,
         status: orderStatus, // Pass the status to the service
       },
       storeId,
@@ -838,6 +938,7 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
         saleId: result.sale.id,
         invoiceNumber: result.sale.invoiceNumber,
         customerId,
+        projectName: projectNameValue || undefined,
         storeId,
         userId,
         saleDate: result.sale.transactionDate ? new Date(result.sale.transactionDate) : undefined,
@@ -852,6 +953,7 @@ router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Respo
       id: result.sale.id,
       invoiceNumber: result.sale.invoiceNumber,
       status: result.sale.status,
+      projectName: result.sale.projectName || projectNameValue,
       finalAmount: result.sale.finalAmount,
       conversions: result.conversions.map((c) => ({
         id: c.id,

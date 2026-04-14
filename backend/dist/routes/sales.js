@@ -79,6 +79,14 @@ async function resolvePreferredColumnName(tableName, candidates) {
          ORDER BY CASE c.name ${candidates.map((name, idx) => `WHEN '${name.replace(/'/g, "''")}' THEN ${idx + 1}`).join(' ')} ELSE ${candidates.length + 1} END`, { tableName });
     return row?.column_name || null;
 }
+async function ensureSalesProjectInfra() {
+    await (0, db_1.query)(`
+        IF COL_LENGTH('Sales', 'project_name') IS NULL
+        BEGIN
+          ALTER TABLE Sales ADD project_name NVARCHAR(200) NULL;
+        END
+      `);
+}
 async function ensureCustomerDiscountInfra() {
     await (0, db_1.query)(`
         IF OBJECT_ID('CustomerDiscountProfiles', 'U') IS NULL
@@ -148,6 +156,10 @@ async function ensureCustomerDiscountInfra() {
         IF COL_LENGTH('CustomerDiscountTransactions', 'discount_percent_of_invoice') IS NULL
         BEGIN
           ALTER TABLE CustomerDiscountTransactions ADD discount_percent_of_invoice DECIMAL(7,4) NULL;
+        END
+        IF COL_LENGTH('CustomerDiscountTransactions', 'project_name') IS NULL
+        BEGIN
+          ALTER TABLE CustomerDiscountTransactions ADD project_name NVARCHAR(200) NULL;
         END
       `);
     await (0, db_1.query)(`
@@ -249,12 +261,12 @@ async function createAutoCustomerCommission(params) {
            INSERT INTO CustomerDiscountTransactions
              (id, customer_id, store_id, amount, description, status, created_by,
               source_sale_id, invoice_number, invoice_date, invoice_total_amount, invoice_final_amount,
-              discount_rate, discount_percent_of_invoice,
+              discount_rate, discount_percent_of_invoice, project_name,
               created_at, updated_at)
            VALUES
              (NEWID(), @customerId, @storeId, @amount, @description, 'pending', @createdBy,
               @saleId, @invoiceNumber, @invoiceDate, @invoiceTotalAmount, @invoiceFinalAmount,
-              @discountRate, @discountPercentOfInvoice,
+              @discountRate, @discountPercentOfInvoice, @projectName,
               GETDATE(), GETDATE())
          END`, {
         saleId: params.saleId,
@@ -268,7 +280,10 @@ async function createAutoCustomerCommission(params) {
         invoiceFinalAmount: Number(params.saleFinalAmount || 0),
         discountRate: Number(rate || 0),
         discountPercentOfInvoice: Number(rate || 0),
-        description: `Hoa hong tu dong ${rate}% tu hoa don ${params.invoiceNumber}`,
+        projectName: params.projectName || null,
+        description: params.projectName
+            ? `Hoa hong tu dong ${rate}% tu hoa don ${params.invoiceNumber} (Cong trinh: ${params.projectName})`
+            : `Hoa hong tu dong ${rate}% tu hoa don ${params.invoiceNumber}`,
     });
 }
 // Helper function to generate invoice number
@@ -298,6 +313,8 @@ router.get('/', validateStatus_1.validateStatusQuery, async (req, res) => {
         const userId = req.user.id;
         const userRole = req.user.role;
         const { page = '1', pageSize = '20', search, status, customerId, dateFrom, dateTo } = req.query;
+        await ensureSalesProjectInfra();
+        const salesStoreColumn = await resolveStoreColumnName('Sales');
         const pageNum = parseInt(page);
         const pageSizeNum = parseInt(pageSize);
         // Use SP Repository to get sales with filters
@@ -331,6 +348,7 @@ router.get('/', validateStatus_1.validateStatusQuery, async (req, res) => {
         const paginatedSales = sales.slice(offset, offset + pageSizeNum);
         // Get item counts for all paginated sales in a single query (fix N+1)
         let itemCountMap = {};
+        let projectNameMap = {};
         if (paginatedSales.length > 0) {
             const saleIds = paginatedSales.map(s => s.id);
             const placeholders = saleIds.map((_, i) => `@id${i}`).join(',');
@@ -343,10 +361,21 @@ router.get('/', validateStatus_1.validateStatusQuery, async (req, res) => {
             countResults.forEach(r => {
                 itemCountMap[r.sales_transaction_id] = r.item_count;
             });
+            const projectRows = await (0, db_1.query)(`SELECT id, project_name
+         FROM Sales
+         WHERE ${salesStoreColumn} = @storeId
+           AND id IN (${placeholders})`, {
+                ...params,
+                storeId,
+            });
+            projectRows.forEach((row) => {
+                projectNameMap[row.id] = row.project_name || null;
+            });
         }
         const salesWithItemCount = paginatedSales.map(s => ({
             ...s,
             itemCount: itemCountMap[s.id] || 0,
+            projectName: projectNameMap[s.id] || s.projectName || null,
         }));
         res.json({
             success: true,
@@ -373,6 +402,7 @@ router.get('/', validateStatus_1.validateStatusQuery, async (req, res) => {
                 previousDebt: s.previousDebt,
                 remainingDebt: s.remainingDebt,
                 paymentMethod: s.paymentMethod,
+                projectName: s.projectName,
                 itemCount: s.itemCount,
                 createdAt: s.createdAt,
                 updatedAt: s.updatedAt,
@@ -432,11 +462,45 @@ router.get('/items/all', async (req, res) => {
         res.status(500).json({ error: 'Failed to get sale items' });
     }
 });
+// GET /api/sales/project-names - Get recently used project names for POS
+router.get('/project-names', async (req, res) => {
+    try {
+        const storeId = req.storeId;
+        const salesStoreColumn = await resolveStoreColumnName('Sales');
+        await ensureSalesProjectInfra();
+        const rows = await (0, db_1.query)(`SELECT TOP 100
+              project_name,
+              COUNT(*) AS sale_count,
+              SUM(ISNULL(discount, 0) + ISNULL(tier_discount_amount, 0) + ISNULL(points_discount, 0)) AS total_discount,
+              MAX(transaction_date) AS last_transaction_date
+       FROM Sales
+       WHERE ${salesStoreColumn} = @storeId
+         AND project_name IS NOT NULL
+         AND LTRIM(RTRIM(project_name)) <> ''
+       GROUP BY project_name
+       ORDER BY MAX(transaction_date) DESC`, { storeId });
+        res.json({
+            success: true,
+            data: rows.map((row) => ({
+                projectName: row.project_name,
+                saleCount: Number(row.sale_count || 0),
+                totalDiscount: Number(row.total_discount || 0),
+                lastTransactionDate: row.last_transaction_date,
+            })),
+        });
+    }
+    catch (error) {
+        console.error('Get sales project names error:', error);
+        res.status(500).json({ error: 'Failed to get project names' });
+    }
+});
 // GET /api/sales/:id
 router.get('/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const storeId = req.storeId;
+        const salesStoreColumn = await resolveStoreColumnName('Sales');
+        await ensureSalesProjectInfra();
         // Use SP Repository instead of inline query
         const result = await sales_sp_repository_1.salesSPRepository.getById(id, storeId);
         if (!result) {
@@ -444,6 +508,9 @@ router.get('/:id', async (req, res) => {
             return;
         }
         const { sale, items } = result;
+        const projectRow = await (0, db_1.queryOne)(`SELECT project_name
+       FROM Sales
+       WHERE id = @id AND ${salesStoreColumn} = @storeId`, { id, storeId });
         res.json({
             sale: {
                 id: sale.id,
@@ -467,6 +534,7 @@ router.get('/:id', async (req, res) => {
                 customerPayment: sale.customerPayment,
                 previousDebt: sale.previousDebt,
                 remainingDebt: sale.remainingDebt,
+                projectName: projectRow?.project_name || sale.projectName || null,
                 items: items.map((item) => ({
                     id: item.id,
                     salesId: item.salesTransactionId,
@@ -520,7 +588,10 @@ router.post('/', validateStatus_1.validateAndNormalizeStatus, async (req, res) =
     try {
         const storeId = req.storeId;
         const userId = req.user.id;
-        const { customerId, shiftId, items, totalAmount, vatAmount, finalAmount, discount, discountType, discountValue, customerPayment, previousDebt, remainingDebt, tierDiscountPercentage, tierDiscountAmount, pointsUsed, pointsDiscount, status } = req.body;
+        const { customerId, shiftId, items, totalAmount, vatAmount, finalAmount, discount, discountType, discountValue, customerPayment, previousDebt, remainingDebt, tierDiscountPercentage, tierDiscountAmount, pointsUsed, pointsDiscount, status, projectName } = req.body;
+        await ensureSalesProjectInfra();
+        const normalizedProjectName = typeof projectName === 'string' ? projectName.trim() : '';
+        const projectNameValue = normalizedProjectName ? normalizedProjectName.slice(0, 200) : null;
         // Convert previousDebt to number if it's a string
         const previousDebtAmount = previousDebt ? Number(previousDebt) : 0;
         const customerPaymentAmount = customerPayment ? Number(customerPayment) : 0;
@@ -541,6 +612,7 @@ router.post('/', validateStatus_1.validateAndNormalizeStatus, async (req, res) =
             finalAmount,
             previousDebt: previousDebtAmount,
             customerPayment: customerPaymentAmount,
+            projectName: projectNameValue,
             status: orderStatus
         });
         // Allow empty items if this is a debt payment only (previousDebt > 0 and totalAmount = 0)
@@ -564,11 +636,11 @@ router.post('/', validateStatus_1.validateAndNormalizeStatus, async (req, res) =
             await (0, db_1.query)(`INSERT INTO Sales (
           id, store_id, customer_id, shift_id, invoice_number, transaction_date,
           total_amount, discount, discount_type, discount_value, vat_amount, final_amount,
-          customer_payment, previous_debt, remaining_debt, status, CreatedBy, created_at, updated_at
+          customer_payment, previous_debt, remaining_debt, status, project_name, CreatedBy, created_at, updated_at
         ) VALUES (
           @id, @storeId, @customerId, @shiftId, @invoiceNumber, GETDATE(),
           @totalAmount, @discount, @discountType, @discountValue, @vatAmount, @finalAmount,
-          @customerPayment, @previousDebt, @remainingDebt, @status, @createdBy, GETDATE(), GETDATE()
+          @customerPayment, @previousDebt, @remainingDebt, @status, @projectName, @createdBy, GETDATE(), GETDATE()
         )`, {
                 id: saleId,
                 storeId,
@@ -585,6 +657,7 @@ router.post('/', validateStatus_1.validateAndNormalizeStatus, async (req, res) =
                 previousDebt: previousDebtAmount,
                 remainingDebt: 0, // Debt is paid
                 status: orderStatus,
+                projectName: projectNameValue,
                 createdBy: userId,
             });
             // Update customer debt and clear remaining_debt from old sales
@@ -664,6 +737,7 @@ router.post('/', validateStatus_1.validateAndNormalizeStatus, async (req, res) =
                 id: saleId,
                 invoiceNumber,
                 status: orderStatus,
+                projectName: projectNameValue,
                 finalAmount: 0,
                 customerPayment: customerPaymentAmount,
                 previousDebt: previousDebtAmount,
@@ -695,6 +769,7 @@ router.post('/', validateStatus_1.validateAndNormalizeStatus, async (req, res) =
             customerPayment,
             previousDebt,
             vatAmount,
+            projectName: projectNameValue || undefined,
             status: orderStatus, // Pass the status to the service
         }, storeId, userId);
         console.log('[POST /api/sales] Sale created:', result.sale.id, result.sale.invoiceNumber);
@@ -707,6 +782,7 @@ router.post('/', validateStatus_1.validateAndNormalizeStatus, async (req, res) =
                 saleId: result.sale.id,
                 invoiceNumber: result.sale.invoiceNumber,
                 customerId,
+                projectName: projectNameValue || undefined,
                 storeId,
                 userId,
                 saleDate: result.sale.transactionDate ? new Date(result.sale.transactionDate) : undefined,
@@ -721,6 +797,7 @@ router.post('/', validateStatus_1.validateAndNormalizeStatus, async (req, res) =
             id: result.sale.id,
             invoiceNumber: result.sale.invoiceNumber,
             status: result.sale.status,
+            projectName: result.sale.projectName || projectNameValue,
             finalAmount: result.sale.finalAmount,
             conversions: result.conversions.map((c) => ({
                 id: c.id,

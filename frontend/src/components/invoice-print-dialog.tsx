@@ -29,6 +29,7 @@ interface InvoicePrintDialogProps {
   customerPayment: number
   customerName?: string
   customerPhone?: string
+  projectName?: string
   settings: ThemeSettings | null
   storeName?: string
 }
@@ -47,6 +48,7 @@ export function InvoicePrintDialog({
   customerPayment,
   customerName,
   customerPhone,
+  projectName,
   settings,
   storeName,
 }: InvoicePrintDialogProps) {
@@ -176,6 +178,7 @@ export function InvoicePrintDialog({
           <div className="customer-info text-sm mb-4">
             <p><strong>Khách hàng:</strong> {customerName || 'Khách lẻ'}</p>
             {customerPhone && <p><strong>SĐT:</strong> {customerPhone}</p>}
+            {projectName && <p><strong>Công trình:</strong> {projectName}</p>}
           </div>
 
           {/* Items Table */}

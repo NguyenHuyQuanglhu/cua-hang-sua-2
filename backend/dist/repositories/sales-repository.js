@@ -27,6 +27,7 @@ class SalesRepository extends base_repository_1.BaseRepository {
             invoiceNumber: r.invoice_number,
             customerId: r.customer_id || undefined,
             shiftId: r.shift_id || undefined,
+            projectName: r.project_name || undefined,
             transactionDate: r.transaction_date
                 ? r.transaction_date instanceof Date
                     ? r.transaction_date.toISOString()
@@ -122,12 +123,14 @@ class SalesRepository extends base_repository_1.BaseRepository {
         const invoiceNumber = entity.invoiceNumber || `INV-${Date.now().toString(36).toUpperCase()}`;
         await (0, db_1.query)(`INSERT INTO Sales (
         id, store_id, invoice_number, customer_id, shift_id, transaction_date,
+        project_name,
         status, total_amount, vat_amount, final_amount, discount, discount_type,
         discount_value, tier_discount_percentage, tier_discount_amount,
         points_used, points_discount, customer_payment, previous_debt, remaining_debt,
         created_at, updated_at
       ) VALUES (
         @id, @storeId, @invoiceNumber, @customerId, @shiftId, @transactionDate,
+        @projectName,
         @status, @totalAmount, @vatAmount, @finalAmount, @discount, @discountType,
         @discountValue, @tierDiscountPercentage, @tierDiscountAmount,
         @pointsUsed, @pointsDiscount, @customerPayment, @previousDebt, @remainingDebt,
@@ -138,6 +141,7 @@ class SalesRepository extends base_repository_1.BaseRepository {
             invoiceNumber,
             customerId: entity.customerId || null,
             shiftId: entity.shiftId || null,
+            projectName: entity.projectName || null,
             transactionDate: new Date(entity.transactionDate),
             status: entity.status || 'pending',
             totalAmount: entity.totalAmount || 0,

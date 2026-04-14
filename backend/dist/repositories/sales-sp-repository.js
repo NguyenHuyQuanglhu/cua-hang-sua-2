@@ -24,6 +24,7 @@ class SalesSPRepository extends sp_base_repository_1.SPBaseRepository {
             invoiceNumber: record.invoiceNumber,
             customerId: record.customerId || undefined,
             shiftId: record.shiftId || undefined,
+            projectName: record.projectName || undefined,
             transactionDate: record.transactionDate
                 ? record.transactionDate instanceof Date
                     ? record.transactionDate.toISOString()

@@ -193,6 +193,7 @@ export function SaleInvoice({ sale, items, customer, productsMap, unitsMap, sett
             <div className="text-sm mb-6">
               <p><strong>Khách hàng:</strong> {customer?.name || 'Khách lẻ'}</p>
               {customer?.phone && <p><strong>SĐT:</strong> {customer.phone}</p>}
+              {sale.projectName && <p><strong>Công trình:</strong> {sale.projectName}</p>}
             </div>
 
             <table className="w-full border-collapse mb-6 text-sm">

@@ -15,6 +15,7 @@ export interface CreateSaleItemInput {
 export interface CreateSaleInput {
     customerId?: string;
     shiftId?: string;
+    projectName?: string;
     items: CreateSaleItemInput[];
     discount?: number;
     discountType?: 'percentage' | 'amount';

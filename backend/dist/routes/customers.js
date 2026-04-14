@@ -31,6 +31,27 @@ function sanitizeSegmentKey(input) {
 function isCustomerSegmentManager(role) {
     return ['owner', 'company_manager', 'store_manager', 'admin'].includes(String(role || '').toLowerCase());
 }
+async function resolveStoreColumnName(tableName) {
+    const row = await (0, db_1.queryOne)(`SELECT TOP 1 c.name AS store_column
+     FROM sys.columns c
+     INNER JOIN sys.objects o ON o.object_id = c.object_id
+     WHERE o.type = 'U'
+       AND o.name = @tableName
+       AND c.name IN ('store_id', 'StoreId', 'StoreID')
+     ORDER BY CASE c.name
+       WHEN 'store_id' THEN 1
+       WHEN 'StoreId' THEN 2
+       WHEN 'StoreID' THEN 3
+       ELSE 4
+     END`, { tableName });
+    if (row?.store_column === 'StoreID') {
+        return 'StoreID';
+    }
+    if (row?.store_column === 'StoreId') {
+        return 'StoreId';
+    }
+    return 'store_id';
+}
 async function ensureStoreCustomerSegmentTable() {
     await (0, db_1.query)(`
     IF OBJECT_ID('StoreCustomerSegments', 'U') IS NULL
@@ -156,6 +177,12 @@ async function ensureCustomerDiscountTables() {
     END
   `);
     await (0, db_1.query)(`
+    IF COL_LENGTH('Sales', 'project_name') IS NULL
+    BEGIN
+      ALTER TABLE Sales ADD project_name NVARCHAR(200) NULL;
+    END
+  `);
+    await (0, db_1.query)(`
     IF COL_LENGTH('CustomerDiscountTransactions', 'invoice_number') IS NULL
     BEGIN
       ALTER TABLE CustomerDiscountTransactions ADD invoice_number NVARCHAR(50) NULL;
@@ -191,6 +218,10 @@ async function ensureCustomerDiscountTables() {
     IF COL_LENGTH('CustomerDiscountTransactions', 'payout_id') IS NULL
     BEGIN
       ALTER TABLE CustomerDiscountTransactions ADD payout_id UNIQUEIDENTIFIER NULL;
+    END
+    IF COL_LENGTH('CustomerDiscountTransactions', 'project_name') IS NULL
+    BEGIN
+      ALTER TABLE CustomerDiscountTransactions ADD project_name NVARCHAR(200) NULL;
     END
   `);
     await (0, db_1.query)(`
@@ -861,19 +892,86 @@ router.get('/:id/discounts', (0, validate_uuid_1.validateUUID)(), async (req, re
     try {
         const { id } = req.params;
         const storeId = req.storeId;
+        const salesStoreColumn = await resolveStoreColumnName('Sales');
         await ensureCustomerDiscountTables();
-        const rows = await (0, db_1.query)(`SELECT id, amount, description, status, paid_at, paid_amount,
-              discount_rate, discount_percent_of_invoice,
-              source_sale_id, invoice_number, invoice_date, invoice_total_amount, invoice_final_amount,
-              payout_id, payment_note, created_at
-       FROM CustomerDiscountTransactions
-       WHERE customer_id = @customerId AND store_id = @storeId
-       ORDER BY created_at DESC`, { customerId: id, storeId });
+        const rows = await (0, db_1.query)(`SELECT cdt.id, cdt.amount, cdt.description, cdt.status, cdt.paid_at, cdt.paid_amount,
+              cdt.discount_rate, cdt.discount_percent_of_invoice,
+              cdt.source_sale_id, cdt.invoice_number, cdt.invoice_date, cdt.invoice_total_amount, cdt.invoice_final_amount,
+              cdt.payout_id, cdt.payment_note,
+              COALESCE(cdt.project_name, s.project_name) AS project_name,
+              cdt.created_at
+       FROM CustomerDiscountTransactions cdt
+       LEFT JOIN Sales s ON cdt.source_sale_id = s.id AND s.${salesStoreColumn} = cdt.store_id
+       WHERE cdt.customer_id = @customerId AND cdt.store_id = @storeId
+       ORDER BY cdt.created_at DESC`, { customerId: id, storeId });
         res.json({ success: true, data: rows });
     }
     catch (error) {
         console.error('Get customer discounts error:', error);
         res.status(500).json({ error: 'Failed to get customer discounts' });
+    }
+});
+// GET /api/customers/:id/discounts/projects - Summary discount by project for customer
+router.get('/:id/discounts/projects', (0, validate_uuid_1.validateUUID)(), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const storeId = req.storeId;
+        const salesStoreColumn = await resolveStoreColumnName('Sales');
+        await ensureCustomerDiscountTables();
+        const rows = await (0, db_1.query)(`WITH sales_summary AS (
+          SELECT
+            LTRIM(RTRIM(project_name)) AS project_name,
+            COUNT(*) AS sale_count,
+            SUM(ISNULL(discount, 0) + ISNULL(tier_discount_amount, 0) + ISNULL(points_discount, 0)) AS total_discount
+          FROM Sales
+          WHERE customer_id = @customerId
+            AND ${salesStoreColumn} = @storeId
+            AND project_name IS NOT NULL
+            AND LTRIM(RTRIM(project_name)) <> ''
+          GROUP BY LTRIM(RTRIM(project_name))
+        ),
+        payout_summary AS (
+          SELECT
+            LTRIM(RTRIM(COALESCE(cdt.project_name, s.project_name))) AS project_name,
+            SUM(CASE WHEN cdt.status = 'pending' THEN ISNULL(cdt.amount, 0) ELSE 0 END) AS pending_amount,
+            SUM(CASE WHEN cdt.status = 'paid' THEN ISNULL(cdt.amount, 0) ELSE 0 END) AS paid_amount
+          FROM CustomerDiscountTransactions cdt
+          LEFT JOIN Sales s
+            ON cdt.source_sale_id = s.id
+           AND s.${salesStoreColumn} = cdt.store_id
+          WHERE cdt.customer_id = @customerId
+            AND cdt.store_id = @storeId
+            AND COALESCE(cdt.project_name, s.project_name) IS NOT NULL
+            AND LTRIM(RTRIM(COALESCE(cdt.project_name, s.project_name))) <> ''
+          GROUP BY LTRIM(RTRIM(COALESCE(cdt.project_name, s.project_name)))
+        )
+        SELECT
+          COALESCE(ss.project_name, ps.project_name) AS project_name,
+          ISNULL(ss.sale_count, 0) AS sale_count,
+          ISNULL(ss.total_discount, 0) AS total_discount,
+          ISNULL(ps.pending_amount, 0) AS pending_amount,
+          ISNULL(ps.paid_amount, 0) AS paid_amount
+        FROM sales_summary ss
+        FULL OUTER JOIN payout_summary ps
+          ON ss.project_name = ps.project_name
+        WHERE ISNULL(ss.total_discount, 0) > 0
+           OR ISNULL(ps.pending_amount, 0) > 0
+           OR ISNULL(ps.paid_amount, 0) > 0
+        ORDER BY ISNULL(ss.total_discount, 0) DESC, ISNULL(ss.sale_count, 0) DESC`, { customerId: id, storeId });
+        res.json({
+            success: true,
+            data: rows.map((row) => ({
+                projectName: row.project_name,
+                saleCount: Number(row.sale_count || 0),
+                totalDiscount: Number(row.total_discount || 0),
+                pendingAmount: Number(row.pending_amount || 0),
+                paidAmount: Number(row.paid_amount || 0),
+            })),
+        });
+    }
+    catch (error) {
+        console.error('Get customer discount by project summary error:', error);
+        res.status(500).json({ error: 'Failed to get discount summary by project' });
     }
 });
 // POST /api/customers/:id/discounts - Add discount transaction
@@ -897,6 +995,7 @@ router.post('/:id/discounts', (0, validate_uuid_1.validateUUID)(), async (req, r
         const invoiceFinalAmount = req.body.invoiceFinalAmount !== undefined
             ? Math.max(0, Number(req.body.invoiceFinalAmount || 0))
             : null;
+        const projectName = req.body.projectName ? String(req.body.projectName).trim().slice(0, 200) : null;
         if (!Number.isFinite(amount) || amount <= 0) {
             return res.status(400).json({ error: 'Amount must be greater than 0' });
         }
@@ -911,12 +1010,12 @@ router.post('/:id/discounts', (0, validate_uuid_1.validateUUID)(), async (req, r
         await (0, db_1.query)(`INSERT INTO CustomerDiscountTransactions
          (id, customer_id, store_id, amount, description, status, created_by,
           discount_rate, discount_percent_of_invoice,
-          source_sale_id, invoice_number, invoice_date, invoice_total_amount, invoice_final_amount,
+          source_sale_id, invoice_number, invoice_date, invoice_total_amount, invoice_final_amount, project_name,
           created_at, updated_at)
        VALUES
          (@id, @customerId, @storeId, @amount, @description, 'pending', @createdBy,
           @discountRate, @discountPercentOfInvoice,
-          @sourceSaleId, @invoiceNumber, @invoiceDate, @invoiceTotalAmount, @invoiceFinalAmount,
+          @sourceSaleId, @invoiceNumber, @invoiceDate, @invoiceTotalAmount, @invoiceFinalAmount, @projectName,
           GETDATE(), GETDATE())`, {
             id: (0, uuid_1.v4)(),
             customerId: id,
@@ -931,6 +1030,7 @@ router.post('/:id/discounts', (0, validate_uuid_1.validateUUID)(), async (req, r
             invoiceDate,
             invoiceTotalAmount,
             invoiceFinalAmount,
+            projectName,
         });
         res.status(201).json({ success: true });
     }
@@ -946,21 +1046,28 @@ router.put('/:id/discounts/:discountId', (0, validate_uuid_1.validateUUID)(), as
         const storeId = req.storeId;
         const amount = Number(req.body.amount || 0);
         const description = req.body.description ? String(req.body.description) : null;
+        const projectName = req.body.projectName ? String(req.body.projectName).trim().slice(0, 200) : null;
         if (!Number.isFinite(amount) || amount <= 0) {
             return res.status(400).json({ error: 'Amount must be greater than 0' });
         }
         await ensureCustomerDiscountTables();
-        await (0, db_1.query)(`UPDATE CustomerDiscountTransactions
+        const updated = await (0, db_1.queryOne)(`UPDATE CustomerDiscountTransactions
        SET amount = @amount,
            description = @description,
+           project_name = @projectName,
            updated_at = GETDATE()
-       WHERE id = @discountId AND customer_id = @customerId AND store_id = @storeId AND status = 'pending'`, {
+       WHERE id = @discountId AND customer_id = @customerId AND store_id = @storeId AND status = 'pending';
+       SELECT @@ROWCOUNT AS affected;`, {
             discountId,
             customerId: id,
             storeId,
             amount,
             description,
+            projectName,
         });
+        if (!updated || Number(updated.affected || 0) <= 0) {
+            return res.status(404).json({ error: 'Không tìm thấy bản ghi chiết khấu cần cập nhật hoặc bản ghi đã thanh toán.' });
+        }
         res.json({ success: true });
     }
     catch (error) {

@@ -14,6 +14,7 @@ export interface Sale {
     invoiceNumber: string;
     customerId?: string;
     shiftId?: string;
+    projectName?: string;
     transactionDate: string;
     status: 'pending' | 'processed' | 'unprinted' | 'printed';
     totalAmount: number;

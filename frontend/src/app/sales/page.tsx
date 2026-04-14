@@ -87,13 +87,14 @@ import { StatusFilter } from "./components/StatusFilter"
 import { StatusBadge } from "./components/StatusBadge"
 
 type SaleStatus = 'all' | 'pending' | 'processed';
-type SortKey = 'invoiceNumber' | 'customer' | 'transactionDate' | 'status' | 'finalAmount';
+type SortKey = 'invoiceNumber' | 'customer' | 'projectName' | 'transactionDate' | 'status' | 'finalAmount';
 
 interface Sale {
   id: string;
   invoiceNumber: string;
   customerId?: string;
   customerName?: string;
+  projectName?: string;
   transactionDate: string;
   status: 'pending' | 'processed';
   finalAmount: number;
@@ -108,6 +109,7 @@ const normalizeSale = (raw: Record<string, unknown>): Sale => ({
   invoiceNumber: String(raw.invoiceNumber ?? ''),
   customerId: raw.customerId ? String(raw.customerId) : undefined,
   customerName: raw.customerName ? String(raw.customerName) : undefined,
+  projectName: raw.projectName ? String(raw.projectName) : undefined,
   transactionDate: String(raw.transactionDate ?? new Date().toISOString()),
   status: raw.status === 'pending' ? 'pending' : 'processed',
   finalAmount: Number(raw.finalAmount ?? 0),
@@ -252,6 +254,10 @@ export default function SalesPage() {
           valA = (a.customerName || '').toLowerCase();
           valB = (b.customerName || '').toLowerCase();
           break;
+        case 'projectName':
+          valA = (a.projectName || '').toLowerCase();
+          valB = (b.projectName || '').toLowerCase();
+          break;
         case 'transactionDate':
           valA = new Date(a.transactionDate).getTime();
           valB = new Date(b.transactionDate).getTime();
@@ -381,6 +387,7 @@ export default function SalesPage() {
         'STT': index + 1,
         'Mã đơn hàng': sale.invoiceNumber,
         'Khách hàng': sale.customerName || 'Khách lẻ',
+        'Công trình': sale.projectName || '-',
         'Ngày': format(new Date(sale.transactionDate), 'dd/MM/yyyy'),
         'Trạng thái': statusLabel,
         'Tổng cộng': displayAmount,
@@ -391,6 +398,7 @@ export default function SalesPage() {
       'STT': '',
       'Mã đơn hàng': 'Tổng cộng',
       'Khách hàng': '',
+      'Công trình': '',
       'Ngày': '',
       'Trạng thái': '',
       'Tổng cộng': totalRevenue,
@@ -404,6 +412,7 @@ export default function SalesPage() {
       { wch: 5 },
       { wch: 20 },
       { wch: 30 },
+      { wch: 24 },
       { wch: 15 },
       { wch: 15 },
       { wch: 20 },
@@ -587,6 +596,7 @@ export default function SalesPage() {
                     <TableHead className="w-16">STT</TableHead>
                     <SortableHeader sortKey="invoiceNumber">Mã đơn hàng</SortableHeader>
                     <SortableHeader sortKey="customer">Khách hàng</SortableHeader>
+                    <SortableHeader sortKey="projectName" className="hidden lg:table-cell">Công trình</SortableHeader>
                     <SortableHeader sortKey="transactionDate" className="hidden md:table-cell">Ngày</SortableHeader>
                     <SortableHeader sortKey="status">Trạng thái</SortableHeader>
                     <SortableHeader sortKey="finalAmount" className="text-right">Tổng cộng</SortableHeader>
@@ -597,7 +607,7 @@ export default function SalesPage() {
                 </TableHeader>
                 <TableBody>
                   <TooltipProvider>
-                    {isLoading && <TableRow><TableCell colSpan={7} className="text-center h-24">Đang tải...</TableCell></TableRow>}
+                    {isLoading && <TableRow><TableCell colSpan={8} className="text-center h-24">Đang tải...</TableCell></TableRow>}
                     {!isLoading && sortedSales.map((sale, index) => {
                       const isReturnOrder = sale.finalAmount < 0;
                       // Check if this is a debt payment transaction
@@ -624,6 +634,7 @@ export default function SalesPage() {
                             </div>
                           </TableCell>
                           <TableCell>{sale.customerName || 'Khách lẻ'}</TableCell>
+                          <TableCell className="hidden lg:table-cell">{sale.projectName || '-'}</TableCell>
                           <TableCell className="hidden md:table-cell">
                             {new Date(sale.transactionDate).toLocaleDateString()}
                           </TableCell>
@@ -688,7 +699,7 @@ export default function SalesPage() {
                     })}
                     {!isLoading && !sortedSales.length && (
                       <TableRow>
-                        <TableCell colSpan={7} className="text-center h-24">
+                        <TableCell colSpan={8} className="text-center h-24">
                           Không có đơn hàng nào phù hợp.
                         </TableCell>
                       </TableRow>

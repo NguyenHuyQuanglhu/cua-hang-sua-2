@@ -188,6 +188,8 @@ export default function POSPage() {
   const [customerSearchOpen, setCustomerSearchOpen] = useState(false)
   const [productSearchOpen, setProductSearchOpen] = useState(false)
   const [barcode, setBarcode] = useState('')
+  const [projectName, setProjectName] = useState('')
+  const [projectOptions, setProjectOptions] = useState<string[]>([])
   const [customerPayment, setCustomerPayment] = useState(0)
   const [includeDebtPayment, setIncludeDebtPayment] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -217,6 +219,7 @@ export default function POSPage() {
     const savedDiscountType = safeStorage.getItem('pos-discount-type');
     const savedDiscountValue = safeStorage.getItem('pos-discount-value');
     const savedPointsUsed = safeStorage.getItem('pos-points-used');
+    const savedProjectName = safeStorage.getItem('pos-project-name');
 
     if (savedCart) {
       try {
@@ -231,6 +234,7 @@ export default function POSPage() {
     if (savedDiscountType) setDiscountType(savedDiscountType as 'percentage' | 'amount');
     if (savedDiscountValue) setDiscountValue(Number(savedDiscountValue));
     if (savedPointsUsed) setPointsUsed(Number(savedPointsUsed));
+    if (savedProjectName) setProjectName(savedProjectName);
   }, [cartStorageKey]);
 
   // Update cart items with latest stock info when products data changes
@@ -296,6 +300,10 @@ export default function POSPage() {
     safeStorage.setItem('pos-points-used', String(pointsUsed));
   }, [pointsUsed]);
 
+  useEffect(() => {
+    safeStorage.setItem('pos-project-name', projectName);
+  }, [projectName]);
+
   // Invoice print dialog state
   const [showInvoiceDialog, setShowInvoiceDialog] = useState(false);
   const [lastSaleData, setLastSaleData] = useState<{
@@ -310,6 +318,7 @@ export default function POSPage() {
     customerPayment: number;
     customerName?: string;
     customerPhone?: string;
+    projectName?: string;
   } | null>(null);
 
   // Fetch products from SQL Server
@@ -416,6 +425,24 @@ export default function POSPage() {
     }
   }, [user?.id]);
 
+  const fetchProjectNames = useCallback(async () => {
+    try {
+      const response = await apiClient.request<{
+        success: boolean;
+        data?: Array<{ projectName?: string }>;
+      }>('/sales/project-names');
+
+      if (response?.success && Array.isArray(response.data)) {
+        const names = response.data
+          .map((item) => String(item.projectName || '').trim())
+          .filter(Boolean);
+        setProjectOptions([...new Set(names)]);
+      }
+    } catch (error) {
+      console.error('Error fetching project names:', error);
+    }
+  }, []);
+
   // Initial data fetch
   useEffect(() => {
     if (user) {
@@ -424,8 +451,9 @@ export default function POSPage() {
       fetchUnits();
       fetchSettings();
       fetchActiveShift();
+      fetchProjectNames();
     }
-  }, [user, fetchProducts, fetchCustomers, fetchUnits, fetchSettings, fetchActiveShift]);
+  }, [user, fetchProducts, fetchCustomers, fetchUnits, fetchSettings, fetchActiveShift, fetchProjectNames]);
 
   // Memos for data mapping
   const unitsMap = useMemo(() => new Map(units?.map((u) => [u.id, u])), [units])
@@ -878,6 +906,7 @@ export default function POSPage() {
       // Create a sale record with no items (debt payment only)
       const saleData: Partial<Sale> & { isChangeReturned?: boolean; items?: any[] } = {
         customerId: selectedCustomerId,
+        projectName: projectName.trim() || undefined,
         shiftId: activeShift?.id,
         transactionDate: new Date().toISOString(),
         totalAmount: 0, // No products
@@ -926,10 +955,13 @@ export default function POSPage() {
         setCustomerPayment(0);
         setIncludeDebtPayment(false);
         setSelectedCustomerId(WALK_IN_CUSTOMER_ID);
+        setProjectName('');
         setSelectedPaymentMethod(null);
+        safeStorage.removeItem('pos-project-name');
 
         // Refresh customer data to update debt
         await fetchCustomers();
+        await fetchProjectNames();
       } else {
         throw new Error(result.error || 'Không thể tạo giao dịch thanh toán nợ');
       }
@@ -957,6 +989,7 @@ export default function POSPage() {
 
     const saleData: Partial<Sale> & { isChangeReturned?: boolean; items?: typeof itemsData } = {
       customerId: selectedCustomerId === WALK_IN_CUSTOMER_ID ? undefined : selectedCustomerId,
+      projectName: projectName.trim() || undefined,
       shiftId: activeShift?.id,
       transactionDate: new Date().toISOString(),
       totalAmount: totalAmount,
@@ -1044,6 +1077,7 @@ export default function POSPage() {
         customerPayment,
         customerName: selectedCustomer?.name,
         customerPhone: selectedCustomer?.phone,
+        projectName: projectName.trim() || undefined,
       });
 
       // Show success toast with print button
@@ -1086,6 +1120,7 @@ export default function POSPage() {
       setCustomerPayment(0)
       setIncludeDebtPayment(false)
       setSelectedCustomerId(WALK_IN_CUSTOMER_ID)
+      setProjectName('')
       setDiscountValue(0)
       setDiscountType('amount')
       setAppliedVoucher(null)
@@ -1099,11 +1134,13 @@ export default function POSPage() {
       safeStorage.removeItem('pos-discount-type');
       safeStorage.removeItem('pos-discount-value');
       safeStorage.removeItem('pos-points-used');
+      safeStorage.removeItem('pos-project-name');
 
       // Refresh data to get updated stock and customer debt
       fetchProducts();
       fetchCustomers();
       fetchActiveShift();
+      fetchProjectNames();
 
     } else {
       toast({
@@ -1238,6 +1275,7 @@ export default function POSPage() {
             onClick={() => {
               fetchProducts();
               fetchCustomers();
+              fetchProjectNames();
               toast({
                 title: 'Đã cập nhật',
                 description: 'Dữ liệu sản phẩm và khách hàng đã được làm mới.',
@@ -1377,6 +1415,21 @@ export default function POSPage() {
               </Command>
             </PopoverContent>
           </Popover>
+          <div className="min-w-[170px] max-w-[260px] shrink-0">
+            <Input
+              list="pos-project-options"
+              value={projectName}
+              onChange={(e) => setProjectName(e.target.value)}
+              placeholder="Công trình (tùy chọn)"
+              className="h-12"
+              disabled={isSubmitting || isLocked}
+            />
+            <datalist id="pos-project-options">
+              {projectOptions.map((name) => (
+                <option key={name} value={name} />
+              ))}
+            </datalist>
+          </div>
           {activeShift && <ShiftControls activeShift={activeShift} onShiftClosed={handleShiftClosed} />}
         </header>
 
@@ -1823,6 +1876,11 @@ export default function POSPage() {
                   onChange={setPrintInvoice}
                   disabled={isSubmitting || isLocked}
                 />
+                {!printInvoice && (
+                  <p className="text-xs text-muted-foreground">
+                    Không in hóa đơn: giao dịch vẫn được lưu lịch sử và ghi nhận chiết khấu.
+                  </p>
+                )}
               </div>
             </div>
             <div className="flex gap-2 pt-4 border-t shrink-0 w-full">
@@ -1833,6 +1891,7 @@ export default function POSPage() {
                   setCart([])
                   setCustomerPayment(0)
                   setIncludeDebtPayment(false)
+                  setProjectName('')
                   setDiscountValue(0)
                   setAppliedVoucher(null)
                   setVoucherDiscount(0)
@@ -1844,6 +1903,7 @@ export default function POSPage() {
                   safeStorage.removeItem('pos-discount-type');
                   safeStorage.removeItem('pos-discount-value');
                   safeStorage.removeItem('pos-points-used');
+                  safeStorage.removeItem('pos-project-name');
                 }}
                 disabled={isSubmitting || isLocked}
               >
@@ -1891,6 +1951,7 @@ export default function POSPage() {
           customerPayment={lastSaleData.customerPayment}
           customerName={lastSaleData.customerName}
           customerPhone={lastSaleData.customerPhone}
+          projectName={lastSaleData.projectName}
           settings={settings}
           storeName={currentStore?.name}
         />
