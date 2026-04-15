@@ -337,6 +337,7 @@ router.get('/', validateStatus_1.validateStatusQuery, async (req, res) => {
         const userRole = req.user.role;
         const { page = '1', pageSize = '20', search, status, customerId, dateFrom, dateTo } = req.query;
         await ensureSalesProjectInfra();
+        await ensureSalesContractorInfra();
         const salesStoreColumn = await resolveStoreColumnName('Sales');
         const discountStoreColumn = await resolveStoreColumnName('CustomerDiscountTransactions');
         const pageNum = parseInt(page);
@@ -373,6 +374,8 @@ router.get('/', validateStatus_1.validateStatusQuery, async (req, res) => {
         // Get item counts for all paginated sales in a single query (fix N+1)
         let itemCountMap = {};
         let projectNameMap = {};
+        let contractorIdMap = {};
+        const contractorNameById = {};
         if (paginatedSales.length > 0) {
             const saleIds = paginatedSales.map(s => s.id);
             const placeholders = saleIds.map((_, i) => `@id${i}`).join(',');
@@ -386,7 +389,8 @@ router.get('/', validateStatus_1.validateStatusQuery, async (req, res) => {
                 itemCountMap[r.sales_transaction_id] = r.item_count;
             });
             const projectRows = await (0, db_1.query)(`SELECT s.id,
-                COALESCE(cdt.project_name, s.project_name) AS project_name
+                COALESCE(cdt.project_name, s.project_name) AS project_name,
+                s.contractor_id
          FROM Sales s
          LEFT JOIN CustomerDiscountTransactions cdt
            ON cdt.source_sale_id = s.id
@@ -398,13 +402,41 @@ router.get('/', validateStatus_1.validateStatusQuery, async (req, res) => {
             });
             projectRows.forEach((row) => {
                 projectNameMap[row.id] = row.project_name || null;
+                contractorIdMap[row.id] = row.contractor_id || null;
             });
+            const contractorIds = Array.from(new Set(projectRows.map((row) => row.contractor_id).filter((id) => Boolean(id))));
+            if (contractorIds.length > 0) {
+                const contractorsTableState = await (0, db_1.queryOne)(`SELECT CASE WHEN OBJECT_ID('Contractors', 'U') IS NULL THEN 0 ELSE 1 END AS table_exists`);
+                if (Number(contractorsTableState?.table_exists || 0) === 1) {
+                    const contractorsStoreColumn = await resolveStoreColumnName('Contractors');
+                    const contractorPlaceholders = contractorIds.map((_, i) => `@contractorId${i}`).join(',');
+                    const contractorParams = { storeId };
+                    contractorIds.forEach((id, i) => {
+                        contractorParams[`contractorId${i}`] = id;
+                    });
+                    const contractorRows = await (0, db_1.query)(`SELECT id, name
+             FROM Contractors
+             WHERE id IN (${contractorPlaceholders})
+               AND ${contractorsStoreColumn} = @storeId`, contractorParams);
+                    contractorRows.forEach((row) => {
+                        contractorNameById[row.id] = row.name || '';
+                    });
+                }
+            }
         }
-        const salesWithItemCount = paginatedSales.map(s => ({
-            ...s,
-            itemCount: itemCountMap[s.id] || 0,
-            projectName: projectNameMap[s.id] || s.projectName || null,
-        }));
+        const salesWithItemCount = paginatedSales.map((s) => {
+            const resolvedContractorId = contractorIdMap[s.id] || s.contractorId || null;
+            const resolvedContractorName = (resolvedContractorId ? contractorNameById[resolvedContractorId] : '') ||
+                s.contractorName ||
+                null;
+            return {
+                ...s,
+                itemCount: itemCountMap[s.id] || 0,
+                contractorId: resolvedContractorId,
+                contractorName: resolvedContractorName,
+                projectName: projectNameMap[s.id] || s.projectName || null,
+            };
+        });
         res.json({
             success: true,
             data: salesWithItemCount.map((s) => ({
@@ -413,6 +445,8 @@ router.get('/', validateStatus_1.validateStatusQuery, async (req, res) => {
                 invoiceNumber: s.invoiceNumber,
                 customerId: s.customerId,
                 customerName: s.customerName,
+                contractorId: s.contractorId || null,
+                contractorName: s.contractorName || null,
                 shiftId: s.shiftId,
                 transactionDate: s.transactionDate,
                 status: s.status,
@@ -496,6 +530,7 @@ router.get('/project-names', async (req, res) => {
         const storeId = req.storeId;
         const salesStoreColumn = await resolveStoreColumnName('Sales');
         await ensureSalesProjectInfra();
+        await ensureSalesContractorInfra();
         const rows = await (0, db_1.query)(`SELECT TOP 100
               project_name,
               COUNT(*) AS sale_count,
@@ -537,12 +572,28 @@ router.get('/:id', async (req, res) => {
             return;
         }
         const { sale, items } = result;
-        const projectRow = await (0, db_1.queryOne)(`SELECT COALESCE(cdt.project_name, s.project_name) AS project_name
+        const saleMetaRow = await (0, db_1.queryOne)(`SELECT COALESCE(cdt.project_name, s.project_name) AS project_name
+              ,s.contractor_id
        FROM Sales s
        LEFT JOIN CustomerDiscountTransactions cdt
          ON cdt.source_sale_id = s.id
         AND cdt.${discountStoreColumn} = s.${salesStoreColumn}
        WHERE s.id = @id AND s.${salesStoreColumn} = @storeId`, { id, storeId });
+        let contractorName = null;
+        if (saleMetaRow?.contractor_id) {
+            const contractorsTableState = await (0, db_1.queryOne)(`SELECT CASE WHEN OBJECT_ID('Contractors', 'U') IS NULL THEN 0 ELSE 1 END AS table_exists`);
+            if (Number(contractorsTableState?.table_exists || 0) === 1) {
+                const contractorsStoreColumn = await resolveStoreColumnName('Contractors');
+                const contractorRow = await (0, db_1.queryOne)(`SELECT TOP 1 name
+           FROM Contractors
+           WHERE id = @contractorId
+             AND ${contractorsStoreColumn} = @storeId`, {
+                    contractorId: saleMetaRow.contractor_id,
+                    storeId,
+                });
+                contractorName = contractorRow?.name || null;
+            }
+        }
         res.json({
             sale: {
                 id: sale.id,
@@ -550,6 +601,8 @@ router.get('/:id', async (req, res) => {
                 invoiceNumber: sale.invoiceNumber,
                 customerId: sale.customerId,
                 customerName: sale.customerName,
+                contractorId: saleMetaRow?.contractor_id || sale.contractorId || null,
+                contractorName,
                 shiftId: sale.shiftId,
                 transactionDate: sale.transactionDate,
                 status: sale.status,
@@ -566,7 +619,7 @@ router.get('/:id', async (req, res) => {
                 customerPayment: sale.customerPayment,
                 previousDebt: sale.previousDebt,
                 remainingDebt: sale.remainingDebt,
-                projectName: projectRow?.project_name || sale.projectName || null,
+                projectName: saleMetaRow?.project_name || sale.projectName || null,
                 items: items.map((item) => ({
                     id: item.id,
                     salesId: item.salesTransactionId,
