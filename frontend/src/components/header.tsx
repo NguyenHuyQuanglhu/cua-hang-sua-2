@@ -10,6 +10,7 @@ import { useStore } from '@/contexts/store-context'
 import { UserNav } from './user-nav'
 import { CommandMenu } from './command-menu'
 import { StoreSelectorCompact } from './store-selector'
+import { NotificationBell } from './notification-bell'
 
 export function Header() {
   const pathname = usePathname()
@@ -42,7 +43,8 @@ export function Header() {
       <div className="flex-1">
         <CommandMenu />
       </div>
-      <div className="ml-auto">
+      <div className="flex items-center gap-2">
+        <NotificationBell />
         <UserNav />
       </div>
     </header>

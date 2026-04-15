@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { apiClient, CreateStoreRequest, UpdateStoreRequest } from '@/lib/api-client';
+import { safeStorage } from '@/lib/error-handling';
 
 export interface Store {
   id: string;
@@ -30,6 +31,9 @@ export interface StoreUser {
   id: string;
   email: string;
   displayName?: string;
+  photoURL?: string;
+  phone?: string;
+  address?: string;
   role: string;
   permissions: Record<string, string[]>;
   stores: Store[];
@@ -99,29 +103,21 @@ export function StoreProvider({ children }: StoreProviderProps) {
   const [error, setError] = useState<string | null>(null);
   const [accessibleStoreIds, setAccessibleStoreIds] = useState<Set<string>>(new Set());
 
-  // Load saved store ID from localStorage
+  // Load saved store ID from localStorage with error handling
   const getSavedStoreId = useCallback((): string | null => {
     if (typeof window === 'undefined') return null;
-    try {
-      return localStorage.getItem(STORE_STORAGE_KEY);
-    } catch {
-      return null;
-    }
+    return safeStorage.getItem(STORE_STORAGE_KEY);
   }, []);
 
-  // Save store ID to localStorage and API client
+  // Save store ID to localStorage and API client with error handling
   const saveStoreId = useCallback((storeId: string | null) => {
     if (typeof window === 'undefined') return;
-    try {
-      if (storeId) {
-        localStorage.setItem(STORE_STORAGE_KEY, storeId);
-        apiClient.setStoreId(storeId);
-      } else {
-        localStorage.removeItem(STORE_STORAGE_KEY);
-        apiClient.setStoreId(null);
-      }
-    } catch {
-      // Ignore localStorage errors
+    if (storeId) {
+      safeStorage.setItem(STORE_STORAGE_KEY, storeId);
+      apiClient.setStoreId(storeId);
+    } else {
+      safeStorage.removeItem(STORE_STORAGE_KEY);
+      apiClient.setStoreId(null);
     }
   }, []);
 
@@ -163,7 +159,7 @@ export function StoreProvider({ children }: StoreProviderProps) {
         // Set tenant info if available
         if (data.tenant) {
           setTenant(data.tenant as TenantInfo);
-          localStorage.setItem('tenant', JSON.stringify(data.tenant));
+          safeStorage.setItem('tenant', JSON.stringify(data.tenant));
         }
 
         // Extract accessible store IDs from auth response
@@ -197,12 +193,16 @@ export function StoreProvider({ children }: StoreProviderProps) {
           code: s.code || s.slug || '',
         })) as Store[];
 
+        const rawUser = data.user as Record<string, unknown>;
         const userData: StoreUser = {
-          id: data.user.id,
-          email: data.user.email,
-          displayName: data.user.displayName,
-          role: data.user.role,
-          permissions: data.user.permissions || {},
+          id: rawUser.id as string,
+          email: rawUser.email as string,
+          displayName: rawUser.displayName as string | undefined,
+          photoURL: rawUser.photoURL as string | undefined,
+          phone: rawUser.phone as string | undefined,
+          address: rawUser.address as string | undefined,
+          role: rawUser.role as string,
+          permissions: (rawUser.permissions as Record<string, string[]>) || {},
           stores: userStores,
           accessibleStoreIds: Array.from(storeIds),
         };
@@ -240,18 +240,20 @@ export function StoreProvider({ children }: StoreProviderProps) {
         err.message.includes('401') ||
         err.message.includes('hết hạn') ||
         err.message.includes('không hợp lệ') ||
+        err.message.includes('Chưa đăng nhập') ||
         (err as { status?: number }).status === 401
       );
       
       if (isAuthError) {
+        console.log('[StoreContext] Authentication error detected, clearing state');
         // Clear invalid token and auth state silently
         apiClient.setToken(null);
         apiClient.setStoreId(null);
-        localStorage.removeItem('auth_token');
-        localStorage.removeItem('store_id');
-        localStorage.removeItem('tenant');
-        localStorage.removeItem('user');
-        localStorage.removeItem(STORE_STORAGE_KEY);
+        safeStorage.removeItem('auth_token');
+        safeStorage.removeItem('store_id');
+        safeStorage.removeItem('tenant');
+        safeStorage.removeItem('user');
+        safeStorage.removeItem(STORE_STORAGE_KEY);
         
         // Clear auth state only for auth errors
         setUser(null);
@@ -261,6 +263,7 @@ export function StoreProvider({ children }: StoreProviderProps) {
         setAccessibleStoreIds(new Set());
       } else {
         // For non-auth errors, set error but don't clear user state
+        console.error('[StoreContext] Non-auth error:', err);
         setError(err instanceof Error ? err.message : 'An error occurred');
       }
     } finally {
@@ -275,6 +278,20 @@ export function StoreProvider({ children }: StoreProviderProps) {
       console.warn(`User does not have access to store ${storeId}`);
       setError('Bạn không có quyền truy cập cửa hàng này');
       return false;
+    }
+
+    // Check if user has an active shift in current store
+    if (currentStore && currentStore.id !== storeId) {
+      try {
+        const activeShiftResponse = await apiClient.getActiveShift();
+        if (activeShiftResponse) {
+          setError('Vui lòng đóng ca hiện tại trước khi chuyển sang cửa hàng khác');
+          return false;
+        }
+      } catch (error) {
+        console.error('Error checking active shift:', error);
+        // Continue with store switch if we can't check shift status
+      }
     }
 
     const store = stores.find(s => s.id === storeId);
@@ -301,7 +318,7 @@ export function StoreProvider({ children }: StoreProviderProps) {
     }
     
     return false;
-  }, [stores, canAccessStore, saveStoreId]);
+  }, [stores, canAccessStore, saveStoreId, currentStore]);
 
   // Refresh stores data
   const refreshStores = useCallback(async () => {
@@ -321,8 +338,8 @@ export function StoreProvider({ children }: StoreProviderProps) {
       setTenant(null);
       setAccessibleStoreIds(new Set());
       saveStoreId(null);
-      localStorage.removeItem('tenant');
-      localStorage.removeItem('user');
+      safeStorage.removeItem('tenant');
+      safeStorage.removeItem('user');
     }
   }, [saveStoreId]);
 

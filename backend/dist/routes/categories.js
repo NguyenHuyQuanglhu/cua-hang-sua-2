@@ -82,7 +82,9 @@ router.post('/', async (req, res) => {
     }
     catch (error) {
         console.error('Create category error:', error);
-        res.status(500).json({ error: 'Failed to create category' });
+        console.error('Error message:', error?.message);
+        console.error('Error stack:', error?.stack);
+        res.status(500).json({ error: error?.message || 'Failed to create category' });
     }
 });
 // PUT /api/categories/:id

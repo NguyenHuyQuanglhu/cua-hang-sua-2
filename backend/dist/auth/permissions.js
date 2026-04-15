@@ -47,7 +47,6 @@ exports.DEFAULT_PERMISSIONS = {
         reports_ai_basket_analysis: ['view'],
         settings: ['view', 'edit'],
         pos: ['view', 'add'],
-        ai_forecast: ['view'],
     },
     company_manager: {
         // All stores, no user management
@@ -76,7 +75,6 @@ exports.DEFAULT_PERMISSIONS = {
         reports_ai_basket_analysis: ['view'],
         settings: ['view'],
         pos: ['view', 'add'],
-        ai_forecast: ['view'],
     },
     store_manager: {
         // Assigned stores only

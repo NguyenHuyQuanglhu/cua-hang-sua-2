@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from "react"
-import { notFound, useParams } from "next/navigation"
+import { useParams } from "next/navigation"
 import { ChevronLeft, Phone, Mail, MapPin, Cake, User, Landmark, Trophy, Gem, Star, Shield, AlertTriangle } from "lucide-react"
 
 import Link from "next/link"
@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/alert"
 
 import { formatCurrency } from "@/lib/utils"
+import { apiClient } from "@/lib/api-client"
 import { PredictRiskForm } from "./components/predict-risk-form"
 import { getCustomer, getCustomerDebt, CustomerDebtHistory } from "../actions"
 
@@ -82,6 +83,18 @@ export default function CustomerDetailPage() {
   
   const [customer, setCustomer] = useState<CustomerData | null>(null);
   const [history, setHistory] = useState<CustomerDebtHistory[]>([]);
+  const [tierHistory, setTierHistory] = useState<Array<{
+    id: string;
+    type: string;
+    title: string;
+    message: string;
+    customerId: string;
+    customerName: string;
+    oldTier: string;
+    newTier: string;
+    lifetimePoints: number;
+    createdAt: string;
+  }>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
@@ -89,9 +102,16 @@ export default function CustomerDetailPage() {
     async function fetchData() {
       try {
         setLoading(true);
-        const [customerResult, debtResult] = await Promise.all([
+        const tierHistoryPromise = apiClient.getTierHistory(id, 50).catch(() => ({
+          success: false,
+          data: [],
+          total: 0,
+        }));
+
+        const [customerResult, debtResult, tierHistoryResult] = await Promise.all([
           getCustomer(id, { includeDebt: true, includeLoyalty: true }),
           getCustomerDebt(id, true),
+          tierHistoryPromise,
         ]);
 
         if (!customerResult.success || !customerResult.customer) {
@@ -101,6 +121,10 @@ export default function CustomerDetailPage() {
 
         setCustomer(customerResult.customer as unknown as CustomerData);
         setHistory(debtResult.history || []);
+        
+        if (tierHistoryResult.success && tierHistoryResult.data) {
+          setTierHistory(tierHistoryResult.data);
+        }
       } catch (err) {
         console.error('Error fetching customer:', err);
         setError(true);
@@ -121,8 +145,23 @@ export default function CustomerDetailPage() {
   }
 
   if (error || !customer) {
-    notFound();
-    return null;
+    return (
+      <div className="grid gap-4 md:gap-8">
+        <Card>
+          <CardHeader>
+            <CardTitle>Không thể truy cập chi tiết khách hàng</CardTitle>
+            <CardDescription>
+              Dữ liệu khách hàng không tồn tại hoặc đã có lỗi khi tải dữ liệu.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button asChild>
+              <Link href="/customers">Quay lại danh sách khách hàng</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
 
   // Separate sales and payments from history
@@ -131,10 +170,10 @@ export default function CustomerDetailPage() {
 
   // Calculate total debt: prioritize calculatedDebt > currentDebt > totalDebt > history's last runningBalance
   const lastHistoryBalance = history.length > 0
-    ? [...history].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0]?.runningBalance || 0
+    ? [...history].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0]?.runningBalance ?? 0
     : 0;
-  const totalDebt = customer.calculatedDebt || customer.currentDebt || customer.totalDebt || lastHistoryBalance || 0;
-  const creditLimit = customer.creditLimit || 0;
+  const totalDebt = customer.calculatedDebt ?? customer.currentDebt ?? customer.totalDebt ?? lastHistoryBalance ?? 0;
+  const creditLimit = customer.creditLimit ?? 0;
   const isOverLimit = creditLimit > 0 && totalDebt > creditLimit;
 
   // Calculate loyalty points from history (total spent)
@@ -330,6 +369,56 @@ export default function CustomerDetailPage() {
               ) : (
                 <TableRow>
                   <TableCell colSpan={4} className="text-center h-24">Không tìm thấy thanh toán nào.</TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {/* Tier Upgrade History */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Lịch sử lên hạng</CardTitle>
+          <CardDescription>Các lần khách hàng được nâng cấp hạng thành viên.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[120px]">Ngày</TableHead>
+                <TableHead>Từ hạng</TableHead>
+                <TableHead>Lên hạng</TableHead>
+                <TableHead className="text-right">Điểm tích lũy</TableHead>
+                <TableHead>Ghi chú</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {tierHistory.length > 0 ? (
+                tierHistory.map(tier => {
+                  const getTierBadge = (tierName: string) => {
+                    switch (tierName) {
+                      case 'diamond': return <Badge className="bg-blue-600">Kim Cương</Badge>;
+                      case 'gold': return <Badge className="bg-yellow-600">Vàng</Badge>;
+                      case 'silver': return <Badge className="bg-slate-600">Bạc</Badge>;
+                      case 'bronze': return <Badge className="bg-orange-700">Đồng</Badge>;
+                      default: return <Badge>{tierName}</Badge>;
+                    }
+                  };
+                  
+                  return (
+                    <TableRow key={tier.id}>
+                      <TableCell className="font-medium">{new Date(tier.createdAt).toLocaleDateString('vi-VN')}</TableCell>
+                      <TableCell>{getTierBadge(tier.oldTier)}</TableCell>
+                      <TableCell>{getTierBadge(tier.newTier)}</TableCell>
+                      <TableCell className="text-right">{tier.lifetimePoints.toLocaleString()} điểm</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{tier.message}</TableCell>
+                    </TableRow>
+                  );
+                })
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center h-24">Khách hàng chưa được lên hạng.</TableCell>
                 </TableRow>
               )}
             </TableBody>

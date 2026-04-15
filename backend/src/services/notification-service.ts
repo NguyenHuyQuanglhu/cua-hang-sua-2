@@ -6,7 +6,7 @@
  */
 
 import nodemailer from 'nodemailer';
-import { executeQuery } from '../db';
+import { query } from '../db/index';
 
 // Email configuration
 interface EmailConfig {
@@ -259,7 +259,7 @@ export async function sendEmailNotification(
     });
 
     return { success: true };
-  } catch (error) {
+  } catch (error: any) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     console.error('Failed to send email:', errorMessage);
 
@@ -286,7 +286,7 @@ async function logNotification(data: {
   error?: string;
 }): Promise<void> {
   try {
-    await executeQuery(
+    await query(
       `INSERT INTO NotificationLogs (Type, Channel, Recipient, Subject, Status, Error, CreatedAt)
        VALUES (@type, @channel, @recipient, @subject, @status, @error, GETDATE())`,
       {
@@ -298,7 +298,7 @@ async function logNotification(data: {
         error: data.error || null,
       }
     );
-  } catch (error) {
+  } catch (error: any) {
     // Ignore logging errors - table may not exist
     console.error('Failed to log notification:', error);
   }
@@ -311,7 +311,7 @@ export async function checkAndSendLowStockAlerts(
   alertEmail: string
 ): Promise<{ sent: boolean; productCount: number }> {
   try {
-    const result = await executeQuery(
+    const result = await query<any>(
       `SELECT p.ProductName, ISNULL(pi.Quantity, 0) as CurrentStock, p.MinStockLevel
        FROM Products p
        LEFT JOIN ProductInventory pi ON p.ProductID = pi.ProductID AND pi.StoreID = @storeId
@@ -321,17 +321,17 @@ export async function checkAndSendLowStockAlerts(
       { storeId, tenantId }
     );
 
-    const products = result.recordset || [];
+    const products = result || [];
     if (products.length === 0) {
       return { sent: false, productCount: 0 };
     }
 
     // Get store name
-    const storeResult = await executeQuery(
+    const storeResult = await query<any>(
       `SELECT StoreName FROM Stores WHERE StoreID = @storeId`,
       { storeId }
     );
-    const storeName = storeResult.recordset?.[0]?.StoreName || 'Store';
+    const storeName = storeResult?.[0]?.StoreName || 'Store';
 
     await sendEmailNotification(alertEmail, 'low_stock_alert', {
       storeName,
@@ -343,7 +343,7 @@ export async function checkAndSendLowStockAlerts(
     });
 
     return { sent: true, productCount: products.length };
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to check low stock:', error);
     return { sent: false, productCount: 0 };
   }

@@ -96,6 +96,34 @@ export default function MarketBasketAnalysisPage() {
                 )}
             </Button>
         </div>
+        
+        {/* Phần giải thích các chỉ số */}
+        <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <h4 className="font-semibold text-blue-900 mb-3">📊 Giải thích các chỉ số:</h4>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+            <div>
+              <h5 className="font-medium text-blue-800 mb-1">🎯 Độ tin cậy (Confidence)</h5>
+              <p className="text-blue-700">
+                <strong>Ví dụ: 68%</strong> có nghĩa là trong 100 khách mua sản phẩm A, 
+                có 68 khách cũng mua sản phẩm B. Càng cao càng tốt (tối đa 100%).
+              </p>
+            </div>
+            <div>
+              <h5 className="font-medium text-blue-800 mb-1">📈 Lift</h5>
+              <p className="text-blue-700">
+                <strong>Ví dụ: 1.19</strong> có nghĩa là mua sản phẩm A làm tăng khả năng mua sản phẩm B lên 19%. 
+                Lift {'>'}1 = có liên quan, Lift = 1 = không liên quan.
+              </p>
+            </div>
+            <div>
+              <h5 className="font-medium text-blue-800 mb-1">🔢 Tần suất</h5>
+              <p className="text-blue-700">
+                Số lần 2 sản phẩm được mua cùng nhau trong các đơn hàng. 
+                Số càng lớn thì mối liên hệ càng mạnh.
+              </p>
+            </div>
+          </div>
+        </div>
       </CardHeader>
       <CardContent>
         {isAnalyzing && (
@@ -127,9 +155,18 @@ export default function MarketBasketAnalysisPage() {
                             <TableHeader>
                                 <TableRow>
                                     <TableHead>Cặp sản phẩm</TableHead>
-                                    <TableHead className="text-center">Tần suất</TableHead>
-                                    <TableHead className="text-center">Độ tin cậy</TableHead>
-                                    <TableHead className="text-center">Lift</TableHead>
+                                    <TableHead className="text-center">
+                                      Tần suất
+                                      <div className="text-xs text-muted-foreground font-normal">Số lần mua cùng</div>
+                                    </TableHead>
+                                    <TableHead className="text-center">
+                                      Độ tin cậy
+                                      <div className="text-xs text-muted-foreground font-normal">% khách mua A cũng mua B</div>
+                                    </TableHead>
+                                    <TableHead className="text-center">
+                                      Lift
+                                      <div className="text-xs text-muted-foreground font-normal">Mức độ liên quan ({'>'}1 = có liên quan)</div>
+                                    </TableHead>
                                     <TableHead>Gợi ý Marketing</TableHead>
                                 </TableRow>
                             </TableHeader>
@@ -142,9 +179,19 @@ export default function MarketBasketAnalysisPage() {
                                           <div>{pair.productB_name}</div>
                                         </TableCell>
                                         <TableCell className="text-center"><Badge variant="secondary">{pair.frequency}</Badge></TableCell>
-                                        <TableCell className="text-center">{Math.round(pair.confidence * 100)}%</TableCell>
                                         <TableCell className="text-center">
-                                          <Badge variant={pair.lift > 2 ? "default" : "outline"}>
+                                          <Badge 
+                                            variant={pair.confidence > 0.7 ? "default" : pair.confidence > 0.5 ? "secondary" : "outline"}
+                                            className={pair.confidence > 0.7 ? "bg-green-500" : pair.confidence > 0.5 ? "bg-yellow-500" : ""}
+                                          >
+                                            {Math.round(pair.confidence * 100)}%
+                                          </Badge>
+                                        </TableCell>
+                                        <TableCell className="text-center">
+                                          <Badge 
+                                            variant={pair.lift > 2 ? "default" : pair.lift > 1.5 ? "secondary" : "outline"}
+                                            className={pair.lift > 2 ? "bg-green-500" : pair.lift > 1.5 ? "bg-yellow-500" : ""}
+                                          >
                                             {pair.lift.toFixed(2)}
                                           </Badge>
                                         </TableCell>
@@ -189,6 +236,45 @@ export default function MarketBasketAnalysisPage() {
                         </Table>
                     </TabsContent>
                 </Tabs>
+                
+                {/* Phần giải thích chi tiết */}
+                <div className="mt-8 p-6 bg-gray-50 border rounded-lg">
+                  <h4 className="font-semibold text-gray-900 mb-4">📚 Hướng dẫn đọc kết quả chi tiết:</h4>
+                  
+                  <div className="space-y-4">
+                    <div>
+                      <h5 className="font-medium text-gray-800 mb-2">🎯 Độ tin cậy (Confidence) - Tỷ lệ mua kèm:</h5>
+                      <ul className="text-sm text-gray-700 space-y-1 ml-4">
+                        <li>• <strong>68%</strong> = Trong 100 khách mua "Bơ Anchor", có 68 khách cũng mua "Phô mai Anchor"</li>
+                        <li>• <span className="inline-block w-4 h-4 bg-green-500 rounded mr-2"></span><strong>Xanh lá ({'>'}70%)</strong>: Rất tốt - Nên tạo combo khuyến mãi</li>
+                        <li>• <span className="inline-block w-4 h-4 bg-yellow-500 rounded mr-2"></span><strong>Vàng (50-70%)</strong>: Khá tốt - Có thể đặt gần nhau</li>
+                        <li>• <span className="inline-block w-4 h-4 bg-gray-400 rounded mr-2"></span><strong>Xám ({'<'}50%)</strong>: Yếu - Cần xem xét thêm</li>
+                      </ul>
+                    </div>
+                    
+                    <div>
+                      <h5 className="font-medium text-gray-800 mb-2">📈 Lift - Mức độ ảnh hưởng:</h5>
+                      <ul className="text-sm text-gray-700 space-y-1 ml-4">
+                        <li>• <strong>1.19</strong> = Mua "Bơ Anchor" làm tăng khả năng mua "Phô mai Anchor" lên 19%</li>
+                        <li>• <span className="inline-block w-4 h-4 bg-green-500 rounded mr-2"></span><strong>Xanh lá ({'>'}2.0)</strong>: Liên quan rất mạnh</li>
+                        <li>• <span className="inline-block w-4 h-4 bg-yellow-500 rounded mr-2"></span><strong>Vàng (1.5-2.0)</strong>: Liên quan khá mạnh</li>
+                        <li>• <span className="inline-block w-4 h-4 bg-gray-400 rounded mr-2"></span><strong>Xám (1.0-1.5)</strong>: Liên quan yếu</li>
+                        <li>• <strong>= 1.0</strong>: Không liên quan gì</li>
+                        <li>• <strong>{'<'} 1.0</strong>: Ảnh hưởng tiêu cực (hiếm gặp)</li>
+                      </ul>
+                    </div>
+                    
+                    <div>
+                      <h5 className="font-medium text-gray-800 mb-2">💡 Cách áp dụng vào kinh doanh:</h5>
+                      <ul className="text-sm text-gray-700 space-y-1 ml-4">
+                        <li>• <strong>Bố trí cửa hàng:</strong> Đặt các sản phẩm có Lift cao gần nhau</li>
+                        <li>• <strong>Khuyến mãi combo:</strong> Tạo gói ưu đãi cho các cặp có Confidence cao</li>
+                        <li>• <strong>Gợi ý bán hàng:</strong> Khi khách mua A, nhân viên gợi ý mua B</li>
+                        <li>• <strong>Quản lý tồn kho:</strong> Nhập hàng đồng bộ cho các sản phẩm liên quan</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
             </div>
         )}
       </CardContent>

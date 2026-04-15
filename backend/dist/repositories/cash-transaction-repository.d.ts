@@ -37,6 +37,7 @@ export interface PaginatedResult<T> {
  * CashTransaction repository for managing cash flow transactions
  */
 export declare class CashTransactionRepository {
+    private toSqlLocalIsoString;
     /**
      * Find all cash transactions with filtering options
      */

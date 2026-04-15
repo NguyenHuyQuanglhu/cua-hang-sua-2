@@ -13,9 +13,11 @@ export interface Sale {
     storeId: string;
     invoiceNumber: string;
     customerId?: string;
+    contractorId?: string;
     shiftId?: string;
+    projectName?: string;
     transactionDate: string;
-    status: 'pending' | 'unprinted' | 'printed';
+    status: 'pending' | 'processed' | 'unprinted' | 'printed';
     totalAmount: number;
     vatAmount: number;
     finalAmount: number;
@@ -29,6 +31,7 @@ export interface Sale {
     customerPayment?: number;
     previousDebt?: number;
     remainingDebt?: number;
+    createdBy?: string;
     createdAt?: string;
     updatedAt?: string;
 }

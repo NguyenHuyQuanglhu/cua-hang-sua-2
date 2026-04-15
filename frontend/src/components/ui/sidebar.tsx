@@ -181,7 +181,7 @@ const Sidebar = React.forwardRef<
       <aside
         ref={ref}
         className={cn("sm:flex flex-col h-screen bg-card text-card-foreground border-r transition-all duration-300 sticky top-0 overflow-x-hidden", 
-          state === 'expanded' ? 'w-64' : 'w-14',
+          state === 'expanded' ? 'w-72' : 'w-14',
           className
         )}
         data-sidebar-state={state}

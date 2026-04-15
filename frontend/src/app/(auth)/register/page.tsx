@@ -345,6 +345,10 @@ export default function RegisterPage() {
 
   const handleGoToLogin = () => {
     router.push('/login');
+    // Auto reload page after redirect to login
+    setTimeout(() => {
+      window.location.reload();
+    }, 100);
   };
 
   // Render provisioning step

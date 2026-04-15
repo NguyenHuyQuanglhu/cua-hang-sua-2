@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from "react"
 import { notFound, useParams } from "next/navigation"
-import type { PurchaseOrder, PurchaseOrderItem, Product, Unit, ThemeSettings, Supplier } from "@/lib/types"
+import type { PurchaseOrder, PurchaseOrderItem, Product, Unit, ThemeSettings, Supplier, Contractor } from "@/lib/types"
 import { PurchaseOrderInvoice } from "./components/purchase-order-invoice";
 import { useStore } from "@/contexts/store-context"
 
 interface PurchaseOrderWithDetails extends PurchaseOrder {
   supplierName?: string;
+  contractorName?: string;
 }
 
 export default function PurchaseOrderDetailPage() {
@@ -16,6 +17,7 @@ export default function PurchaseOrderDetailPage() {
   
   const [purchaseOrder, setPurchaseOrder] = useState<PurchaseOrderWithDetails | null>(null);
   const [supplier, setSupplier] = useState<Supplier | null>(null);
+  const [contractor, setContractor] = useState<Contractor | null>(null);
   const [productsMap, setProductsMap] = useState<Map<string, Product>>(new Map());
   const [unitsMap, setUnitsMap] = useState<Map<string, Unit>>(new Map());
   const [settings, setSettings] = useState<ThemeSettings | null>(null);
@@ -60,7 +62,17 @@ export default function PurchaseOrderDetailPage() {
           });
           if (supplierResponse.ok) {
             const supplierResult = await supplierResponse.json();
-            setSupplier(supplierResult.supplier);
+            setSupplier((supplierResult.supplier || supplierResult) as Supplier);
+          }
+        }
+
+        if (orderResult.purchaseOrder?.contractorId) {
+          const contractorResponse = await fetch(`/api/contractors/${orderResult.purchaseOrder.contractorId}`, {
+            headers,
+          });
+          if (contractorResponse.ok) {
+            const contractorResult = await contractorResponse.json();
+            setContractor(contractorResult as Contractor);
           }
         }
         
@@ -73,7 +85,8 @@ export default function PurchaseOrderDetailPage() {
           if (productsResponse.ok) {
             const productsResult = await productsResponse.json();
             const map = new Map<string, Product>();
-            (productsResult.data || []).forEach((p: Product) => {
+            const products = Array.isArray(productsResult) ? productsResult : (productsResult.data || []);
+            products.forEach((p: Product) => {
               if (productIds.includes(p.id)) {
                 map.set(p.id, p);
               }
@@ -89,7 +102,8 @@ export default function PurchaseOrderDetailPage() {
         if (unitsResponse.ok) {
           const unitsResult = await unitsResponse.json();
           const map = new Map<string, Unit>();
-          (unitsResult.units || []).forEach((u: Unit) => map.set(u.id, u));
+          const units = Array.isArray(unitsResult) ? unitsResult : (unitsResult.units || []);
+          units.forEach((u: Unit) => map.set(u.id, u));
           setUnitsMap(map);
         }
         
@@ -131,6 +145,7 @@ export default function PurchaseOrderDetailPage() {
       unitsMap={unitsMap} 
       settings={settings} 
       supplier={supplier} 
+      contractor={contractor}
     />
   );
 }

@@ -11,13 +11,11 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts';
-import { format, parseISO } from 'date-fns';
-import { vi } from 'date-fns/locale';
 import { formatCurrency } from '@/lib/utils';
-import type { MonthlyRevenue } from '../page';
+import type { RevenueChartPoint } from '../page';
 
 interface RevenueChartProps {
-  data: MonthlyRevenue[];
+    data: RevenueChartPoint[];
 }
 
 export function RevenueChart({ data }: RevenueChartProps) {
@@ -30,7 +28,7 @@ export function RevenueChart({ data }: RevenueChartProps) {
     }
   
     const chartData = data.map(item => ({
-        name: format(parseISO(item.month + '-01'), "MMM", { locale: vi }),
+        name: item.label,
         "Doanh Thu": item.revenue,
         "Doanh Số": item.salesCount,
     }));

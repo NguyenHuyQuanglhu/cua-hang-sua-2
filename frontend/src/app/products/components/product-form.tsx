@@ -5,6 +5,7 @@
 'use client'
 
 import { useEffect, useMemo, useState, useTransition } from 'react'
+import React from 'react'
 import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -52,10 +53,13 @@ interface Product {
 }
 
 interface PurchaseLot {
+  id?: string;
   importDate: string;
   quantity: number;
   cost: number;
   unitId: string;
+  supplierId?: string;
+  supplierName?: string;
 }
 import { upsertProduct } from '../actions'
 import { useToast } from '@/hooks/use-toast'
@@ -68,36 +72,42 @@ import { getProductInfoSuggestion } from '@/app/actions'
 import { Textarea } from '@/components/ui/textarea'
 
 // Helper component for formatted number input
-const FormattedNumberInput = ({ value, onChange, ...props }: { value: number; onChange: (value: number) => void; [key: string]: any }) => {
-  const [displayValue, setDisplayValue] = useState(value?.toLocaleString('en-US') || '');
+const FormattedNumberInput = React.forwardRef<HTMLInputElement, { value: number; onChange: (value: number) => void; [key: string]: any }>(
+  ({ value, onChange, ...props }, ref) => {
+    const [displayValue, setDisplayValue] = useState(value?.toLocaleString('en-US') || '');
 
-  useEffect(() => {
-    // Update display value when the underlying form value changes
-    setDisplayValue(value?.toLocaleString('en-US') || '');
-  }, [value]);
+    useEffect(() => {
+      // Update display value when the underlying form value changes
+      setDisplayValue(value?.toLocaleString('en-US') || '');
+    }, [value]);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const rawValue = e.target.value.replace(/,/g, '');
-    const numberValue = parseInt(rawValue, 10);
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const rawValue = e.target.value.replace(/,/g, '');
+      const numberValue = parseInt(rawValue, 10);
 
-    if (!isNaN(numberValue)) {
-      setDisplayValue(numberValue.toLocaleString('en-US'));
-      onChange(numberValue);
-    } else if (rawValue === '') {
-      setDisplayValue('');
-      onChange(0); // Or handle as needed
-    }
-  };
+      if (!isNaN(numberValue)) {
+        setDisplayValue(numberValue.toLocaleString('en-US'));
+        onChange(numberValue);
+      } else if (rawValue === '') {
+        setDisplayValue('');
+        onChange(0); // Or handle as needed
+      }
+    };
 
-  return <Input type="text" value={displayValue} onChange={handleChange} {...props} />;
-};
+    return <Input ref={ref} type="text" value={displayValue} onChange={handleChange} {...props} />;
+  }
+);
+
+FormattedNumberInput.displayName = 'FormattedNumberInput';
 
 
 const purchaseLotSchema = z.object({
+    id: z.string().optional(),
     importDate: z.string().min(1, "Ngày nhập không được để trống."),
     quantity: z.coerce.number().min(0, "Số lượng phải là số dương."),
     cost: z.coerce.number().min(0, "Giá phải là số dương."),
     unitId: z.string().min(1, "Đơn vị tính không được để trống."),
+    supplierId: z.string().min(1, "Nhà cung cấp không được để trống."),
 });
 
 const productFormSchema = z.object({
@@ -122,9 +132,10 @@ interface ProductFormProps {
   product?: Product;
   categories: Category[];
   units: Unit[];
+  suppliers: Array<{ id: string; name: string }>;
 }
 
-export function ProductForm({ isOpen, onOpenChange, product, categories, units }: ProductFormProps) {
+export function ProductForm({ isOpen, onOpenChange, product, categories, units, suppliers }: ProductFormProps) {
   const { toast } = useToast();
   const router = useRouter();
   const [isSuggesting, startSuggestionTransition] = useTransition();
@@ -166,6 +177,7 @@ export function ProductForm({ isOpen, onOpenChange, product, categories, units }
         lowStockThreshold: product.lowStockThreshold,
         purchaseLots: (product.purchaseLots || []).map((lot) => ({
           ...lot,
+          supplierId: lot.supplierId || '',
           importDate: lot.importDate ? (typeof lot.importDate === 'string' ? lot.importDate.split('T')[0] : new Date(lot.importDate).toISOString().split('T')[0]) : new Date().toISOString().split('T')[0], // Format date for input
         }))
       }
@@ -199,7 +211,7 @@ export function ProductForm({ isOpen, onOpenChange, product, categories, units }
 
   useEffect(() => {
     if (isOpen) {
-        const formData = product
+        const formData: ProductFormValues = product
                 ? {
                     name: product.name,
                     barcode: product.barcode || '',
@@ -211,7 +223,12 @@ export function ProductForm({ isOpen, onOpenChange, product, categories, units }
                     status: product.status,
                     lowStockThreshold: product.lowStockThreshold,
                     purchaseLots: product.purchaseLots && product.purchaseLots.length > 0 
-                      ? product.purchaseLots.map(lot => ({...lot, importDate: lot.importDate.split('T')[0], unitId: lot.unitId })) 
+                      ? product.purchaseLots.map(lot => ({
+                          ...lot,
+                          importDate: lot.importDate.split('T')[0],
+                          unitId: lot.unitId,
+                          supplierId: lot.supplierId || '',
+                        })) 
                       : []
                   }
                 : {
@@ -232,10 +249,15 @@ export function ProductForm({ isOpen, onOpenChange, product, categories, units }
 
 
   const onSubmit = async (data: ProductFormValues) => {
-     const dataToSubmit = {
+    console.log('[ProductForm] Form data before submit:', data);
+    console.log('[ProductForm] unitId value:', data.unitId);
+    
+    const dataToSubmit = {
       ...data,
       id: product?.id,
     };
+
+    console.log('[ProductForm] Data to submit:', dataToSubmit);
 
     const result = await upsertProduct(dataToSubmit);
     if (result.success) {
@@ -252,6 +274,15 @@ export function ProductForm({ isOpen, onOpenChange, product, categories, units }
         description: result.error,
       });
     }
+  };
+  
+  const onError = (errors: any) => {
+    console.log('[ProductForm] Validation errors:', errors);
+    toast({
+      variant: "destructive",
+      title: "Lỗi validation",
+      description: "Vui lòng kiểm tra lại các trường bắt buộc",
+    });
   };
   
   const handleGetSuggestion = () => {
@@ -315,7 +346,7 @@ export function ProductForm({ isOpen, onOpenChange, product, categories, units }
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="grid grid-rows-[1fr_auto] gap-4 overflow-hidden">
+          <form onSubmit={form.handleSubmit(onSubmit, onError)} className="grid grid-rows-[1fr_auto] gap-4 overflow-hidden">
             <div className='space-y-4 overflow-y-auto pr-6'>
               <div className="grid grid-cols-2 gap-4">
                 <FormField
@@ -394,7 +425,11 @@ export function ProductForm({ isOpen, onOpenChange, product, categories, units }
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Đơn vị tính</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value} disabled={hasExistingLots}>
+                      <Select 
+                        onValueChange={field.onChange} 
+                        value={field.value}
+                        disabled={hasExistingLots && !!product?.unitId}
+                      >
                         <FormControl>
                           <SelectTrigger>
                             <SelectValue placeholder="Chọn đơn vị tính chính" />
@@ -412,7 +447,19 @@ export function ProductForm({ isOpen, onOpenChange, product, categories, units }
                             })}
                         </SelectContent>
                       </Select>
-                       {hasExistingLots && <FormDescription>Không thể thay đổi ĐVT khi đã có lô nhập hàng.</FormDescription>}
+                      {hasExistingLots && !!product?.unitId ? (
+                        <FormDescription className="text-amber-600">
+                          Không thể thay đổi đơn vị khi đã có lô nhập hàng.
+                        </FormDescription>
+                      ) : !field.value ? (
+                        <FormDescription className="text-red-600">
+                          Vui lòng chọn đơn vị tính để có thể nhập hàng.
+                        </FormDescription>
+                      ) : (
+                        <FormDescription>
+                          Đơn vị tính cơ bản của sản phẩm.
+                        </FormDescription>
+                      )}
                       <FormMessage />
                     </FormItem>
                   )}
@@ -502,7 +549,13 @@ export function ProductForm({ isOpen, onOpenChange, product, categories, units }
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => append({ importDate: new Date().toISOString().split('T')[0], quantity: 0, cost: 0, unitId: selectedUnitId || '' })}
+                  onClick={() => append({
+                    importDate: new Date().toISOString().split('T')[0],
+                    quantity: 0,
+                    cost: 0,
+                    unitId: selectedUnitId || '',
+                    supplierId: '',
+                  })}
                   disabled={!selectedUnitId}
                 >
                   <PlusCircle className="mr-2 h-4 w-4" />
@@ -519,7 +572,7 @@ export function ProductForm({ isOpen, onOpenChange, product, categories, units }
                     const isAdjustment = lot?.cost === 0;
 
                     return (
-                        <div key={field.id} className="grid grid-cols-1 md:grid-cols-4 gap-3 p-3 border rounded-md relative">
+                      <div key={field.id} className="grid grid-cols-1 md:grid-cols-5 gap-3 p-3 border rounded-md relative">
                            <FormField
                               control={form.control}
                               name={`purchaseLots.${index}.importDate`}
@@ -543,6 +596,36 @@ export function ProductForm({ isOpen, onOpenChange, product, categories, units }
                                   <FormControl>
                                     <Input type="date" {...field} />
                                   </FormControl>
+                                  <FormMessage />
+                                </FormItem>
+                              )}
+                            />
+                            <FormField
+                              control={form.control}
+                              name={`purchaseLots.${index}.supplierId`}
+                              render={({ field }) => (
+                                <FormItem>
+                                  <FormLabel>Nhà cung cấp</FormLabel>
+                                  <Select onValueChange={field.onChange} value={field.value}>
+                                    <FormControl>
+                                      <SelectTrigger>
+                                        <SelectValue placeholder="Chọn NCC" />
+                                      </SelectTrigger>
+                                    </FormControl>
+                                    <SelectContent>
+                                      {suppliers.length === 0 ? (
+                                        <div className="p-2 text-sm text-muted-foreground text-center">
+                                          Chưa có nhà cung cấp.
+                                        </div>
+                                      ) : (
+                                        suppliers.map((supplier) => (
+                                          <SelectItem key={supplier.id} value={supplier.id}>
+                                            {supplier.name}
+                                          </SelectItem>
+                                        ))
+                                      )}
+                                    </SelectContent>
+                                  </Select>
                                   <FormMessage />
                                 </FormItem>
                               )}

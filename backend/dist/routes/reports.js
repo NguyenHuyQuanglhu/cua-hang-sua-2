@@ -28,14 +28,154 @@ router.get('/revenue', async (req, res) => {
         res.status(500).json({ error: 'Failed to get revenue report' });
     }
 });
+// GET /api/reports/supplier-debt
+router.get('/supplier-debt', async (req, res) => {
+    try {
+        const storeId = req.storeId;
+        // Get all suppliers
+        const suppliers = await (0, db_1.query)(`SELECT id, name, contact_person, phone FROM Suppliers WHERE store_id = @storeId`, { storeId });
+        // Primary source: PurchaseOrders remaining_debt (same logic as supplier debt report page)
+        let purchaseTotals = {};
+        let paidTotals = {};
+        let debtTotals = {};
+        try {
+            const purchaseSummary = await (0, db_1.query)(`SELECT
+           supplier_id,
+           SUM(COALESCE(total_amount, 0)) as total_purchases,
+           SUM(COALESCE(paid_amount, 0)) as total_paid,
+           SUM(COALESCE(remaining_debt, COALESCE(total_amount, 0) - COALESCE(paid_amount, 0))) as total_debt
+         FROM PurchaseOrders
+         WHERE store_id = @storeId AND supplier_id IS NOT NULL
+         GROUP BY supplier_id`, { storeId });
+            purchaseSummary.forEach((row) => {
+                const supplierId = row.supplier_id;
+                if (!supplierId)
+                    return;
+                purchaseTotals[supplierId] = Number(row.total_purchases) || 0;
+                paidTotals[supplierId] = Number(row.total_paid) || 0;
+                debtTotals[supplierId] = Number(row.total_debt) || 0;
+            });
+        }
+        catch {
+            // Backward-compatible fallback for environments without paid_amount/remaining_debt columns.
+            let paymentTotals = {};
+            try {
+                const purchases = await (0, db_1.query)(`SELECT supplier_id, SUM(total_amount) as total
+           FROM PurchaseOrders
+           WHERE store_id = @storeId AND supplier_id IS NOT NULL
+           GROUP BY supplier_id`, { storeId });
+                purchaseTotals = purchases.reduce((acc, p) => {
+                    acc[p.supplier_id] = Number(p.total) || 0;
+                    return acc;
+                }, {});
+            }
+            catch {
+                // PurchaseOrders table may not exist
+            }
+            try {
+                const payments = await (0, db_1.query)(`SELECT supplier_id, SUM(amount) as total
+           FROM SupplierPayments
+           WHERE store_id = @storeId AND supplier_id IS NOT NULL
+           GROUP BY supplier_id`, { storeId });
+                paymentTotals = payments.reduce((acc, p) => {
+                    acc[p.supplier_id] = Number(p.total) || 0;
+                    return acc;
+                }, {});
+            }
+            catch {
+                // SupplierPayments table may not exist
+            }
+            paidTotals = paymentTotals;
+            debtTotals = Object.keys(purchaseTotals).reduce((acc, supplierId) => {
+                const totalPurchases = purchaseTotals[supplierId] || 0;
+                const totalPaid = paymentTotals[supplierId] || 0;
+                acc[supplierId] = totalPurchases - totalPaid;
+                return acc;
+            }, {});
+        }
+        // Calculate debt for each supplier and filter those with debt > 0
+        const suppliersWithDebt = suppliers
+            .map(supplier => {
+            const totalPurchases = purchaseTotals[supplier.id] || 0;
+            const totalPaid = paidTotals[supplier.id] || 0;
+            const totalDebt = debtTotals[supplier.id] || 0;
+            return {
+                id: supplier.id,
+                supplierName: supplier.name,
+                contactPerson: supplier.contact_person,
+                phone: supplier.phone,
+                totalPurchases,
+                totalPaid,
+                totalDebt
+            };
+        })
+            .filter(supplier => supplier.totalDebt > 0);
+        res.json({ success: true, data: suppliersWithDebt });
+    }
+    catch (error) {
+        console.error('Get supplier debt report error:', error);
+        res.status(500).json({ error: 'Failed to get supplier debt report' });
+    }
+});
+// GET /api/reports/debt
+router.get('/debt', async (req, res) => {
+    try {
+        const storeId = req.storeId;
+        const { hasDebtOnly } = req.query;
+        const customersResult = await (0, db_1.query)(`SELECT
+        c.id,
+        c.full_name as customerName,
+        c.phone,
+        c.total_debt as historicalDebt,
+        c.total_paid as historicalPaid,
+        -- Calculate accurate current debt from Sales
+        (
+            SELECT COALESCE(SUM(s.remaining_debt), 0)
+            FROM Sales s
+            WHERE s.customer_id = c.id AND s.remaining_debt > 0
+        ) AS currentDebt,
+        c.customer_group as customerGroup
+       FROM Customers c
+       WHERE c.store_id = @storeId`, { storeId });
+        // Map and calculate actual debt
+        let totalDebt = 0;
+        let data = customersResult.map(c => {
+            const debtValue = c.currentDebt > 0 ? c.currentDebt : 0;
+            totalDebt += debtValue;
+            return {
+                id: c.id,
+                customerName: c.customerName,
+                phone: c.phone,
+                totalDebt: debtValue,
+                customerGroup: c.customerGroup
+            };
+        });
+        if (hasDebtOnly === 'true') {
+            data = data.filter(c => c.totalDebt > 0);
+        }
+        res.json({
+            success: true,
+            data,
+            totals: {
+                totalDebt
+            }
+        });
+    }
+    catch (error) {
+        console.error('Get customer debt report error:', error);
+        res.status(500).json({ success: false, error: 'Failed to get customer debt report' });
+    }
+});
 // GET /api/reports/sales - Sales report with filters
 router.get('/sales', async (req, res) => {
     try {
         const storeId = req.storeId;
-        const { dateFrom, dateTo } = req.query;
-        const result = await (0, db_1.query)(`SELECT 
-        s.id, s.transaction_date as transactionDate, s.final_amount as finalAmount,
-        s.status, 
+        const { dateFrom, dateTo, includeDetails } = req.query;
+        // Get detailed sales data
+        const salesData = await (0, db_1.query)(`SELECT
+        s.id, s.invoice_number as invoiceNumber, s.transaction_date as transactionDate,
+        s.total_amount as totalAmount, s.vat_amount as vatAmount, s.discount,
+        s.final_amount as finalAmount, s.status,
         c.full_name as customerName
        FROM Sales s
        LEFT JOIN Customers c ON s.customer_id = c.id
@@ -43,11 +183,56 @@ router.get('/sales', async (req, res) => {
          AND (@dateFrom IS NULL OR s.transaction_date >= @dateFrom)
          AND (@dateTo IS NULL OR s.transaction_date <= DATEADD(day, 1, @dateTo))
        ORDER BY s.transaction_date DESC`, { storeId, dateFrom: dateFrom || null, dateTo: dateTo || null });
-        res.json({ data: result, total: result.length });
+        // Calculate summary by date
+        const summaryMap = new Map();
+        let totalSales = 0;
+        let totalRevenue = 0;
+        let totalVat = 0;
+        let totalDiscount = 0;
+        for (const sale of salesData) {
+            const dateKey = new Date(sale.transactionDate).toISOString().split('T')[0];
+            const existing = summaryMap.get(dateKey) || { totalSales: 0, totalRevenue: 0, totalVat: 0, totalDiscount: 0, netRevenue: 0 };
+            existing.totalSales += 1;
+            existing.totalRevenue += sale.finalAmount || 0;
+            existing.totalVat += sale.vatAmount || 0;
+            existing.totalDiscount += sale.discount || 0;
+            existing.netRevenue += sale.finalAmount || 0;
+            summaryMap.set(dateKey, existing);
+            totalSales += 1;
+            totalRevenue += sale.finalAmount || 0;
+            totalVat += sale.vatAmount || 0;
+            totalDiscount += sale.discount || 0;
+        }
+        const summary = Array.from(summaryMap.entries()).map(([date, data]) => ({
+            date,
+            ...data
+        })).sort((a, b) => a.date.localeCompare(b.date));
+        const response = {
+            success: true,
+            summary: {
+                totalOrders: totalSales,
+                totalRevenue,
+                totalVat,
+                totalDiscount,
+                netRevenue: totalRevenue
+            },
+            dailySummary: summary,
+            totals: {
+                totalSales,
+                totalRevenue,
+                totalVat,
+                totalDiscount,
+                netRevenue: totalRevenue
+            }
+        };
+        if (includeDetails === 'true') {
+            response.details = salesData;
+        }
+        res.json(response);
     }
     catch (error) {
         console.error('Get sales report error:', error);
-        res.status(500).json({ error: 'Failed to get sales report' });
+        res.status(500).json({ success: false, error: 'Failed to get sales report' });
     }
 });
 // GET /api/reports/inventory
@@ -55,6 +240,7 @@ router.get('/inventory', async (req, res) => {
     try {
         const storeId = req.storeId;
         const { dateFrom, dateTo, search } = req.query;
+        console.log('[Inventory Report] Request:', { storeId, dateFrom, dateTo, search });
         const params = {
             storeId,
             dateFrom: dateFrom || null,
@@ -76,25 +262,6 @@ router.get('/inventory', async (req, res) => {
         p.cost_price as averageCost,
         0 as lowStockThreshold,
         
-        -- Calculate opening stock (current stock + sales - purchases in period)
-        ISNULL(p.stock_quantity, 0) + 
-        ISNULL((SELECT SUM(si.quantity) 
-                FROM SalesItems si 
-                JOIN Sales s ON si.sales_transaction_id = s.id 
-                WHERE si.product_id = p.id 
-                  AND s.store_id = @storeId
-                  AND (@dateFrom IS NULL OR s.transaction_date >= @dateFrom)
-                  AND (@dateTo IS NULL OR s.transaction_date <= DATEADD(day, 1, @dateTo))
-               ), 0) -
-        ISNULL((SELECT SUM(poi.quantity) 
-                FROM PurchaseOrderItems poi 
-                JOIN PurchaseOrders po ON poi.purchase_order_id = po.id 
-                WHERE poi.product_id = p.id 
-                  AND po.store_id = @storeId
-                  AND (@dateFrom IS NULL OR po.import_date >= @dateFrom)
-                  AND (@dateTo IS NULL OR po.import_date <= DATEADD(day, 1, @dateTo))
-               ), 0) as openingStock,
-        
         -- Import stock (purchases in period)
         ISNULL((SELECT SUM(poi.quantity) 
                 FROM PurchaseOrderItems poi 
@@ -111,11 +278,33 @@ router.get('/inventory', async (req, res) => {
                 JOIN Sales s ON si.sales_transaction_id = s.id 
                 WHERE si.product_id = p.id 
                   AND s.store_id = @storeId
+                  AND s.status = 'completed'
                   AND (@dateFrom IS NULL OR s.transaction_date >= @dateFrom)
                   AND (@dateTo IS NULL OR s.transaction_date <= DATEADD(day, 1, @dateTo))
                ), 0) as exportStock,
         
-        -- Check if low stock (always 0 since we don't have threshold column)
+        -- Calculate opening stock: closingStock + exportStock - importStock
+        -- This gives us the stock at the beginning of the period
+        ISNULL(p.stock_quantity, 0) + 
+        ISNULL((SELECT SUM(si.quantity) 
+                FROM SalesItems si 
+                JOIN Sales s ON si.sales_transaction_id = s.id 
+                WHERE si.product_id = p.id 
+                  AND s.store_id = @storeId
+                  AND s.status = 'completed'
+                  AND (@dateFrom IS NULL OR s.transaction_date >= @dateFrom)
+                  AND (@dateTo IS NULL OR s.transaction_date <= DATEADD(day, 1, @dateTo))
+               ), 0) -
+        ISNULL((SELECT SUM(poi.quantity) 
+                FROM PurchaseOrderItems poi 
+                JOIN PurchaseOrders po ON poi.purchase_order_id = po.id 
+                WHERE poi.product_id = p.id 
+                  AND po.store_id = @storeId
+                  AND (@dateFrom IS NULL OR po.import_date >= @dateFrom)
+                  AND (@dateTo IS NULL OR po.import_date <= DATEADD(day, 1, @dateTo))
+               ), 0) as openingStock,
+        
+        -- Check if low stock (always 0 since column doesn't exist yet)
         0 as isLowStock
         
        FROM Products p
@@ -181,69 +370,6 @@ router.get('/inventory', async (req, res) => {
         res.status(500).json({ success: false, error: 'Failed to get inventory report' });
     }
 });
-// GET /api/reports/debt - Customer debt report
-router.get('/debt', async (req, res) => {
-    try {
-        const storeId = req.storeId;
-        const { hasDebtOnly } = req.query;
-        let havingClause = '';
-        if (hasDebtOnly === 'true') {
-            havingClause = 'HAVING ISNULL(SUM(s.final_amount), 0) - ISNULL(SUM(s.customer_payment), 0) > 0';
-        }
-        const result = await (0, db_1.query)(`SELECT 
-        c.id, 
-        c.full_name as name, 
-        c.phone, 
-        c.email,
-        ISNULL(SUM(s.final_amount), 0) as totalSales,
-        ISNULL(SUM(s.customer_payment), 0) as totalPayments,
-        ISNULL(SUM(s.final_amount), 0) - ISNULL(SUM(s.customer_payment), 0) as totalDebt,
-        COUNT(s.id) as transactionCount
-       FROM Customers c
-       LEFT JOIN Sales s ON c.id = s.customer_id AND s.store_id = @storeId
-       WHERE c.store_id = @storeId
-       GROUP BY c.id, c.full_name, c.phone, c.email
-       ${havingClause}
-       ORDER BY totalDebt DESC`, { storeId });
-        // Calculate totals
-        const totals = {
-            totalSales: 0,
-            totalPayments: 0,
-            totalDebt: 0,
-        };
-        result.forEach((row) => {
-            totals.totalSales += Number(row.totalSales) || 0;
-            totals.totalPayments += Number(row.totalPayments) || 0;
-            totals.totalDebt += Number(row.totalDebt) || 0;
-        });
-        res.json({ data: result, total: result.length, totals });
-    }
-    catch (error) {
-        console.error('Get debt report error:', error);
-        res.status(500).json({ error: 'Failed to get debt report' });
-    }
-});
-// GET /api/reports/supplier-debt - Supplier debt report
-router.get('/supplier-debt', async (req, res) => {
-    try {
-        const storeId = req.storeId;
-        const result = await (0, db_1.query)(`SELECT 
-        s.id, s.name, s.phone, s.email,
-        ISNULL(SUM(p.remaining_debt), 0) as totalDebt,
-        COUNT(p.id) as purchaseCount
-       FROM Suppliers s
-       LEFT JOIN Purchases p ON s.id = p.supplier_id
-       WHERE s.store_id = @storeId
-       GROUP BY s.id, s.name, s.phone, s.email
-       HAVING ISNULL(SUM(p.remaining_debt), 0) > 0
-       ORDER BY totalDebt DESC`, { storeId });
-        res.json({ data: result, total: result.length });
-    }
-    catch (error) {
-        console.error('Get supplier debt report error:', error);
-        res.status(500).json({ error: 'Failed to get supplier debt report' });
-    }
-});
 // GET /api/reports/profit - Profit report
 router.get('/profit', async (req, res) => {
     try {
@@ -306,6 +432,13 @@ router.get('/profit', async (req, res) => {
         res.json({
             data,
             total: data.length,
+            summary: {
+                totalQuantity,
+                totalRevenue,
+                totalCost,
+                totalProfit,
+                profitMargin,
+            },
             totals: {
                 totalQuantity,
                 totalRevenue,
@@ -325,25 +458,200 @@ router.get('/sold-products', async (req, res) => {
     try {
         const storeId = req.storeId;
         const { from, to } = req.query;
+        console.log('[Sold Products] ===== REQUEST START =====');
+        console.log('[Sold Products] Request:', { storeId, from, to });
         const result = await (0, db_1.query)(`SELECT 
-        p.id, p.name, p.sku as barcode,
+        p.id, 
+        p.name, 
+        p.sku as barcode,
         c.name as categoryName,
         ISNULL(SUM(si.quantity), 0) as totalSold,
-        ISNULL(SUM(si.subtotal), 0) as totalRevenue
+        ISNULL(SUM(si.quantity * si.price), 0) as totalRevenue
        FROM Products p
-       LEFT JOIN SaleItems si ON p.id = si.productId
-       LEFT JOIN Sales s ON si.saleId = s.id
+       LEFT JOIN SalesItems si ON p.id = si.product_id
+       LEFT JOIN Sales s ON si.sales_transaction_id = s.id AND s.status IN ('unprinted', 'printed', 'pending', 'completed')
        LEFT JOIN Categories c ON p.category_id = c.id
        WHERE p.store_id = @storeId
-         AND (s.id IS NULL OR (s.transaction_date >= @from AND s.transaction_date <= @to))
+         AND (s.id IS NULL OR (s.transaction_date >= @from AND s.transaction_date <= DATEADD(day, 1, CAST(@to AS DATETIME))))
        GROUP BY p.id, p.name, p.sku, c.name
-       ORDER BY totalSold DESC`, { storeId, from, to });
+       HAVING SUM(si.quantity) > 0
+       ORDER BY totalRevenue DESC`, { storeId, from, to });
+        console.log('[Sold Products] SUCCESS - Result count:', result.length);
+        if (result.length > 0) {
+            console.log('[Sold Products] Sample:', result[0]);
+        }
         res.json(result);
     }
     catch (error) {
-        console.error('Get sold products report error:', error);
+        console.error('[Sold Products] ===== ERROR =====');
+        console.error('[Sold Products] Error details:', error);
         res.status(500).json({ error: 'Failed to get sold products report' });
     }
 });
 exports.default = router;
+// GET /api/reports/sales-trends - Sales trends analysis
+router.get('/sales-trends', async (req, res) => {
+    try {
+        const storeId = req.storeId;
+        const { dateFrom, dateTo, groupBy = 'day' } = req.query;
+        let groupByClause = 'CAST(s.transaction_date AS DATE)';
+        let selectClause = 'CAST(s.transaction_date AS DATE) as date';
+        if (groupBy === 'week') {
+            groupByClause = 'DATEPART(YEAR, s.transaction_date), DATEPART(WEEK, s.transaction_date)';
+            selectClause = 'DATEPART(YEAR, s.transaction_date) as year, DATEPART(WEEK, s.transaction_date) as week';
+        }
+        else if (groupBy === 'month') {
+            groupByClause = 'DATEPART(YEAR, s.transaction_date), DATEPART(MONTH, s.transaction_date)';
+            selectClause = 'DATEPART(YEAR, s.transaction_date) as year, DATEPART(MONTH, s.transaction_date) as month';
+        }
+        const result = await (0, db_1.query)(`SELECT 
+        ${selectClause},
+        COUNT(s.id) as transactionCount,
+        SUM(s.total_amount) as totalSales,
+        SUM(s.final_amount) as totalRevenue,
+        SUM(s.discount + ISNULL(s.tier_discount_amount, 0) + ISNULL(s.points_discount, 0)) as totalDiscounts,
+        AVG(s.final_amount) as averageTransactionValue,
+        COUNT(DISTINCT s.customer_id) as uniqueCustomers
+       FROM Sales s
+       WHERE s.store_id = @storeId
+         AND s.status IN ('pending', 'printed')
+         AND (@dateFrom IS NULL OR s.transaction_date >= @dateFrom)
+         AND (@dateTo IS NULL OR s.transaction_date <= DATEADD(day, 1, @dateTo))
+       GROUP BY ${groupByClause}
+       ORDER BY ${groupByClause}`, { storeId, dateFrom: dateFrom || null, dateTo: dateTo || null });
+        res.json({
+            success: true,
+            data: result,
+            groupBy
+        });
+    }
+    catch (error) {
+        console.error('Get sales trends error:', error);
+        res.status(500).json({ success: false, error: 'Failed to get sales trends' });
+    }
+});
+// GET /api/reports/product-performance - Product performance analysis
+router.get('/product-performance', async (req, res) => {
+    try {
+        const storeId = req.storeId;
+        const { dateFrom, dateTo, limit = 50 } = req.query;
+        const result = await (0, db_1.query)(`SELECT TOP ${limit}
+        p.id as productId,
+        p.name as productName,
+        p.sku,
+        c.name as categoryName,
+        p.cost_price as costPrice,
+        p.selling_price as sellingPrice,
+        COUNT(DISTINCT si.sale_id) as timesSold,
+        SUM(si.quantity) as totalQuantitySold,
+        SUM(si.subtotal) as totalRevenue,
+        SUM(si.quantity * p.cost_price) as totalCost,
+        SUM(si.subtotal - (si.quantity * p.cost_price)) as totalProfit,
+        AVG(si.price) as averageSellingPrice,
+        CASE 
+          WHEN SUM(si.subtotal) > 0 THEN
+            ((SUM(si.subtotal - (si.quantity * p.cost_price)) / SUM(si.subtotal)) * 100)
+          ELSE 0
+        END as profitMarginPercentage,
+        p.stock_quantity as currentStock,
+        p.low_stock_threshold as lowStockThreshold,
+        MAX(s.transaction_date) as lastSaleDate
+       FROM Products p
+       LEFT JOIN Categories c ON p.CategoryId = c.id
+       LEFT JOIN SaleItems si ON p.id = si.product_id
+       LEFT JOIN Sales s ON si.sale_id = s.id 
+         AND s.status IN ('pending', 'printed')
+         AND (@dateFrom IS NULL OR s.transaction_date >= @dateFrom)
+         AND (@dateTo IS NULL OR s.transaction_date <= DATEADD(day, 1, @dateTo))
+       WHERE p.store_id = @storeId
+         AND p.status = 'active'
+       GROUP BY 
+         p.id, p.name, p.sku, c.name, 
+         p.cost_price, p.selling_price, p.stock_quantity, p.low_stock_threshold
+       ORDER BY totalRevenue DESC`, { storeId, dateFrom: dateFrom || null, dateTo: dateTo || null });
+        res.json({
+            success: true,
+            data: result.map((item) => ({
+                productId: item.productId,
+                productName: item.productName,
+                sku: item.sku,
+                categoryName: item.categoryName,
+                costPrice: Number(item.costPrice) || 0,
+                sellingPrice: Number(item.sellingPrice) || 0,
+                timesSold: Number(item.timesSold) || 0,
+                totalQuantitySold: Number(item.totalQuantitySold) || 0,
+                totalRevenue: Number(item.totalRevenue) || 0,
+                totalCost: Number(item.totalCost) || 0,
+                totalProfit: Number(item.totalProfit) || 0,
+                averageSellingPrice: Number(item.averageSellingPrice) || 0,
+                profitMarginPercentage: Number(item.profitMarginPercentage) || 0,
+                currentStock: Number(item.currentStock) || 0,
+                lowStockThreshold: Number(item.lowStockThreshold) || 0,
+                lastSaleDate: item.lastSaleDate
+            }))
+        });
+    }
+    catch (error) {
+        console.error('Get product performance error:', error);
+        res.status(500).json({ success: false, error: 'Failed to get product performance' });
+    }
+});
+// GET /api/reports/customer-analytics - Customer analytics
+router.get('/customer-analytics', async (req, res) => {
+    try {
+        const storeId = req.storeId;
+        const { dateFrom, dateTo, limit = 50 } = req.query;
+        const result = await (0, db_1.query)(`SELECT TOP ${limit}
+        c.id as customerId,
+        c.full_name as fullName,
+        c.phone,
+        c.email,
+        c.customer_type as customerType,
+        c.loyalty_tier as loyaltyTier,
+        c.total_debt as totalDebt,
+        c.total_paid as totalPaid,
+        COUNT(s.id) as totalPurchases,
+        SUM(s.final_amount) as totalSpent,
+        AVG(s.final_amount) as averageOrderValue,
+        MAX(s.transaction_date) as lastPurchaseDate,
+        MIN(s.transaction_date) as firstPurchaseDate,
+        DATEDIFF(DAY, MAX(s.transaction_date), GETDATE()) as daysSinceLastPurchase,
+        SUM(s.final_amount) - c.total_debt as customerLifetimeValue
+       FROM Customers c
+       LEFT JOIN Sales s ON c.id = s.customer_id 
+         AND s.status IN ('pending', 'printed')
+         AND (@dateFrom IS NULL OR s.transaction_date >= @dateFrom)
+         AND (@dateTo IS NULL OR s.transaction_date <= DATEADD(day, 1, @dateTo))
+       WHERE c.store_id = @storeId
+         AND c.status = 'active'
+       GROUP BY 
+         c.id, c.full_name, c.phone, c.email,
+         c.customer_type, c.loyalty_tier, c.total_debt, c.total_paid
+       ORDER BY totalSpent DESC`, { storeId, dateFrom: dateFrom || null, dateTo: dateTo || null });
+        res.json({
+            success: true,
+            data: result.map((item) => ({
+                customerId: item.customerId,
+                fullName: item.fullName,
+                phone: item.phone,
+                email: item.email,
+                customerType: item.customerType,
+                loyaltyTier: item.loyaltyTier,
+                totalDebt: Number(item.totalDebt) || 0,
+                totalPaid: Number(item.totalPaid) || 0,
+                totalPurchases: Number(item.totalPurchases) || 0,
+                totalSpent: Number(item.totalSpent) || 0,
+                averageOrderValue: Number(item.averageOrderValue) || 0,
+                lastPurchaseDate: item.lastPurchaseDate,
+                firstPurchaseDate: item.firstPurchaseDate,
+                daysSinceLastPurchase: Number(item.daysSinceLastPurchase) || 0,
+                customerLifetimeValue: Number(item.customerLifetimeValue) || 0
+            }))
+        });
+    }
+    catch (error) {
+        console.error('Get customer analytics error:', error);
+        res.status(500).json({ success: false, error: 'Failed to get customer analytics' });
+    }
+});
 //# sourceMappingURL=reports.js.map

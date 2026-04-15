@@ -27,6 +27,7 @@ interface UserRecord {
   status: string;
   failed_login_attempts: number;
   locked_until: Date | null;
+  photo_url: string | null;
 }
 
 interface UserStoreRecord {
@@ -165,6 +166,7 @@ router.post('/login', async (req: Request, res: Response) => {
           displayName: user.display_name,
           role: user.role,
           permissions: user.permissions ? JSON.parse(user.permissions) : null,
+          photoURL: user.photo_url || undefined,
         },
         stores: stores.map((s) => s.store_id),
         token,
@@ -263,6 +265,7 @@ router.post('/login-legacy', async (req: Request, res: Response) => {
         displayName: user.display_name,
         role: user.role,
         permissions: user.permissions ? JSON.parse(user.permissions) : null,
+        photoURL: user.photo_url || undefined,
       },
       stores: stores.map((s) => s.store_id),
       token,
@@ -403,6 +406,38 @@ router.post('/refresh', authenticate, async (req: AuthRequest, res: Response) =>
   } catch (error) {
     console.error('Refresh error:', error);
     res.status(500).json({ error: 'Không thể làm mới phiên đăng nhập' });
+  }
+});
+
+/**
+ * POST /api/auth/verify-password
+ * 
+ * Verify password for dangerous zone access in settings.
+ * Uses a fixed password: 123456789
+ * Note: This endpoint does NOT require authentication since it's just
+ * verifying a fixed password for UI access control.
+ */
+router.post('/verify-password', async (req: Request, res: Response) => {
+  try {
+    const { password } = req.body;
+
+    if (!password) {
+      res.status(400).json({ error: 'Mật khẩu là bắt buộc' });
+      return;
+    }
+
+    // Fixed password for dangerous zone: 123456789
+    const DANGER_ZONE_PASSWORD = '123456789';
+
+    if (password !== DANGER_ZONE_PASSWORD) {
+      res.status(401).json({ error: 'Mật khẩu không chính xác' });
+      return;
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Verify password error:', error);
+    res.status(500).json({ error: 'Không thể xác thực mật khẩu' });
   }
 });
 

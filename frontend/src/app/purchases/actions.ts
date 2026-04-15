@@ -71,6 +71,7 @@ export async function createPurchase(purchase: Record<string, unknown>): Promise
 export async function createPurchaseOrder(
   orderData: {
     supplierId?: string;
+    contractorId?: string;
     importDate: string;
     notes?: string;
     totalAmount: number;
@@ -121,6 +122,7 @@ export async function updatePurchaseOrder(
   purchaseId: string,
   orderData: {
     supplierId?: string;
+    contractorId?: string;
     importDate: string;
     notes?: string;
     totalAmount: number;
@@ -182,6 +184,7 @@ export async function generatePurchaseOrdersExcel(
     importDate: string;
     supplierId?: string;
     supplierName?: string;
+    contractorName?: string;
     itemCount?: number;
     totalAmount: number;
     notes?: string;
@@ -204,6 +207,7 @@ export async function generatePurchaseOrdersExcel(
       'Mã đơn': order.orderNumber,
       'Ngày nhập': new Date(order.importDate).toLocaleDateString('vi-VN'),
       'Nhà cung cấp': order.supplierName || suppliersMap.get(order.supplierId || '') || 'N/A',
+      'Nhà thầu': order.contractorName || 'N/A',
       'Số SP': order.itemCount || 0,
       'Tổng tiền': order.totalAmount,
       'Ghi chú': order.notes || '',
@@ -219,6 +223,7 @@ export async function generatePurchaseOrdersExcel(
       { wch: 15 },  // Mã đơn
       { wch: 12 },  // Ngày nhập
       { wch: 25 },  // Nhà cung cấp
+      { wch: 25 },  // Nhà thầu
       { wch: 8 },   // Số SP
       { wch: 15 },  // Tổng tiền
       { wch: 30 },  // Ghi chú

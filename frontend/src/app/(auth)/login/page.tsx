@@ -116,6 +116,10 @@ export default function LoginPage() {
         setTimeout(() => {
           const redirectPath = ROLE_REDIRECTS[result.user.role] || '/dashboard';
           router.push(redirectPath);
+          // Auto reload page after successful login
+          setTimeout(() => {
+            window.location.reload();
+          }, 100);
         }, 1000);
       }
     } catch (err) {

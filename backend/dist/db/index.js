@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.tenantRouter = exports.TenantRouter = exports.transactionUpdate = exports.transactionInsert = exports.transactionQueryOne = exports.transactionQuery = exports.withTransaction = exports.queryPaginated = exports.remove = exports.update = exports.insert = exports.queryOne = exports.query = exports.sql = exports.closeConnection = exports.getConnection = void 0;
+exports.logDatabaseQuery = exports.withTransactionErrorHandling = exports.retryDatabaseOperation = exports.isRetryableError = exports.handleSqlServerError = exports.withDatabaseErrorHandling = exports.tenantRouter = exports.TenantRouter = exports.transactionUpdate = exports.transactionInsert = exports.transactionQueryOne = exports.transactionQuery = exports.withTransaction = exports.queryPaginated = exports.remove = exports.update = exports.insert = exports.queryOne = exports.query = exports.sql = exports.closeConnection = exports.getConnection = void 0;
 var connection_1 = require("./connection");
 Object.defineProperty(exports, "getConnection", { enumerable: true, get: function () { return connection_1.getConnection; } });
 Object.defineProperty(exports, "closeConnection", { enumerable: true, get: function () { return connection_1.closeConnection; } });
@@ -23,4 +23,12 @@ Object.defineProperty(exports, "transactionUpdate", { enumerable: true, get: fun
 var tenant_router_1 = require("./tenant-router");
 Object.defineProperty(exports, "TenantRouter", { enumerable: true, get: function () { return tenant_router_1.TenantRouter; } });
 Object.defineProperty(exports, "tenantRouter", { enumerable: true, get: function () { return tenant_router_1.tenantRouter; } });
+// Database error handling
+var errorHandler_1 = require("./errorHandler");
+Object.defineProperty(exports, "withDatabaseErrorHandling", { enumerable: true, get: function () { return errorHandler_1.withDatabaseErrorHandling; } });
+Object.defineProperty(exports, "handleSqlServerError", { enumerable: true, get: function () { return errorHandler_1.handleSqlServerError; } });
+Object.defineProperty(exports, "isRetryableError", { enumerable: true, get: function () { return errorHandler_1.isRetryableError; } });
+Object.defineProperty(exports, "retryDatabaseOperation", { enumerable: true, get: function () { return errorHandler_1.retryDatabaseOperation; } });
+Object.defineProperty(exports, "withTransactionErrorHandling", { enumerable: true, get: function () { return errorHandler_1.withTransaction; } });
+Object.defineProperty(exports, "logDatabaseQuery", { enumerable: true, get: function () { return errorHandler_1.logDatabaseQuery; } });
 //# sourceMappingURL=index.js.map

@@ -23,6 +23,7 @@ export interface TenantDbUser {
     role: UserRole;
     permissions?: Permissions;
     status: string;
+    photoURL?: string;
 }
 /**
  * Store assignment info
@@ -50,6 +51,7 @@ export interface AuthenticationResult {
         tenantId: string;
         email: string;
         displayName?: string;
+        photoURL?: string;
         role: UserRole;
         permissions: Permissions;
     };

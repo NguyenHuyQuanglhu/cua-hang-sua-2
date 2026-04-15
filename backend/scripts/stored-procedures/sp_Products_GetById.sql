@@ -47,7 +47,7 @@ BEGIN
         ISNULL(pi.Quantity, p.stock_quantity) AS currentStock
     FROM Products p
     LEFT JOIN Categories c ON p.category_id = c.id
-    LEFT JOIN ProductInventory pi ON p.id = pi.ProductId AND pi.StoreId = @storeId
+    LEFT JOIN ProductInventory pi ON p.id = pi.ProductId AND pi.StoreId = @storeId AND pi.UnitId = p.unit_id
     WHERE p.id = @id AND p.store_id = @storeId;
 END
 GO

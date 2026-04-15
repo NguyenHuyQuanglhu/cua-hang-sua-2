@@ -75,11 +75,13 @@ import { Input } from "@/components/ui/input"
 import { getProducts, getProduct, updateProductStatus, deleteProduct, generateProductTemplate } from "./actions"
 import { getCategories } from "@/app/categories/actions"
 import { getUnits } from "@/app/units/actions"
+import { getSuppliers } from "@/app/suppliers/actions"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
 import { ImportProducts } from "./components/import-products"
-import { QuickPurchaseDialog } from "./components/quick-purchase-dialog"
+import { QuickImportDialog } from "../purchases/components/quick-import-dialog"
 import { useUserRole } from "@/hooks/use-user-role"
+import { useStoreId } from "@/contexts/store-context"
 
 
 // Product type from SQL Server API
@@ -139,11 +141,13 @@ export default function ProductsPage() {
   const [products, setProducts] = useState<ProductWithStock[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [units, setUnits] = useState<Unit[]>([]);
+  const [suppliers, setSuppliers] = useState<Array<{ id: string; name: string }>>([]);
   const [isLoading, setIsLoading] = useState(true);
   
   const { toast } = useToast();
   const router = useRouter();
   const { permissions, isLoading: isRoleLoading } = useUserRole();
+  const selectedStoreId = useStoreId();
 
   // Track previous filter values to detect changes
   const prevFiltersRef = useRef({ debouncedSearchTerm, categoryFilter: categoryFilter.join(','), statusFilter });
@@ -191,9 +195,10 @@ export default function ProductsPage() {
   useEffect(() => {
     const fetchCategoriesAndUnits = async () => {
       try {
-        const [categoriesResult, unitsResult] = await Promise.all([
+        const [categoriesResult, unitsResult, suppliersResult] = await Promise.all([
           getCategories(),
           getUnits(),
+          getSuppliers(),
         ]);
         
         if (categoriesResult.success && categoriesResult.categories) {
@@ -203,13 +208,27 @@ export default function ProductsPage() {
         if (unitsResult.success && unitsResult.units) {
           setUnits(unitsResult.units);
         }
+
+        if (suppliersResult.success && suppliersResult.suppliers) {
+          setSuppliers(suppliersResult.suppliers.map((s: any) => ({ id: s.id, name: s.name })));
+        }
       } catch (error) {
-        console.error('Error fetching categories/units:', error);
+        console.error('Error fetching categories/units/suppliers:', error);
       }
     };
     
     fetchCategoriesAndUnits();
   }, []); // Only run once on mount
+
+  // Reload products when store changes
+  useEffect(() => {
+    if (selectedStoreId) {
+      console.log('[Products] Store changed to:', selectedStoreId);
+      // Reset to page 1 and reload
+      setCurrentPage(1);
+      fetchProducts();
+    }
+  }, [selectedStoreId]);
 
   // Fetch products and handle page reset
   useEffect(() => {
@@ -308,14 +327,14 @@ export default function ProductsPage() {
       const result = await generateProductTemplate();
       if (result.success && result.data) {
         const link = document.createElement("a");
-        link.href = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${result.data}`;
-        link.download = "product_template.xlsx";
+        link.href = `data:text/csv;charset=utf-8;base64,${result.data}`;
+        link.download = "product_template.csv";
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
-        toast({ title: "Thành công", description: "Đã tải xuống file mẫu." });
+        toast({ title: "Thành công", description: "Đã tải xuống file mẫu sản phẩm." });
       } else {
-        toast({ variant: "destructive", title: "Lỗi", description: result.error });
+        toast({ variant: "destructive", title: "Lỗi", description: result.error || "Không thể tạo file mẫu" });
       }
     });
   }
@@ -432,6 +451,10 @@ export default function ProductsPage() {
     purchaseLots: (selectedProduct as any).purchaseLots || [], // Include purchase lots from API
   } : undefined;
 
+  const selectedQuickImportProduct = selectedProductForQuickPurchase
+    ? products.find((p) => p.id === selectedProductForQuickPurchase)
+    : undefined;
+
   return (
     <>
       <ProductForm 
@@ -449,6 +472,7 @@ export default function ProductsPage() {
         product={productForForm}
         categories={categories || []}
         units={units || []}
+        suppliers={suppliers || []}
       />
       <AlertDialog open={!!productToDelete} onOpenChange={(open) => !open && setProductToDelete(null)}>
         <AlertDialogContent>
@@ -546,7 +570,12 @@ export default function ProductsPage() {
               <>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <Button size="sm" className="h-8 gap-1" variant="outline" onClick={() => setIsQuickPurchaseOpen(true)}>
+                    <Button
+                      size="sm"
+                      className="h-8 gap-1"
+                      variant="outline"
+                      onClick={() => router.push('/purchases/quick-import')}
+                    >
                       <Zap className="h-3.5 w-3.5 text-yellow-500" />
                       <span className="sr-only sm:not-sr-only sm:whitespace-nowrap">
                         Nhập nhanh
@@ -818,31 +847,32 @@ export default function ProductsPage() {
         ))}
       </Tabs>
 
-      <QuickPurchaseDialog
-        isOpen={isQuickPurchaseOpen}
-        onOpenChange={(open) => {
-          setIsQuickPurchaseOpen(open);
-          if (!open) {
-            // Reset selected product and clear sorting when dialog closes
-            setSelectedProductForQuickPurchase(undefined);
-            setCurrentPage(1);
-            setSortKey(null);
-            setSortDirection('asc');
-          }
-        }}
-        products={products.map(p => ({ 
-          id: p.id, 
-          name: p.name, 
-          unitId: p.unitId,
-          costPrice: p.averageCost 
-        }))}
-        units={units}
-        preselectedProductId={selectedProductForQuickPurchase}
-        onSuccess={() => {
-          // Refresh products list after successful purchase
-          fetchProducts();
-        }}
-      />
+      {selectedQuickImportProduct && (
+        <QuickImportDialog
+          open={isQuickPurchaseOpen}
+          onOpenChange={(open) => {
+            setIsQuickPurchaseOpen(open);
+            if (!open) {
+              setSelectedProductForQuickPurchase(undefined);
+              setCurrentPage(1);
+              setSortKey(null);
+              setSortDirection('asc');
+            }
+          }}
+          product={{
+            id: selectedQuickImportProduct.id,
+            name: selectedQuickImportProduct.name,
+            sku: selectedQuickImportProduct.barcode || '',
+            costPrice: selectedQuickImportProduct.averageCost || 0,
+            unitId: selectedQuickImportProduct.unitId,
+            unitName: unitsMap.get(selectedQuickImportProduct.unitId)?.name || 'đơn vị',
+            currentStock: selectedQuickImportProduct.currentStock || 0,
+          }}
+          onSuccess={() => {
+            fetchProducts();
+          }}
+        />
+      )}
     </>
   )
 }

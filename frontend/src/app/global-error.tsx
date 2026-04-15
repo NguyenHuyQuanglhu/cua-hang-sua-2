@@ -1,5 +1,7 @@
 'use client';
 
+import { useEffect } from 'react';
+
 export default function GlobalError({
   error,
   reset,
@@ -7,6 +9,25 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  useEffect(() => {
+    const message = String(error?.message || '');
+    const isChunkError = message.includes('ChunkLoadError') || message.includes('Loading chunk');
+
+    if (!isChunkError) return;
+
+    const reloadKey = 'chunk-reload-attempted';
+    const attempted = sessionStorage.getItem(reloadKey);
+
+    if (!attempted) {
+      sessionStorage.setItem(reloadKey, '1');
+      window.location.reload();
+      return;
+    }
+
+    // Do not loop endlessly if the reload could not fix the issue.
+    sessionStorage.removeItem(reloadKey);
+  }, [error]);
+
   return (
     <html>
       <body>

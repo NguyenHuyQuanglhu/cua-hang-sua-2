@@ -3,7 +3,7 @@
  * Chạy: npx ts-node src/scripts/categorize-products.ts
  */
 
-import { getPool } from '../db/connection';
+import { getConnection } from '../db/connection';
 import { v4 as uuidv4 } from 'uuid';
 
 // Định nghĩa các loại sản phẩm dựa trên từ khóa
@@ -46,7 +46,7 @@ const CATEGORY_RULES: { name: string; keywords: string[]; description: string }[
 ];
 
 async function main() {
-  const pool = await getPool();
+  const pool = await getConnection();
 
   try {
     // 1. Lấy storeId đầu tiên để tạo categories

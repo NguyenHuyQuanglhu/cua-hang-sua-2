@@ -26,9 +26,6 @@ const STATUS_LABELS = {
 const PAYMENT_METHOD_LABELS = {
     cod: 'Thanh toán khi nhận hàng (COD)',
     bank_transfer: 'Chuyển khoản ngân hàng',
-    momo: 'Ví MoMo',
-    vnpay: 'VNPay',
-    zalopay: 'ZaloPay',
 };
 /**
  * Format currency in VND
@@ -99,27 +96,34 @@ class EmailNotificationService {
         return this.transporter !== null && this.config !== null;
     }
     /**
-     * Send an email
+     * Send an email (public method for custom emails)
      */
-    async sendEmail(to, subject, html) {
+    async sendEmail(options) {
         if (!this.isConfigured()) {
-            console.warn('Email service not configured. Skipping email to:', to);
+            console.warn('Email service not configured. Skipping email to:', options.to);
             return false;
         }
         try {
             await this.transporter.sendMail({
                 from: this.config.from,
-                to,
-                subject,
-                html,
+                to: options.to,
+                subject: options.subject,
+                text: options.text,
+                html: options.html || options.text,
             });
-            console.log('Email sent successfully to:', to);
+            console.log('Email sent successfully to:', options.to);
             return true;
         }
         catch (error) {
             console.error('Failed to send email:', error);
             return false;
         }
+    }
+    /**
+     * Send an email (private method for internal use)
+     */
+    async sendEmailInternal(to, subject, html) {
+        return this.sendEmail({ to, subject, html });
     }
     /**
      * Generate order items HTML table
@@ -239,7 +243,7 @@ class EmailNotificationService {
         Nếu bạn có bất kỳ câu hỏi nào, vui lòng liên hệ với chúng tôi qua email ${store.contactEmail}${store.contactPhone ? ` hoặc số điện thoại ${store.contactPhone}` : ''}.
       </p>
     `;
-        return this.sendEmail(order.customerEmail, `[${store.storeName}] Xác nhận đơn hàng #${order.orderNumber}`, this.generateEmailTemplate(store, content));
+        return this.sendEmailInternal(order.customerEmail, `[${store.storeName}] Xác nhận đơn hàng #${order.orderNumber}`, this.generateEmailTemplate(store, content));
     }
     /**
      * Send new order alert to store owner
@@ -289,7 +293,7 @@ class EmailNotificationService {
         ${order.customerNote ? `<p style="margin: 0;"><strong>Ghi chú của khách:</strong> ${order.customerNote}</p>` : ''}
       </div>
     `;
-        return this.sendEmail(store.contactEmail, `[${store.storeName}] Đơn hàng mới #${order.orderNumber} - ${formatCurrency(order.total)}`, this.generateEmailTemplate(store, content));
+        return this.sendEmailInternal(store.contactEmail, `[${store.storeName}] Đơn hàng mới #${order.orderNumber} - ${formatCurrency(order.total)}`, this.generateEmailTemplate(store, content));
     }
     /**
      * Send order status update notification to customer
@@ -363,7 +367,7 @@ class EmailNotificationService {
         Nếu bạn có bất kỳ câu hỏi nào, vui lòng liên hệ với chúng tôi qua email ${store.contactEmail}${store.contactPhone ? ` hoặc số điện thoại ${store.contactPhone}` : ''}.
       </p>
     `;
-        return this.sendEmail(order.customerEmail, `[${store.storeName}] Đơn hàng #${order.orderNumber} - ${STATUS_LABELS[newStatus]}`, this.generateEmailTemplate(store, content));
+        return this.sendEmailInternal(order.customerEmail, `[${store.storeName}] Đơn hàng #${order.orderNumber} - ${STATUS_LABELS[newStatus]}`, this.generateEmailTemplate(store, content));
     }
 }
 exports.EmailNotificationService = EmailNotificationService;

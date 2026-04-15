@@ -51,7 +51,7 @@ export async function getThemeSettings(): Promise<ThemeSettings | null> {
   try {
     const result = await getSettings();
     if (result.success && result.settings) {
-      return result.settings as ThemeSettings;
+      return result.settings as unknown as ThemeSettings;
     }
     return null;
   } catch {
@@ -129,10 +129,19 @@ export async function recalculateAllLoyaltyPoints(): Promise<{
  * Delete all transactional data
  */
 export async function deleteAllTransactionalData(): Promise<{ success: boolean; error?: string }> {
-  // This would typically call a backend endpoint to delete transactional data
-  // For now, return success as placeholder
-  console.warn('deleteAllTransactionalData: Not implemented');
-  return { success: false, error: 'Chức năng này chưa được triển khai' };
+  try {
+    await apiClient.request<{ success: boolean; message?: string }>(
+      '/settings/delete-transactional-data',
+      { method: 'POST' }
+    );
+    return { success: true };
+  } catch (error: unknown) {
+    console.error('Error deleting transactional data:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Không thể xóa dữ liệu giao dịch',
+    };
+  }
 }
 
 /**
@@ -143,10 +152,32 @@ export async function backupAllTransactionalData(): Promise<{
   data?: string;
   error?: string 
 }> {
-  // This would typically call a backend endpoint to backup data
-  // For now, return success as placeholder
-  console.warn('backupAllTransactionalData: Not implemented');
-  return { success: false, error: 'Chức năng này chưa được triển khai' };
+  try {
+    const response = await apiClient.request<{
+      success: boolean;
+      data?: string;
+      fileName?: string;
+      error?: string;
+    }>('/settings/backup-transactional-data', { method: 'POST' });
+
+    if (!response.success || !response.data) {
+      return {
+        success: false,
+        error: response.error || 'Không thể sao lưu dữ liệu giao dịch',
+      };
+    }
+
+    return {
+      success: true,
+      data: response.data,
+    };
+  } catch (error: unknown) {
+    console.error('Error backing up transactional data:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Không thể sao lưu dữ liệu giao dịch',
+    };
+  }
 }
 
 /**

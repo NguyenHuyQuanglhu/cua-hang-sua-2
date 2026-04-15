@@ -1,12 +1,14 @@
 import { BaseRepository, QueryOptions, PaginationOptions, PaginatedResult } from './base-repository';
 import { query, queryOne, SqlValue, QueryParams } from '../db';
 import { withTransaction, transactionQuery, transactionQueryOne, transactionInsert } from '../db/transaction';
+import { cashTransactionRepository } from './cash-transaction-repository';
 
 export interface PurchaseOrder {
   id: string;
   storeId: string;
   orderNumber: string;
   supplierId?: string;
+  contractorId?: string;
   importDate: string;
   totalAmount: number;
   paidAmount?: number;
@@ -43,6 +45,7 @@ export interface PurchaseLot {
 export interface PurchaseOrderWithDetails extends PurchaseOrder {
   items: PurchaseOrderItemWithProduct[];
   supplierName?: string;
+  contractorName?: string;
 }
 
 export interface PurchaseOrderItemWithProduct extends PurchaseOrderItem {
@@ -52,11 +55,14 @@ export interface PurchaseOrderItemWithProduct extends PurchaseOrderItem {
 
 export interface CreatePurchaseOrderInput {
   supplierId?: string;
+  contractorId?: string;
   importDate: string;
   notes?: string;
   totalAmount: number;
   createdBy?: string;
   items: CreatePurchaseOrderItemInput[];
+  paidAmount?: number;
+  paymentMethod?: string;
 }
 
 export interface CreatePurchaseOrderItemInput {
@@ -74,6 +80,7 @@ interface PurchaseOrderRecord {
   store_id: string;
   order_number: string;
   supplier_id: string | null;
+  contractor_id: string | null;
   import_date: Date;
   total_amount: number;
   notes: string | null;
@@ -120,6 +127,7 @@ export class PurchaseOrderRepository extends BaseRepository<PurchaseOrder> {
       storeId: r.store_id,
       orderNumber: r.order_number,
       supplierId: r.supplier_id || undefined,
+      contractorId: r.contractor_id || undefined,
       importDate: r.import_date instanceof Date ? r.import_date.toISOString() : String(r.import_date),
       totalAmount: r.total_amount,
       paidAmount: (r as any).paid_amount ?? 0,
@@ -136,6 +144,7 @@ export class PurchaseOrderRepository extends BaseRepository<PurchaseOrder> {
     if (entity.storeId !== undefined) record.store_id = entity.storeId;
     if (entity.orderNumber !== undefined) record.order_number = entity.orderNumber;
     if (entity.supplierId !== undefined) record.supplier_id = entity.supplierId || null;
+    if (entity.contractorId !== undefined) record.contractor_id = entity.contractorId || null;
     if (entity.importDate !== undefined) record.import_date = new Date(entity.importDate);
     if (entity.totalAmount !== undefined) record.total_amount = entity.totalAmount;
     if (entity.notes !== undefined) record.notes = entity.notes || null;
@@ -191,21 +200,34 @@ export class PurchaseOrderRepository extends BaseRepository<PurchaseOrder> {
       const orderNumber = await this.generateOrderNumber(storeId);
       const purchaseOrderId = crypto.randomUUID();
       const now = new Date();
+      
+      // Calculate payment status
+      const paidAmount = input.paidAmount || 0;
+      const remainingDebt = input.totalAmount - paidAmount;
+      let paymentStatus = 'unpaid';
+      if (paidAmount >= input.totalAmount) {
+        paymentStatus = 'paid';
+      } else if (paidAmount > 0) {
+        paymentStatus = 'partial';
+      }
+      
       const orderRecord = await transactionInsert<PurchaseOrderRecord>(transaction, 'PurchaseOrders', {
         id: purchaseOrderId, 
         store_id: storeId, 
         order_number: orderNumber, 
         supplier_id: input.supplierId || null,
+        contractor_id: input.contractorId || null,
         import_date: new Date(input.importDate), 
         total_amount: input.totalAmount, 
-        paid_amount: 0,
-        remaining_debt: input.totalAmount,
-        payment_status: 'unpaid',
+        paid_amount: paidAmount,
+        remaining_debt: remainingDebt,
+        payment_status: paymentStatus,
         notes: input.notes || null,
         created_at: now,
         // updated_at will be set automatically by database DEFAULT
       });
       if (!orderRecord) throw new Error('Failed to create purchase order');
+      
       const items: PurchaseOrderItemWithProduct[] = [];
       for (const item of input.items) {
         const itemId = crypto.randomUUID();
@@ -257,50 +279,99 @@ export class PurchaseOrderRepository extends BaseRepository<PurchaseOrder> {
           });
         }
         
-        // Update product's updated_at to move it to top of list
+        // Update product's stock_quantity and updated_at
         await transactionQuery(
           transaction,
-          `UPDATE Products SET updated_at = GETDATE() WHERE id = @productId AND store_id = @storeId`,
-          { productId: item.productId, storeId }
+          `UPDATE Products SET stock_quantity = stock_quantity + @quantity, updated_at = GETDATE() WHERE id = @productId AND store_id = @storeId`,
+          { productId: item.productId, storeId, quantity: baseQuantity }
         );
         
         items.push(this.mapItemToEntity(itemRecord));
       }
+      
+      // Create supplier payment record if paid amount > 0
+      if (paidAmount > 0 && input.supplierId) {
+        const paymentId = crypto.randomUUID();
+        await transactionInsert(transaction, 'SupplierPayments', {
+          id: paymentId,
+          store_id: storeId,
+          supplier_id: input.supplierId,
+          purchase_id: purchaseOrderId,
+          amount: paidAmount,
+          payment_date: new Date(input.importDate),
+          payment_method: input.paymentMethod || 'cash',
+          notes: `Thanh toán khi nhập hàng - ${orderNumber}`,
+          created_at: now,
+        });
+        console.log(`[PurchaseOrderRepository] Created supplier payment for purchase ${orderNumber}: ${paidAmount}`);
+      }
+      
+      // Create cash transaction for the purchase (expense)
+      try {
+        await cashTransactionRepository.create(
+          {
+            storeId,
+            type: 'chi',
+            transactionDate: new Date(input.importDate).toISOString(),
+            amount: input.totalAmount,
+            reason: `Chi tiền nhập hàng - ${orderNumber}${input.supplierId ? ' từ nhà cung cấp' : ''}`,
+            category: 'Nhập hàng',
+            relatedInvoiceId: purchaseOrderId,
+          },
+          storeId
+        );
+        console.log(`[PurchaseOrderRepository] Created cash transaction for purchase ${orderNumber}: ${input.totalAmount}`);
+      } catch (cashError) {
+        // Log but don't fail the purchase if cash transaction fails
+        console.error('[PurchaseOrderRepository] Failed to create cash transaction:', cashError);
+      }
+      
       return { ...this.mapToEntity(orderRecord as unknown as Record<string, unknown>), items };
     });
   }
 
   async findByIdWithDetails(purchaseOrderId: string, storeId: string): Promise<PurchaseOrderWithDetails | null> {
-    const orderQuery = `SELECT po.*, s.name as supplier_name FROM PurchaseOrders po LEFT JOIN Suppliers s ON po.supplier_id = s.id WHERE po.id = @purchaseOrderId AND po.store_id = @storeId`;
-    const orderResult = await queryOne<PurchaseOrderRecord & { supplier_name: string | null }>(orderQuery, { purchaseOrderId, storeId });
+    const orderQuery = `
+      SELECT
+        po.*,
+        s.name as supplier_name,
+        c.name as contractor_name
+      FROM PurchaseOrders po
+      LEFT JOIN Suppliers s ON po.supplier_id = s.id
+      LEFT JOIN Contractors c ON po.contractor_id = c.id
+      WHERE po.id = @purchaseOrderId AND po.store_id = @storeId
+    `;
+    const orderResult = await queryOne<PurchaseOrderRecord & { supplier_name: string | null; contractor_name: string | null }>(orderQuery, { purchaseOrderId, storeId });
     if (!orderResult) return null;
     const itemsQuery = `SELECT poi.*, p.name as product_name, u.name as unit_name FROM PurchaseOrderItems poi LEFT JOIN Products p ON poi.product_id = p.id LEFT JOIN Units u ON poi.unit_id = u.id WHERE poi.purchase_order_id = @purchaseOrderId`;
     const itemsResult = await query<PurchaseOrderItemRecord & { product_name: string | null; unit_name: string | null }>(itemsQuery, { purchaseOrderId });
     return {
       ...this.mapToEntity(orderResult as unknown as Record<string, unknown>),
       supplierName: orderResult.supplier_name || undefined,
+      contractorName: orderResult.contractor_name || undefined,
       items: itemsResult.map(item => ({ ...this.mapItemToEntity(item), productName: item.product_name || undefined, unitName: item.unit_name || undefined })),
     };
   }
 
-  async findAllWithSupplier(storeId: string, options?: PaginationOptions & { search?: string; supplierId?: string; dateFrom?: string; dateTo?: string; }): Promise<PaginatedResult<PurchaseOrder & { supplierName?: string; itemCount: number; items?: PurchaseOrderItemWithProduct[] }>> {
+  async findAllWithSupplier(storeId: string, options?: PaginationOptions & { search?: string; supplierId?: string; contractorId?: string; dateFrom?: string; dateTo?: string; }): Promise<PaginatedResult<PurchaseOrder & { supplierName?: string; contractorName?: string; itemCount: number; items?: PurchaseOrderItemWithProduct[] }>> {
     const page = options?.page || 1;
     const pageSize = options?.pageSize || 20;
     const offset = (page - 1) * pageSize;
     const conditions: string[] = ['po.store_id = @storeId'];
     const params: QueryParams = { storeId };
-    if (options?.search) { conditions.push('(po.order_number LIKE @search OR po.notes LIKE @search OR s.name LIKE @search)'); params.search = `%${options.search}%`; }
+    if (options?.search) { conditions.push('(po.order_number LIKE @search OR po.notes LIKE @search OR s.name LIKE @search OR c.name LIKE @search)'); params.search = `%${options.search}%`; }
     if (options?.supplierId) { conditions.push('po.supplier_id = @supplierId'); params.supplierId = options.supplierId; }
+    if (options?.contractorId) { conditions.push('po.contractor_id = @contractorId'); params.contractorId = options.contractorId; }
     if (options?.dateFrom) { conditions.push('po.import_date >= @dateFrom'); params.dateFrom = new Date(options.dateFrom); }
     if (options?.dateTo) { conditions.push('po.import_date <= @dateTo'); params.dateTo = new Date(options.dateTo); }
     const whereClause = conditions.join(' AND ');
-    const countQuery = `SELECT COUNT(*) as total FROM PurchaseOrders po LEFT JOIN Suppliers s ON po.supplier_id = s.id WHERE ${whereClause}`;
+    const countQuery = `SELECT COUNT(*) as total FROM PurchaseOrders po LEFT JOIN Suppliers s ON po.supplier_id = s.id LEFT JOIN Contractors c ON po.contractor_id = c.id WHERE ${whereClause}`;
     const countResult = await queryOne<{ total: number }>(countQuery, params);
     const total = countResult?.total ?? 0;
-    const orderBy = options?.orderBy || 'po.updated_at';
+    const orderBy = options?.orderBy || 'po.import_date';
     const direction = options?.orderDirection || 'DESC';
-    const dataQuery = `SELECT po.*, s.name as supplier_name, (SELECT COUNT(*) FROM PurchaseOrderItems WHERE purchase_order_id = po.id) as item_count FROM PurchaseOrders po LEFT JOIN Suppliers s ON po.supplier_id = s.id WHERE ${whereClause} ORDER BY ${orderBy} ${direction} OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`;
-    const results = await query<PurchaseOrderRecord & { supplier_name: string | null; item_count: number }>(dataQuery, { ...params, offset, pageSize });
+    const dataQuery = `SELECT po.*, ISNULL(s.name, N'[Chưa có NCC]') as supplier_name, c.name as contractor_name, (SELECT COUNT(*) FROM PurchaseOrderItems WHERE purchase_order_id = po.id) as item_count FROM PurchaseOrders po LEFT JOIN Suppliers s ON po.supplier_id = s.id LEFT JOIN Contractors c ON po.contractor_id = c.id WHERE ${whereClause} ORDER BY ${orderBy} ${direction} OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`;
+    const results = await query<PurchaseOrderRecord & { supplier_name: string | null; contractor_name: string | null; item_count: number }>(dataQuery, { ...params, offset, pageSize });
     
     // Fetch items for each purchase order
     const purchaseOrdersWithItems = await Promise.all(results.map(async (r) => {
@@ -309,6 +380,7 @@ export class PurchaseOrderRepository extends BaseRepository<PurchaseOrder> {
       return {
         ...this.mapToEntity(r as unknown as Record<string, unknown>),
         supplierName: r.supplier_name || undefined,
+        contractorName: r.contractor_name || undefined,
         itemCount: r.item_count,
         items: items.map(item => ({ ...this.mapItemToEntity(item), productName: item.product_name || undefined, unitName: item.unit_name || undefined }))
       };
@@ -323,8 +395,8 @@ export class PurchaseOrderRepository extends BaseRepository<PurchaseOrder> {
       if (!existingOrder) throw new Error('Purchase order not found or access denied');
       await transactionQuery(transaction, `DELETE FROM PurchaseLots WHERE purchase_order_id = @purchaseOrderId`, { purchaseOrderId });
       await transactionQuery(transaction, `DELETE FROM PurchaseOrderItems WHERE purchase_order_id = @purchaseOrderId`, { purchaseOrderId });
-      const updateQuery = `UPDATE PurchaseOrders SET supplier_id = @supplierId, import_date = @importDate, total_amount = @totalAmount, notes = @notes, updated_at = GETDATE() OUTPUT INSERTED.* WHERE id = @purchaseOrderId AND store_id = @storeId`;
-      const updatedOrder = await transactionQueryOne<PurchaseOrderRecord>(transaction, updateQuery, { purchaseOrderId, storeId, supplierId: input.supplierId || null, importDate: new Date(input.importDate), totalAmount: input.totalAmount, notes: input.notes || null });
+      const updateQuery = `UPDATE PurchaseOrders SET supplier_id = @supplierId, contractor_id = @contractorId, import_date = @importDate, total_amount = @totalAmount, notes = @notes, updated_at = GETDATE() OUTPUT INSERTED.* WHERE id = @purchaseOrderId AND store_id = @storeId`;
+      const updatedOrder = await transactionQueryOne<PurchaseOrderRecord>(transaction, updateQuery, { purchaseOrderId, storeId, supplierId: input.supplierId || null, contractorId: input.contractorId || null, importDate: new Date(input.importDate), totalAmount: input.totalAmount, notes: input.notes || null });
       if (!updatedOrder) throw new Error('Failed to update purchase order');
       const items: PurchaseOrderItemWithProduct[] = [];
       for (const item of input.items) {

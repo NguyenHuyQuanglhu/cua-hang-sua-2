@@ -1,13 +1,3 @@
-
-
-
-
-
-
-
-
-
-
 'use client'
 
 import * as React from 'react'
@@ -63,7 +53,7 @@ import { SyncDataButton } from '@/components/sync-data-button'
 import type { ThemeSettings, LoyaltySettings, SoftwarePackage } from '@/lib/types'
 import { hexToHsl, hslToHex } from '@/lib/utils'
 import { Separator } from '@/components/ui/separator'
-import { AlertCircle, FileDown, Loader2, Trash2, Lock, RefreshCw } from 'lucide-react'
+import { AlertCircle, FileDown, Loader2, Trash2, Lock, RefreshCw, KeyRound } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Switch } from '@/components/ui/switch'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
@@ -106,28 +96,32 @@ const themeFormSchema = z.object({
 
 type ThemeFormValues = z.infer<typeof themeFormSchema>;
 
-const FormattedNumberInput = ({ value, onChange, ...props }: { value: number; onChange: (value: number) => void; [key: string]: any }) => {
-  const [displayValue, setDisplayValue] = React.useState(value?.toLocaleString('en-US') || '');
+const FormattedNumberInput = React.forwardRef<HTMLInputElement, { value: number; onChange: (value: number) => void; [key: string]: any }>(
+  ({ value, onChange, ...props }, ref) => {
+    const [displayValue, setDisplayValue] = React.useState(value?.toLocaleString('en-US') || '');
 
-  useEffect(() => {
-    setDisplayValue(value?.toLocaleString('en-US') || '0');
-  }, [value]);
+    useEffect(() => {
+      setDisplayValue(value?.toLocaleString('en-US') || '0');
+    }, [value]);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const rawValue = e.target.value.replace(/,/g, '');
-    const numberValue = parseInt(rawValue, 10);
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const rawValue = e.target.value.replace(/,/g, '');
+      const numberValue = parseInt(rawValue, 10);
 
-    if (!isNaN(numberValue)) {
-      setDisplayValue(numberValue.toLocaleString('en-US'));
-      onChange(numberValue);
-    } else if (rawValue === '') {
-      setDisplayValue('');
-      onChange(0);
-    }
-  };
+      if (!isNaN(numberValue)) {
+        setDisplayValue(numberValue.toLocaleString('en-US'));
+        onChange(numberValue);
+      } else if (rawValue === '') {
+        setDisplayValue('');
+        onChange(0);
+      }
+    };
 
-  return <Input type="text" value={displayValue} onChange={handleChange} {...props} />;
-};
+    return <Input ref={ref} type="text" value={displayValue} onChange={handleChange} {...props} />;
+  }
+);
+
+FormattedNumberInput.displayName = 'FormattedNumberInput';
 
 
 export default function SettingsPage() {
@@ -145,6 +139,13 @@ export default function SettingsPage() {
   const [isAuthenticating, setIsAuthenticating] = React.useState(false);
   const [themeSettings, setThemeSettings] = useState<ThemeSettings | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  
+  // Change password states
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
 
   // Fetch settings from SQL Server API
   const fetchSettings = useCallback(async () => {
@@ -377,10 +378,15 @@ export default function SettingsPage() {
     setIsAuthenticating(true);
     setAuthError(null);
     try {
+      const token = localStorage.getItem('token');
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
       // Verify password using SQL Server API
-      const response = await fetch('/api/auth/verify-password', {
+      const response = await fetch(`${API_URL}/api/auth/verify-password`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         credentials: 'include',
         body: JSON.stringify({ password }),
       });
@@ -396,6 +402,63 @@ export default function SettingsPage() {
       setAuthError("Mật khẩu không chính xác. Vui lòng thử lại.");
     } finally {
       setIsAuthenticating(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    setPasswordError(null);
+    
+    // Validation
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      setPasswordError('Vui lòng điền đầy đủ thông tin');
+      return;
+    }
+    
+    if (newPassword.length < 6) {
+      setPasswordError('Mật khẩu mới phải có ít nhất 6 ký tự');
+      return;
+    }
+    
+    if (newPassword !== confirmPassword) {
+      setPasswordError('Mật khẩu xác nhận không khớp');
+      return;
+    }
+    
+    setIsChangingPassword(true);
+    try {
+      const token = localStorage.getItem('auth_token');
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      
+      const response = await fetch(`${API_URL}/api/users/change-password`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        credentials: 'include',
+        body: JSON.stringify({ 
+          currentPassword, 
+          newPassword 
+        }),
+      });
+      
+      if (response.ok) {
+        toast({
+          title: 'Thành công',
+          description: 'Đổi mật khẩu thành công',
+        });
+        // Reset form
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+      } else {
+        const data = await response.json();
+        setPasswordError(data.error || 'Không thể đổi mật khẩu');
+      }
+    } catch (error) {
+      setPasswordError('Đã xảy ra lỗi. Vui lòng thử lại.');
+    } finally {
+      setIsChangingPassword(false);
     }
   };
 
@@ -846,6 +909,71 @@ export default function SettingsPage() {
               Tự động thêm đơn vị tính, nhà cung cấp, khách hàng phù hợp với loại cửa hàng. 
               Đồng thời tạo đơn nhập hàng và đơn bán mẫu để hiển thị Tổng nhập, Đã trả, Công nợ.
             </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <KeyRound className="h-5 w-5" />
+            Bảo mật
+          </CardTitle>
+          <CardDescription>
+            Thay đổi mật khẩu đăng nhập của bạn
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-4 max-w-md">
+            <div className="space-y-2">
+              <Label htmlFor="current-password">Mật khẩu hiện tại</Label>
+              <Input
+                id="current-password"
+                type="password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                placeholder="Nhập mật khẩu hiện tại"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-password">Mật khẩu mới</Label>
+              <Input
+                id="new-password"
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="Nhập mật khẩu mới (tối thiểu 6 ký tự)"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="confirm-password">Xác nhận mật khẩu mới</Label>
+              <Input
+                id="confirm-password"
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Nhập lại mật khẩu mới"
+              />
+            </div>
+            {passwordError && (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{passwordError}</AlertDescription>
+              </Alert>
+            )}
+            <Button 
+              onClick={handleChangePassword} 
+              disabled={isChangingPassword}
+            >
+              {isChangingPassword ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Đang cập nhật...
+                </>
+              ) : (
+                'Đổi mật khẩu'
+              )}
+            </Button>
           </div>
         </CardContent>
       </Card>

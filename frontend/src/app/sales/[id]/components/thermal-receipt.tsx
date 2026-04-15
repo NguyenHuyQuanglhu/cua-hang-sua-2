@@ -16,10 +16,11 @@ interface ThermalReceiptProps {
     productsMap: Map<string, Product>;
     unitsMap: Map<string, Unit>;
     settings: ThemeSettings | null;
+    storeName?: string;
 }
 
 const ThermalReceipt = (props: ThermalReceiptProps) => {
-    const { sale, items, customer, productsMap, unitsMap, settings } = props;
+    const { sale, items, customer, productsMap, unitsMap, settings, storeName } = props;
     const componentRef = useRef<HTMLDivElement>(null);
 
     const onAfterPrint = async () => {
@@ -60,7 +61,7 @@ const ThermalReceipt = (props: ThermalReceiptProps) => {
             <div ref={componentRef} className={`p-1 font-mono text-[10px] bg-white text-black ${paperWidth}`}>
                 <div className="text-center space-y-1">
                     {settings?.companyBusinessLine && <p className="font-bold">{settings.companyBusinessLine}</p>}
-                    {settings?.companyName && <p className="text-lg font-bold">{settings.companyName}</p>}
+                    {storeName && <p className="text-lg font-bold" style={{ color: '#f97316' }}>{storeName}</p>}
                     {settings?.companyAddress && <p>{settings.companyAddress}</p>}
                     {settings?.companyPhone && <p>ĐT: {settings.companyPhone}</p>}
                 </div>
@@ -78,6 +79,7 @@ const ThermalReceipt = (props: ThermalReceiptProps) => {
                 <div>
                     <p>KH: {customer?.name || 'Khách lẻ'}</p>
                     {customer?.phone && <p>ĐT: {customer.phone}</p>}
+                    {sale.projectName && <p>CT: {sale.projectName}</p>}
                 </div>
 
                 <table className="w-full mt-2">

@@ -86,6 +86,7 @@ export const ROUTE_PERMISSIONS: Record<string, { module: Module; permission: Per
   '/units': { module: 'units', permission: 'view' },
   '/customers': { module: 'customers', permission: 'view' },
   '/suppliers': { module: 'suppliers', permission: 'view' },
+  '/contractors': { module: 'suppliers', permission: 'view' },
   '/products': { module: 'products', permission: 'view' },
   '/purchases': { module: 'purchases', permission: 'view' },
   '/sales': { module: 'sales', permission: 'view' },

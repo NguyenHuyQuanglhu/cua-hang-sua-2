@@ -7,6 +7,7 @@
  */
 
 import { SPBaseRepository, SPParams } from './sp-base-repository';
+import { query } from '../db/query';
 
 /**
  * Database record interface for Customers from stored procedures (camelCase - as returned by SP)
@@ -19,14 +20,22 @@ interface CustomerSPRecord {
   email: string | null;
   address: string | null;
   customerType: string | null;
+  customerGroup: string | null;
+  gender: string | null;
+  birthday: string | null;
+  zalo: string | null;
+  bankName: string | null;
+  bankAccountNumber: string | null;
+  bankBranch: string | null;
+  creditLimit: number | null;
   loyaltyTier: string | null;
+  loyaltyPoints: number | null;
   totalPaid: number | null;
   totalDebt: number | null;
   totalSales: number | null;
   calculatedDebt: number | null; // Calculated from Sales table
   totalPayments: number | null; // Calculated from Payments table
   status: string | null;
-  customerGroup: string | null;
   lifetimePoints: number | null;
   notes: string | null;
   createdAt: Date;
@@ -44,13 +53,22 @@ export interface Customer {
   email?: string;
   address?: string;
   customerType?: string;
+  customerGroup?: string;
+  gender?: string;
+  birthday?: string;
+  zalo?: string;
+  bankName?: string;
+  bankAccountNumber?: string;
+  bankBranch?: string;
+  creditLimit?: number;
   loyaltyTier?: string;
+  loyaltyPoints?: number;
   totalSpent?: number;
   totalPaid?: number;
   totalDebt?: number;
   calculatedDebt?: number; // Debt calculated from Sales
+  totalPayments?: number;
   status?: string;
-  customerGroup?: string;
   lifetimePoints?: number;
   notes?: string;
   createdAt?: string;
@@ -68,7 +86,19 @@ export interface CreateCustomerSPInput {
   email?: string | null;
   address?: string | null;
   customerType?: string;
+  customerGroup?: string | null;
+  gender?: string | null;
+  birthday?: string | null;
+  zalo?: string | null;
+  bankName?: string | null;
+  bankAccountNumber?: string | null;
+  bankBranch?: string | null;
+  creditLimit?: number;
   loyaltyTier?: string;
+  loyaltyPoints?: number;
+  lifetimePoints?: number;
+  status?: string;
+  notes?: string | null;
 }
 
 /**
@@ -80,8 +110,19 @@ export interface UpdateCustomerSPInput {
   email?: string | null;
   address?: string | null;
   customerType?: string;
-  loyaltyTier?: string;
+  customerGroup?: string | null;
+  gender?: string | null;
+  birthday?: string | null;
+  zalo?: string | null;
+  bankName?: string | null;
+  bankAccountNumber?: string | null;
+  bankBranch?: string | null;
+  creditLimit?: number;
   lifetimePoints?: number;
+  loyaltyPoints?: number;
+  loyaltyTier?: string;
+  status?: string;
+  notes?: string | null;
 }
 
 /**
@@ -123,13 +164,22 @@ export class CustomersSPRepository extends SPBaseRepository<Customer> {
       email: record.email || undefined,
       address: record.address || undefined,
       customerType: record.customerType || 'retail',
+      customerGroup: record.customerGroup || undefined,
+      gender: record.gender || undefined,
+      birthday: record.birthday || undefined,
+      zalo: record.zalo || undefined,
+      bankName: record.bankName || undefined,
+      bankAccountNumber: record.bankAccountNumber || undefined,
+      bankBranch: record.bankBranch || undefined,
+      creditLimit: record.creditLimit ?? 0,
       loyaltyTier: record.loyaltyTier || 'bronze',
+      loyaltyPoints: record.loyaltyPoints ?? 0,
       totalSpent: record.totalSales ?? 0,
       totalPaid: record.totalPaid ?? record.totalPayments ?? 0,
+      totalPayments: record.totalPayments ?? 0,
       totalDebt: record.totalDebt ?? 0,
       calculatedDebt: record.calculatedDebt ?? record.totalDebt ?? 0, // Use calculated if available
       status: record.status || 'active',
-      customerGroup: record.customerGroup || undefined,
       lifetimePoints: record.lifetimePoints ?? 0,
       notes: record.notes || undefined,
       createdAt: record.createdAt
@@ -162,8 +212,20 @@ export class CustomersSPRepository extends SPBaseRepository<Customer> {
       phone: input.phone || null,
       email: input.email || null,
       address: input.address || null,
-      customerType: input.customerType || 'retail',
+      customerType: input.customerType || 'personal',
+      customerGroup: input.customerGroup || null,
+      gender: input.gender || null,
+      birthday: input.birthday || null,
+      zalo: input.zalo || null,
+      bankName: input.bankName || null,
+      bankAccountNumber: input.bankAccountNumber || null,
+      bankBranch: input.bankBranch || null,
+      creditLimit: input.creditLimit ?? 0,
+      status: input.status || 'active',
+      lifetimePoints: input.lifetimePoints ?? 0,
+      loyaltyPoints: input.loyaltyPoints ?? 0,
       loyaltyTier: input.loyaltyTier || 'bronze',
+      notes: input.notes || null,
     };
 
     // sp_Customers_Create returns the created customer directly
@@ -196,27 +258,42 @@ export class CustomersSPRepository extends SPBaseRepository<Customer> {
     storeId: string,
     data: UpdateCustomerSPInput
   ): Promise<Customer | null> {
+    // Only pass parameters that are actually provided to avoid SP parameter mismatch
     const params: SPParams = {
       id,
       storeId,
-      name: data.name,
-      phone: data.phone,
-      email: data.email,
-      address: data.address,
-      customerType: data.customerType,
-      loyaltyTier: data.loyaltyTier,
     };
 
-    const result = await this.executeSPSingle<AffectedRowsResult>(
+    // Add only non-undefined parameters
+    if (data.name !== undefined) params.name = data.name;
+    if (data.phone !== undefined) params.phone = data.phone;
+    if (data.email !== undefined) params.email = data.email;
+    if (data.address !== undefined) params.address = data.address;
+    if (data.customerType !== undefined) params.customerType = data.customerType;
+    if (data.customerGroup !== undefined) params.customerGroup = data.customerGroup;
+    if (data.gender !== undefined) params.gender = data.gender;
+    if (data.birthday !== undefined) params.birthday = data.birthday;
+    if (data.zalo !== undefined) params.zalo = data.zalo;
+    if (data.bankName !== undefined) params.bankName = data.bankName;
+    if (data.bankAccountNumber !== undefined) params.bankAccountNumber = data.bankAccountNumber;
+    if (data.bankBranch !== undefined) params.bankBranch = data.bankBranch;
+    if (data.creditLimit !== undefined) params.creditLimit = data.creditLimit;
+    if (data.status !== undefined) params.status = data.status;
+    if (data.lifetimePoints !== undefined) params.lifetimePoints = data.lifetimePoints;
+    if (data.loyaltyPoints !== undefined) params.loyaltyPoints = data.loyaltyPoints;
+    if (data.loyaltyTier !== undefined) params.loyaltyTier = data.loyaltyTier;
+    if (data.notes !== undefined) params.notes = data.notes;
+
+    const result = await this.executeSPSingle<CustomerSPRecord>(
       'sp_Customers_Update',
       params
     );
 
-    if (!result || result.AffectedRows === 0) {
+    if (!result) {
       return null;
     }
 
-    return this.getById(id, storeId);
+    return this.mapToEntity(result);
   }
 
   /**
@@ -225,12 +302,13 @@ export class CustomersSPRepository extends SPBaseRepository<Customer> {
    * 
    * @param id - Customer ID
    * @param storeId - Store ID
+   * @param forceDelete - Admin can force delete customers with transactions
    * @returns True if deleted, false if not found
    */
-  async delete(id: string, storeId: string): Promise<boolean> {
+  async delete(id: string, storeId: string, forceDelete: boolean = false): Promise<boolean> {
     const result = await this.executeSPSingle<AffectedRowsResult>(
       'sp_Customers_Delete',
-      { id, storeId }
+      { id, storeId, forceDelete }
     );
 
     return (result?.AffectedRows ?? 0) > 0;

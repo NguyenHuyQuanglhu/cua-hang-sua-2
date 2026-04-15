@@ -12,6 +12,7 @@ import {
   Key,
   UserCog,
   Building2,
+  RefreshCw,
 } from "lucide-react"
 
 import {
@@ -68,6 +69,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { DebugUserPermissions } from "@/components/debug-user-permissions"
 
 interface UserStoreAssignment {
   storeId: string;
@@ -87,6 +89,11 @@ interface UserWithStores {
   stores: UserStoreAssignment[];
   createdAt: string;
   updatedAt?: string;
+  subscriptionPlanId?: string;
+  subscriptionMonths?: number;
+  autoRenewal?: boolean;
+  subscriptionStartDate?: string;
+  subscriptionEndDate?: string;
 }
 
 type StatusFilter = 'all' | 'active' | 'inactive';
@@ -132,29 +139,53 @@ export default function UsersPage() {
   // Get manageable roles for current user
   const manageableRoles = useMemo(() => {
     if (!currentUserRole) return [];
-    return getManageableRoles(currentUserRole as UserRole);
+    const normalizedRole = currentUserRole === 'admin' ? 'owner' : currentUserRole;
+    return getManageableRoles(normalizedRole as UserRole);
   }, [currentUserRole]);
 
   const fetchUsers = useCallback(async () => {
+    // Don't fetch if still loading role information
+    if (isRoleLoading) {
+      console.log('[UsersPage] Skipping fetch - role still loading');
+      return;
+    }
+
+    // Don't fetch if no current user role
+    if (!currentUserRole) {
+      console.log('[UsersPage] Skipping fetch - no current user role');
+      return;
+    }
+
     setIsLoading(true);
-    const result = await getUsers();
-    if (result.success && result.users) {
-      setUsers(result.users as UserWithStores[]);
-    } else {
+    try {
+      const result = await getUsers();
+      if (result.success && result.users) {
+        setUsers(result.users as unknown as UserWithStores[]);
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Lỗi",
+          description: result.error || "Không thể tải danh sách người dùng",
+        });
+      }
+    } catch (error) {
+      console.error('[UsersPage] Fetch error:', error);
       toast({
         variant: "destructive",
         title: "Lỗi",
-        description: result.error || "Không thể tải danh sách người dùng",
+        description: "Đã xảy ra lỗi khi tải danh sách người dùng",
       });
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
-  }, [toast]);
+  }, [isRoleLoading, currentUserRole, toast]);
 
   useEffect(() => {
-    if (!isRoleLoading) {
+    // Only fetch users when role loading is complete and we have a valid role
+    if (!isRoleLoading && currentUserRole) {
       fetchUsers();
     }
-  }, [isRoleLoading, fetchUsers]);
+  }, [isRoleLoading, currentUserRole, fetchUsers]);
 
   // Filter users based on role hierarchy and search/filter criteria
   const filteredUsers = useMemo(() => {
@@ -238,7 +269,22 @@ export default function UsersPage() {
   const handleDeleteUser = async () => {
     if (!userToDelete) return;
     setIsDeleting(true);
+    
+    // Debug logging
+    console.log('Attempting to delete user:', {
+      userId: userToDelete.id,
+      userEmail: userToDelete.email,
+      userRole: userToDelete.role,
+      currentUserRole,
+      canDelete,
+      canManage: canManageRole(currentUserRole as UserRole, userToDelete.role)
+    });
+    
     const result = await deleteUser(userToDelete.id);
+    
+    // Debug logging
+    console.log('Delete result:', result);
+    
     if (result.success) {
       toast({
         title: "Thành công!",
@@ -249,8 +295,11 @@ export default function UsersPage() {
       toast({
         variant: "destructive",
         title: "Lỗi",
-        description: result.error,
+        description: result.error || "Không thể xóa người dùng",
       });
+      
+      // Debug logging
+      console.error('Delete failed:', result.error);
     }
     setIsDeleting(false);
     setUserToDelete(null);
@@ -266,13 +315,34 @@ export default function UsersPage() {
   const handleResetPassword = async () => {
     if (!userToResetPassword) return;
     try {
-      const response = await fetch(`/api/users/${userToResetPassword.id}/reset-password`, {
+      const response = await fetch(`http://localhost:3001/api/users/${userToResetPassword.id}/reset-password`, {
         method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+          'X-Store-Id': localStorage.getItem('store_id') || '',
+          'Content-Type': 'application/json',
+        },
       });
+      
       if (response.ok) {
+        const data = await response.json();
         toast({
           title: "Thành công!",
-          description: `Đã gửi email đặt lại mật khẩu cho ${userToResetPassword.email}`,
+          description: (
+            <div className="space-y-2">
+              <p>Đã đặt lại mật khẩu cho {userToResetPassword.email}</p>
+              {data.tempPassword && (
+                <div className="bg-muted p-3 rounded-md">
+                  <p className="text-sm font-semibold mb-1">Mật khẩu tạm thời:</p>
+                  <p className="text-lg font-mono font-bold select-all">{data.tempPassword}</p>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    ⚠️ Người dùng đã bị đăng xuất và cần đăng nhập lại với mật khẩu này. Sau đó họ nên đổi mật khẩu trong phần Cài đặt.
+                  </p>
+                </div>
+              )}
+            </div>
+          ),
+          duration: 15000, // Show for 15 seconds
         });
       } else {
         const error = await response.json();
@@ -446,6 +516,18 @@ export default function UsersPage() {
               </DropdownMenuContent>
             </DropdownMenu>
             <div className="ml-auto flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-10 gap-1"
+                onClick={fetchUsers}
+                title="Tải lại danh sách"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                <span className="sr-only sm:not-sr-only sm:whitespace-nowrap">
+                  Tải lại
+                </span>
+              </Button>
               {canAdd && manageableRoles.length > 0 && (
                 <Button size="sm" className="h-10 gap-1" onClick={handleAddUser}>
                   <PlusCircle className="h-3.5 w-3.5" />
@@ -620,6 +702,13 @@ export default function UsersPage() {
             Hiển thị <strong>{filteredUsers?.length || 0}</strong> trên <strong>{users?.length || 0}</strong> người dùng
           </div>
         </CardFooter>
+        
+        {/* Debug component - chỉ hiển thị trong development */}
+        {process.env.NODE_ENV === 'development' && filteredUsers && filteredUsers.length > 0 && (
+          <div className="p-4 border-t">
+            <DebugUserPermissions targetUser={filteredUsers[0]} />
+          </div>
+        )}
       </Card>
     </div>
   )

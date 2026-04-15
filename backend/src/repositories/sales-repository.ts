@@ -20,9 +20,11 @@ export interface Sale {
   storeId: string;
   invoiceNumber: string;
   customerId?: string;
+  contractorId?: string;
   shiftId?: string;
+  projectName?: string;
   transactionDate: string;
-  status: 'pending' | 'unprinted' | 'printed';
+  status: 'pending' | 'processed' | 'unprinted' | 'printed';
   totalAmount: number;
   vatAmount: number;
   finalAmount: number;
@@ -36,6 +38,7 @@ export interface Sale {
   customerPayment?: number;
   previousDebt?: number;
   remainingDebt?: number;
+  createdBy?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -59,7 +62,9 @@ interface SaleRecord {
   store_id: string;
   invoice_number: string;
   customer_id: string | null;
+  contractor_id: string | null;
   shift_id: string | null;
+  project_name: string | null;
   transaction_date: Date;
   status: string;
   total_amount: number;
@@ -75,6 +80,7 @@ interface SaleRecord {
   customer_payment: number | null;
   previous_debt: number | null;
   remaining_debt: number | null;
+  CreatedBy: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -105,7 +111,9 @@ export class SalesRepository extends BaseRepository<Sale> {
       storeId: r.store_id,
       invoiceNumber: r.invoice_number,
       customerId: r.customer_id || undefined,
+      contractorId: r.contractor_id || undefined,
       shiftId: r.shift_id || undefined,
+      projectName: r.project_name || undefined,
       transactionDate: r.transaction_date
         ? r.transaction_date instanceof Date
           ? r.transaction_date.toISOString()
@@ -125,6 +133,7 @@ export class SalesRepository extends BaseRepository<Sale> {
       customerPayment: r.customer_payment ?? undefined,
       previousDebt: r.previous_debt ?? undefined,
       remainingDebt: r.remaining_debt ?? undefined,
+      createdBy: r.CreatedBy || undefined,
       createdAt: r.created_at
         ? r.created_at instanceof Date
           ? r.created_at.toISOString()
@@ -229,12 +238,14 @@ export class SalesRepository extends BaseRepository<Sale> {
     await query(
       `INSERT INTO Sales (
         id, store_id, invoice_number, customer_id, shift_id, transaction_date,
+        project_name,
         status, total_amount, vat_amount, final_amount, discount, discount_type,
         discount_value, tier_discount_percentage, tier_discount_amount,
         points_used, points_discount, customer_payment, previous_debt, remaining_debt,
         created_at, updated_at
       ) VALUES (
         @id, @storeId, @invoiceNumber, @customerId, @shiftId, @transactionDate,
+        @projectName,
         @status, @totalAmount, @vatAmount, @finalAmount, @discount, @discountType,
         @discountValue, @tierDiscountPercentage, @tierDiscountAmount,
         @pointsUsed, @pointsDiscount, @customerPayment, @previousDebt, @remainingDebt,
@@ -246,6 +257,7 @@ export class SalesRepository extends BaseRepository<Sale> {
         invoiceNumber,
         customerId: entity.customerId || null,
         shiftId: entity.shiftId || null,
+        projectName: entity.projectName || null,
         transactionDate: new Date(entity.transactionDate),
         status: entity.status || 'pending',
         totalAmount: entity.totalAmount || 0,

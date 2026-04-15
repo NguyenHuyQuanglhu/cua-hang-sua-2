@@ -1,60 +1,65 @@
-import sql from 'mssql';
-import dotenv from 'dotenv';
+import 'dotenv/config';
+import { getConnection, query } from '../src/db/index.js';
 
-dotenv.config();
-
-async function check() {
-  const config: sql.config = {
-    server: process.env.DB_SERVER || 'localhost',
-    database: process.env.DB_NAME || 'SmartInventory',
-    user: process.env.DB_USER || 'sa',
-    password: process.env.DB_PASSWORD || '',
-    options: { 
-      encrypt: process.env.DB_ENCRYPT === 'true', 
-      trustServerCertificate: true 
-    }
-  };
-  
-  const pool = await sql.connect(config);
-  const storeId = '59B9720A-FA71-4736-863B-7E0BFD4BBD07';
-  
-  // Check Products table stock
-  const products = await pool.request()
-    .input('storeId', storeId)
-    .query(`
-      SELECT TOP 5 
-        id, name, stock_quantity, unit_id
+async function checkInventory() {
+  try {
+    await getConnection();
+    
+    // Kiểm tra cấu trúc bảng Products
+    const columns = await query(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_NAME = 'Products'
+    `);
+    
+    console.log('Products table columns:', columns);
+    
+    // Tìm sản phẩm Dalat Milk
+    const dalatProducts = await query(`
+      SELECT TOP 10 * 
       FROM Products 
-      WHERE store_id = @storeId AND status = 'active'
+      WHERE name LIKE '%Dalat%'
     `);
-  
-  console.log('Products stock_quantity:');
-  products.recordset.forEach((p: any) => {
-    console.log(`  ${p.name}: stock_quantity=${p.stock_quantity}, unit_id=${p.unit_id}`);
-  });
-  
-  // Check ProductInventory table
-  const inventory = await pool.request()
-    .input('storeId', storeId)
-    .query(`
-      SELECT TOP 10 
-        pi.ProductId, p.name, pi.UnitId, pi.Quantity, u.name as unitName
-      FROM ProductInventory pi
-      JOIN Products p ON pi.ProductId = p.id
-      LEFT JOIN Units u ON pi.UnitId = u.id
-      WHERE pi.StoreId = @storeId
-    `);
-  
-  console.log('\nProductInventory:');
-  if (inventory.recordset.length === 0) {
-    console.log('  (empty - no records)');
-  } else {
-    inventory.recordset.forEach((i: any) => {
-      console.log(`  ${i.name}: Quantity=${i.Quantity}, UnitId=${i.UnitId}, UnitName=${i.unitName}`);
-    });
+    
+    console.log('Dalat products found:', dalatProducts);
+    
+    if (dalatProducts.length > 0) {
+      const product = dalatProducts[0];
+      
+      // Kiểm tra tồn kho
+      const inventory = await query(`
+        SELECT pi.*, u.name as unitName, p.name as productName
+        FROM ProductInventory pi
+        LEFT JOIN Units u ON pi.UnitId = u.id
+        LEFT JOIN Products p ON pi.ProductId = p.id
+        WHERE pi.ProductId = '${product.id}'
+      `);
+      
+      console.log('Inventory records:', inventory);
+      
+      // Kiểm tra units có sẵn cho store này
+      const units = await query(`
+        SELECT * FROM Units WHERE StoreId = '${product.store_id}'
+      `);
+      
+      console.log('Available units:', units);
+      
+      // Test stored procedure
+      const spResult = await query(`
+        EXEC sp_Inventory_GetAvailable 
+          @productId = '${product.id}',
+          @storeId = '${product.store_id}',
+          @unitId = '${product.unit_id}'
+      `);
+      
+      console.log('SP Result:', spResult);
+    }
+    
+  } catch (error) {
+    console.error('Error:', error);
   }
   
-  await pool.close();
+  process.exit(0);
 }
 
-check().catch(console.error);
+checkInventory();

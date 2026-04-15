@@ -45,6 +45,7 @@ import {
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { useUserRole } from '@/hooks/use-user-role'
 import { Badge } from '@/components/ui/badge'
+import { apiClient } from '@/lib/api-client'
 
 interface UserStoreAssignment {
   storeId: string;
@@ -62,12 +63,25 @@ interface UserWithStores {
   permissions?: Permissions;
   status: 'active' | 'inactive';
   stores: UserStoreAssignment[];
+  subscriptionPlanId?: string;
+  subscriptionMonths?: number;
+  autoRenewal?: boolean;
+  subscriptionStartDate?: string;
+  subscriptionEndDate?: string;
 }
 
 interface StoreOption {
   id: string;
   name: string;
   code: string;
+}
+
+interface SubscriptionPlanOption {
+  id: string;
+  name: string;
+  maxStores: number;
+  price: number;
+  isActive?: boolean;
 }
 
 // Allow empty permissions - user will use default role permissions
@@ -78,6 +92,11 @@ const userInfoSchemaBase = z.object({
   displayName: z.string().optional(),
   role: z.enum(['owner', 'company_manager', 'store_manager', 'salesperson']),
   storeIds: z.array(z.string()).optional(),
+  hourlyRate: z.number().min(0, 'Lương theo giờ phải >= 0').optional(),
+  maxShiftHours: z.number().min(1, 'Giới hạn giờ phải >= 1').max(24, 'Giới hạn giờ phải <= 24').optional(),
+  subscriptionPlanId: z.string().optional(),
+  subscriptionMonths: z.number().min(1, 'Thời hạn gói phải từ 1 tháng').max(24, 'Thời hạn tối đa 24 tháng').optional(),
+  autoRenewal: z.boolean().optional(),
 });
 
 const newUserInfoSchema = userInfoSchemaBase.extend({
@@ -250,8 +269,12 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
   const { toast } = useToast();
   const { role: currentUserRole, userStores } = useUserRole();
   const [copyUserPopoverOpen, setCopyUserPopoverOpen] = useState(false);
+  const [subscriptionPlans, setSubscriptionPlans] = useState<SubscriptionPlanOption[]>([]);
+  const [plansLoading, setPlansLoading] = useState(false);
 
   const isEditMode = !!user;
+  const dialogWidthClass = isEditMode ? 'sm:max-w-5xl' : 'sm:max-w-[760px]';
+  const layoutClass = isEditMode ? 'grid grid-cols-1 md:grid-cols-2' : 'grid grid-cols-1';
 
   // Get available stores from current user's stores
   const availableStores: StoreOption[] = useMemo(() => {
@@ -282,16 +305,30 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
 
   const role = infoForm.watch('role');
   const selectedStoreIds = infoForm.watch('storeIds') || [];
+  const shouldShowSubscriptionSection = true;
 
   useEffect(() => {
     if (isOpen) {
       if (user) {
+        const derivedSubscriptionMonths = user.subscriptionMonths || (
+          user.subscriptionStartDate && user.subscriptionEndDate
+            ? Math.max(
+                1,
+                (new Date(user.subscriptionEndDate).getFullYear() - new Date(user.subscriptionStartDate).getFullYear()) * 12 +
+                (new Date(user.subscriptionEndDate).getMonth() - new Date(user.subscriptionStartDate).getMonth())
+              )
+            : 1
+        );
+
         infoForm.reset({
           email: user.email,
           displayName: user.displayName || '',
           role: user.role,
           password: '',
           storeIds: user.stores?.map(s => s.storeId) || [],
+          subscriptionPlanId: user.subscriptionPlanId || '',
+          subscriptionMonths: derivedSubscriptionMonths,
+          autoRenewal: user.autoRenewal ?? true,
         });
         // If user has custom permissions (including empty object), use them
         // If permissions is null/undefined, show default permissions for the role
@@ -307,6 +344,9 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
           role: 'salesperson',
           password: '',
           storeIds: [],
+          subscriptionPlanId: '',
+          subscriptionMonths: 1,
+          autoRenewal: true,
         });
         permissionsForm.reset({
           permissions: defaultPermissions.salesperson
@@ -315,10 +355,37 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
     }
   }, [user, isOpen, infoForm, permissionsForm]);
 
+  useEffect(() => {
+    if (!isOpen || !shouldShowSubscriptionSection) {
+      return;
+    }
+
+    const fetchSubscriptionPlans = async () => {
+      setPlansLoading(true);
+      try {
+        const response = await apiClient.request<{ plans: SubscriptionPlanOption[] }>('/subscription/plans');
+        setSubscriptionPlans(response.plans || []);
+
+        const currentPlan = infoForm.getValues('subscriptionPlanId');
+        if (!currentPlan && response.plans && response.plans.length > 0) {
+          const defaultPlan = response.plans.find((plan) => plan.id === 'basic') || response.plans[0];
+          infoForm.setValue('subscriptionPlanId', defaultPlan.id, { shouldDirty: true });
+        }
+      } catch (error) {
+        console.error('Fetch subscription plans for user form error:', error);
+      } finally {
+        setPlansLoading(false);
+      }
+    };
+
+    fetchSubscriptionPlans();
+  }, [isOpen, isEditMode, shouldShowSubscriptionSection, infoForm]);
+
   // Get manageable roles for current user
   const manageableRoles = useMemo(() => {
     if (!currentUserRole) return [];
-    return getManageableRoles(currentUserRole as UserRole);
+    const normalizedRole = currentUserRole === 'admin' ? 'owner' : currentUserRole;
+    return getManageableRoles(normalizedRole as UserRole);
   }, [currentUserRole]);
 
   const handleApplyDefaultPermissions = () => {
@@ -352,10 +419,14 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
   }, [infoForm]);
 
   const onInfoSubmit = async (data: z.infer<typeof userInfoSchemaBase> & { password?: string }) => {
-    const result = await upsertUser({
+    const payload: Record<string, unknown> = {
       ...data,
       id: user?.id,
       storeIds: data.storeIds,
+    };
+
+    const result = await upsertUser({
+      ...payload,
     });
     if (result.success) {
       toast({
@@ -425,29 +496,29 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-4xl max-h-[90vh]">
-        <DialogHeader>
-          <DialogTitle>{user ? 'Chỉnh sửa người dùng' : 'Thêm người dùng mới'}</DialogTitle>
+      <DialogContent className={`${dialogWidthClass} h-[90vh] max-h-[90vh] flex flex-col border-0 bg-gradient-to-b from-slate-50 to-white p-0 overflow-hidden`}>
+        <DialogHeader className="shrink-0 border-b bg-[radial-gradient(circle_at_top_left,_#e2e8f0,_#f8fafc_60%)] px-6 py-5">
+          <DialogTitle className="text-2xl font-bold tracking-tight">{user ? 'Chỉnh sửa người dùng' : 'Thêm người dùng mới'}</DialogTitle>
           <DialogDescription>
             {user ? 'Cập nhật chi tiết cho người dùng này.' : 'Tạo tài khoản mới, gán vai trò và phân quyền chi tiết.'}
           </DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 overflow-y-auto pr-6 max-h-[calc(80vh-100px)]">
+        <div className={`${layoutClass} gap-5 overflow-y-auto p-5 flex-1 min-h-0`}>
           <Form {...infoForm}>
-            <form onSubmit={infoForm.handleSubmit(onInfoSubmit)} className="space-y-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Thông tin tài khoản</CardTitle>
+            <form onSubmit={infoForm.handleSubmit(onInfoSubmit)} className="flex flex-col w-full">
+              <Card className="flex flex-col border-slate-200 shadow-sm">
+                <CardHeader className="shrink-0 border-b bg-slate-50/80">
+                  <CardTitle className="text-xl">Thông tin tài khoản</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-4">
+                <CardContent className="space-y-4 p-5">
                   <FormField
                     control={infoForm.control}
                     name="email"
                     render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Email</FormLabel>
+                      <FormItem className="rounded-xl border border-slate-200 bg-white/90 p-3">
+                        <FormLabel className="text-slate-700">Email</FormLabel>
                         <FormControl>
-                          <Input placeholder="example@email.com" {...field} disabled={!!user} />
+                          <Input className="h-11 bg-slate-50" placeholder="example@email.com" {...field} disabled={!!user} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -457,10 +528,10 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
                     control={infoForm.control}
                     name="password"
                     render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Mật khẩu</FormLabel>
+                      <FormItem className="rounded-xl border border-slate-200 bg-white/90 p-3">
+                        <FormLabel className="text-slate-700">Mật khẩu</FormLabel>
                         <FormControl>
-                          <Input type="password" placeholder={user ? "Để trống nếu không muốn đổi" : "••••••••"} {...field} />
+                          <Input className="h-11 bg-slate-50" type="password" placeholder={user ? "Để trống nếu không muốn đổi" : "••••••••"} {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -470,11 +541,58 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
                     control={infoForm.control}
                     name="displayName"
                     render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Tên hiển thị</FormLabel>
+                      <FormItem className="rounded-xl border border-slate-200 bg-white/90 p-3">
+                        <FormLabel className="text-slate-700">Tên hiển thị</FormLabel>
                         <FormControl>
-                          <Input placeholder="John Doe" {...field} value={field.value || ''} />
+                          <Input className="h-11 bg-slate-50" placeholder="John Doe" {...field} value={field.value || ''} />
                         </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={infoForm.control}
+                    name="hourlyRate"
+                    render={({ field }) => (
+                      <FormItem className="rounded-xl border border-slate-200 bg-white/90 p-3">
+                        <FormLabel className="text-slate-700">Lương theo giờ (VNĐ)</FormLabel>
+                        <FormControl>
+                          <Input 
+                            className="h-11 bg-slate-50"
+                            type="number" 
+                            placeholder="20000" 
+                            {...field} 
+                            value={field.value || ''} 
+                            onChange={(e) => field.onChange(e.target.value ? Number(e.target.value) : undefined)}
+                          />
+                        </FormControl>
+                        <p className="text-xs text-muted-foreground">
+                          Lương nhân viên nhận được mỗi giờ làm việc
+                        </p>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={infoForm.control}
+                    name="maxShiftHours"
+                    render={({ field }) => (
+                      <FormItem className="rounded-xl border border-slate-200 bg-white/90 p-3">
+                        <FormLabel className="text-slate-700">Giới hạn giờ làm việc</FormLabel>
+                        <FormControl>
+                          <Input 
+                            className="h-11 bg-slate-50"
+                            type="number" 
+                            placeholder="8" 
+                            step="0.5"
+                            {...field} 
+                            value={field.value || ''} 
+                            onChange={(e) => field.onChange(e.target.value ? Number(e.target.value) : undefined)}
+                          />
+                        </FormControl>
+                        <p className="text-xs text-muted-foreground">
+                          Số giờ tối đa nhân viên có thể làm việc trong một ca (mặc định: 8 giờ)
+                        </p>
                         <FormMessage />
                       </FormItem>
                     )}
@@ -483,11 +601,11 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
                     control={infoForm.control}
                     name="role"
                     render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Vai trò</FormLabel>
+                      <FormItem className="rounded-xl border border-slate-200 bg-white/90 p-3">
+                        <FormLabel className="text-slate-700">Vai trò</FormLabel>
                         <Select onValueChange={field.onChange} value={field.value}>
                           <FormControl>
-                            <SelectTrigger>
+                            <SelectTrigger className="h-11 bg-slate-50">
                               <SelectValue placeholder="Chọn một vai trò" />
                             </SelectTrigger>
                           </FormControl>
@@ -510,13 +628,86 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
                     )}
                   />
 
+                  {shouldShowSubscriptionSection && (
+                    <div className="space-y-4 rounded-xl border border-amber-200 bg-amber-50/60 p-4">
+                      <div className="text-sm font-semibold text-amber-800">Cấp gói dịch vụ</div>
+
+                      <FormField
+                        control={infoForm.control}
+                        name="subscriptionPlanId"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Gói dịch vụ</FormLabel>
+                            <Select onValueChange={field.onChange} value={field.value || ''}>
+                              <FormControl>
+                                <SelectTrigger className="h-11 bg-white">
+                                  <SelectValue placeholder={plansLoading ? 'Đang tải gói...' : 'Chọn gói dịch vụ'} />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                {subscriptionPlans.map((plan) => (
+                                  <SelectItem key={plan.id} value={plan.id}>
+                                    {plan.name} ({plan.maxStores >= 999 ? 'không giới hạn cửa hàng' : `${plan.maxStores} cửa hàng`})
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={infoForm.control}
+                        name="subscriptionMonths"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Thời hạn gói (tháng)</FormLabel>
+                            <FormControl>
+                              <Input
+                                className="h-11 bg-white"
+                                type="number"
+                                min={1}
+                                max={24}
+                                value={field.value || ''}
+                                onChange={(e) => field.onChange(e.target.value ? Number(e.target.value) : 1)}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={infoForm.control}
+                        name="autoRenewal"
+                        render={({ field }) => (
+                          <FormItem className="flex flex-row items-center justify-between rounded-lg border border-amber-200 bg-white p-3">
+                            <div className="space-y-1">
+                              <FormLabel>Tự động gia hạn</FormLabel>
+                              <p className="text-xs text-muted-foreground">
+                                Bật để tài khoản quản lý tự động gia hạn khi hết hạn gói.
+                              </p>
+                            </div>
+                            <FormControl>
+                              <Checkbox
+                                checked={Boolean(field.value)}
+                                onCheckedChange={(checked) => field.onChange(Boolean(checked))}
+                              />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+                  )}
+
                   {/* Store Assignment Section - Only for store_manager and salesperson */}
                   {(role === 'store_manager' || role === 'salesperson') && (
                     <FormField
                       control={infoForm.control}
                       name="storeIds"
                       render={() => (
-                        <FormItem>
+                        <FormItem className="rounded-xl border border-slate-200 bg-white/90 p-3">
                           <FormLabel className="flex items-center gap-2">
                             <Store className="h-4 w-4" />
                             Cửa hàng được gán
@@ -542,7 +733,7 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
                             </div>
                             {/* Store selector */}
                             <Select onValueChange={handleAddStore}>
-                              <SelectTrigger>
+                              <SelectTrigger className="h-11 bg-slate-50">
                                 <SelectValue placeholder="Chọn cửa hàng để gán..." />
                               </SelectTrigger>
                               <SelectContent>
@@ -566,15 +757,15 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
                       )}
                     />
                   )}
-                  {(role === 'owner' || role === 'company_manager' || role === 'admin') && (
-                    <div className="text-sm text-muted-foreground flex items-center gap-2 p-3 bg-muted rounded-md">
+                  {(role === 'owner' || role === 'company_manager') && (
+                    <div className="text-sm text-muted-foreground flex items-center gap-2 p-3 bg-slate-100 rounded-lg border border-slate-200">
                       <Store className="h-4 w-4" />
                       <span>Vai trò này có quyền truy cập tất cả cửa hàng</span>
                     </div>
                   )}
                 </CardContent>
-                <div className="p-6 pt-0">
-                  <Button type="submit" className="w-full" disabled={infoForm.formState.isSubmitting}>
+                <div className="p-5 pt-0 shrink-0">
+                  <Button type="submit" className="w-full h-11 font-semibold" disabled={infoForm.formState.isSubmitting}>
                     {infoForm.formState.isSubmitting ? 'Đang lưu...' : (isEditMode ? 'Lưu thay đổi thông tin' : 'Tạo người dùng')}
                   </Button>
                 </div>
@@ -584,15 +775,17 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
 
           {isEditMode && (
             <Form {...permissionsForm}>
-              <form onSubmit={permissionsForm.handleSubmit(onPermissionsSubmit)} className="flex flex-col h-full">
-                <Card className="flex flex-col flex-grow">
-                  <CardHeader>
-                    <div className="flex justify-between items-center">
-                      <CardTitle>Phân quyền chi tiết</CardTitle>
-                      <div className="flex gap-2">
+              <form onSubmit={permissionsForm.handleSubmit(onPermissionsSubmit)} className="flex flex-col">
+                <Card className="flex flex-col border-slate-200 shadow-sm">
+                  <CardHeader className="shrink-0 border-b bg-slate-50/80">
+                    <div className="space-y-3">
+                      <CardTitle className="text-xl">Phân quyền chi tiết</CardTitle>
+                      <div className="flex flex-wrap gap-2">
                         <Popover open={copyUserPopoverOpen} onOpenChange={setCopyUserPopoverOpen}>
                           <PopoverTrigger asChild>
-                            <Button type="button" variant="outline" size="sm"><Copy className="h-4 w-4 mr-2" />Sao chép</Button>
+                            <Button type="button" variant="outline" size="sm" className="text-xs">
+                              <Copy className="h-3 w-3 mr-1" />Sao chép
+                            </Button>
                           </PopoverTrigger>
                           <PopoverContent className="w-[300px] p-0">
                             <Command>
@@ -610,20 +803,20 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
                             </Command>
                           </PopoverContent>
                         </Popover>
-                        <Button size="sm" variant="outline" type="button" onClick={handleClearAllPermissions}>
-                          <X className="h-4 w-4 mr-2" />
+                        <Button size="sm" variant="outline" type="button" onClick={handleClearAllPermissions} className="text-xs">
+                          <X className="h-3 w-3 mr-1" />
                           Bỏ chọn tất cả
                         </Button>
                         {role && (
-                          <Button size="sm" variant="outline" type="button" onClick={handleApplyDefaultPermissions}>
-                            <RefreshCw className="h-4 w-4 mr-2" />
+                          <Button size="sm" variant="outline" type="button" onClick={handleApplyDefaultPermissions} className="text-xs">
+                            <RefreshCw className="h-3 w-3 mr-1" />
                             Mặc định
                           </Button>
                         )}
                       </div>
                     </div>
                   </CardHeader>
-                  <CardContent className="space-y-2 flex-grow overflow-y-auto">
+                  <CardContent className="space-y-2 p-5">
                     <Accordion type="multiple" className="w-full" defaultValue={permissionGroups.map(g => g.groupName)}>
                       {permissionGroups.map(group => {
                         // Only owner and admin can see/edit system administration permissions
@@ -640,7 +833,7 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
                                   control={permissionsForm.control}
                                   name={`permissions.${module.id}`}
                                   render={({ field }) => (
-                                    <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3 shadow-sm">
+                                    <FormItem className="flex flex-row items-center justify-between rounded-lg border border-slate-200 p-3 bg-white shadow-sm">
                                       <div className="space-y-0.5">
                                         <FormLabel className="cursor-pointer">{module.name}</FormLabel>
                                       </div>
@@ -686,8 +879,8 @@ export function UserForm({ isOpen, onOpenChange, user, allUsers, onUserUpdated }
                       })}
                     </Accordion>
                   </CardContent>
-                  <div className="p-6 pt-4 mt-auto">
-                    <Button type="submit" className="w-full" disabled={permissionsForm.formState.isSubmitting}>
+                  <div className="p-5 pt-4 shrink-0">
+                    <Button type="submit" className="w-full h-11 font-semibold" disabled={permissionsForm.formState.isSubmitting}>
                       {permissionsForm.formState.isSubmitting ? 'Đang lưu...' : 'Lưu phân quyền'}
                     </Button>
                   </div>

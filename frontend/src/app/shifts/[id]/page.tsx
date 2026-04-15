@@ -35,7 +35,7 @@ import {
 } from '@/components/ui/table'
 import { formatCurrency } from '@/lib/utils'
 import { getShift, getShiftSales } from '../actions'
-import { Shift, ShiftWithSummary } from '@/lib/repositories/shift-repository'
+import type { Shift } from '@/lib/repositories/shift-repository'
 
 interface Sale {
   id: string;
@@ -50,7 +50,7 @@ export default function ShiftDetailPage() {
   const params = useParams();
   const shiftId = params.id as string;
 
-  const [shift, setShift] = useState<Shift | ShiftWithSummary | null>(null);
+  const [shift, setShift] = useState<Shift | null>(null);
   const [sales, setSales] = useState<Sale[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -62,7 +62,7 @@ export default function ShiftDetailPage() {
 
       try {
         const [shiftResult, salesResult] = await Promise.all([
-          getShift(shiftId, true),
+          getShift(shiftId),
           getShiftSales(shiftId),
         ]);
 
@@ -71,8 +71,15 @@ export default function ShiftDetailPage() {
           return;
         }
 
-        setShift(shiftResult.shift);
-        setSales(salesResult.data || []);
+        setShift(shiftResult.shift as unknown as Shift);
+        setSales((salesResult.data || []).map((item) => ({
+          id: String(item.id ?? ''),
+          invoiceNumber: String(item.invoiceNumber ?? ''),
+          customerId: item.customerId ? String(item.customerId) : undefined,
+          customerName: item.customerName ? String(item.customerName) : undefined,
+          transactionDate: String(item.transactionDate ?? new Date().toISOString()),
+          finalAmount: Number(item.finalAmount ?? 0),
+        })));
       } catch (err) {
         setError('Đã xảy ra lỗi khi tải dữ liệu');
       } finally {
@@ -170,7 +177,7 @@ export default function ShiftDetailPage() {
             <TrendingUp className="h-6 w-6 text-primary" />
             <div>
               <p className="text-muted-foreground">Doanh thu bán hàng</p>
-              <p className="font-semibold">{formatCurrency(shift.totalRevenue)}</p>
+              <p className="font-semibold">{formatCurrency(shift.totalRevenue || 0)}</p>
             </div>
           </div>
           <div className="flex items-center gap-3 rounded-lg border p-3">

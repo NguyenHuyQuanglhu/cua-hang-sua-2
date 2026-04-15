@@ -134,7 +134,7 @@ export function MainNav() {
              <Collapsible asChild>
               <SidebarMenuItem>
                 <CollapsibleTrigger asChild>
-                    <SidebarMenuButton className="w-full justify-start" isActive={isActive('/categories') || isActive('/units') || isActive('/customers') || isActive('/suppliers')} tooltip="Danh mục">
+                    <SidebarMenuButton className="w-full justify-start" isActive={isActive('/categories') || isActive('/units') || isActive('/customers') || isActive('/suppliers') || isActive('/contractors')} tooltip="Danh mục">
                       <div className="flex items-center gap-2 flex-1">
                         <Folder />
                         {state === 'expanded' && <span>Danh mục</span>}
@@ -169,6 +169,13 @@ export function MainNav() {
                         <SidebarMenuSubItem>
                           <SidebarMenuSubButton asChild isActive={isActive('/suppliers')}>
                             <Link href="/suppliers" className='flex items-center gap-2'><Building className="h-4 w-4" />Nhà cung cấp</Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      )}
+                      {hasPermission('suppliers', 'view') && (
+                        <SidebarMenuSubItem>
+                          <SidebarMenuSubButton asChild isActive={isActive('/contractors')}>
+                            <Link href="/contractors" className='flex items-center gap-2'><Briefcase className="h-4 w-4" />Nhà thầu</Link>
                           </SidebarMenuSubButton>
                         </SidebarMenuSubItem>
                       )}
@@ -256,13 +263,6 @@ export function MainNav() {
                             </SidebarMenuSubButton>
                         </SidebarMenuSubItem>
                        )}
-                      {hasPermission('reports_debt', 'view') && (
-                        <SidebarMenuSubItem>
-                            <SidebarMenuSubButton asChild isActive={isActive('/reports/debt')}>
-                                <Link href="/reports/debt" className='flex items-center gap-2'><BookUser className="h-4 w-4" />Công nợ KH</Link>
-                            </SidebarMenuSubButton>
-                        </SidebarMenuSubItem>
-                      )}
                        {hasPermission('reports_supplier_debt', 'view') && (
                         <SidebarMenuSubItem>
                             <SidebarMenuSubButton asChild isActive={isActive('/reports/supplier-debt')}>
@@ -272,15 +272,29 @@ export function MainNav() {
                        )}
                       {hasPermission('reports_transactions', 'view') && (
                         <SidebarMenuSubItem>
+                            <SidebarMenuSubButton asChild isActive={isActive('/reports/all-transactions')}>
+                                <Link href="/reports/all-transactions" className='flex items-center gap-2'><History className="h-4 w-4" />Tất cả Giao dịch</Link>
+                            </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      )}
+                        {hasPermission('reports_transactions', 'view') && (
+                        <SidebarMenuSubItem>
+                          <SidebarMenuSubButton asChild isActive={isActive('/reports/subscription-history')}>
+                            <Link href="/reports/subscription-history" className='flex items-center gap-2'><Sparkles className="h-4 w-4 text-yellow-500" />Lịch sử gói dịch vụ</Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                        )}
+                      {hasPermission('reports_transactions', 'view') && (
+                        <SidebarMenuSubItem>
                             <SidebarMenuSubButton asChild isActive={isActive('/reports/transactions')}>
-                                <Link href="/reports/transactions" className='flex items-center gap-2'><History className="h-4 w-4" />Lịch sử Giao dịch</Link>
+                                <Link href="/reports/transactions" className='flex items-center gap-2'><History className="h-4 w-4" /><span className="whitespace-nowrap">Lịch sử GD Khách hàng</span></Link>
                             </SidebarMenuSubButton>
                         </SidebarMenuSubItem>
                       )}
                       {hasPermission('reports_supplier_debt_tracking', 'view') && (
                         <SidebarMenuSubItem>
                             <SidebarMenuSubButton asChild isActive={isActive('/reports/supplier-debt-tracking')}>
-                                <Link href="/reports/supplier-debt-tracking" className='flex items-center gap-2'><History className="h-4 w-4" />Đối soát Công nợ NCC</Link>
+                                <Link href="/reports/supplier-debt-tracking" className='flex items-center gap-2'><History className="h-4 w-4" /><span className="whitespace-nowrap">Đối soát Công nợ NCC</span></Link>
                             </SidebarMenuSubButton>
                         </SidebarMenuSubItem>
                       )}

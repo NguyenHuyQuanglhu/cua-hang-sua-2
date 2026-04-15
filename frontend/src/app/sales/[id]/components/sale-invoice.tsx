@@ -9,17 +9,6 @@ import html2canvas from 'html2canvas'
 import { ChevronLeft, File, Printer } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-  TableFooter,
-} from "@/components/ui/table"
-import Image from 'next/image'
 import { formatCurrency } from "@/lib/utils"
 import type { Customer, Sale, SalesItem, Product, Unit, ThemeSettings } from "@/lib/types"
 
@@ -36,8 +25,18 @@ interface SaleInvoiceProps {
 export function SaleInvoice({ sale, items, customer, productsMap, unitsMap, settings, autoPrint = false }: SaleInvoiceProps) {
   const invoiceRef = useRef<HTMLDivElement>(null);
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     window.print();
+    
+    // Update status to 'printed' after printing
+    if (sale.status !== 'printed') {
+      try {
+        const { updateSaleStatus } = await import('../../actions');
+        await updateSaleStatus(sale.id, 'printed');
+      } catch (error) {
+        console.error('Failed to update sale status:', error);
+      }
+    }
   };
 
   useEffect(() => {
@@ -50,19 +49,6 @@ export function SaleInvoice({ sale, items, customer, productsMap, unitsMap, sett
       }, 500); // Delay to ensure content is fully rendered
     }
   }, [autoPrint]);
-
-
-  const getUnitInfo = (unitId: string) => {
-    const unit = unitsMap.get(unitId);
-    if (!unit) return { baseUnit: undefined, conversionFactor: 1, name: '' };
-    
-    if (unit.baseUnitId && unit.conversionFactor) {
-      const baseUnit = unitsMap.get(unit.baseUnitId);
-      return { baseUnit, conversionFactor: unit.conversionFactor, name: unit.name };
-    }
-    
-    return { baseUnit: unit, conversionFactor: 1, name: unit.name };
-  };
 
   const handleExportPDF = () => {
     const input = invoiceRef.current;
@@ -111,11 +97,9 @@ export function SaleInvoice({ sale, items, customer, productsMap, unitsMap, sett
     });
   };
 
-  const remainingDebt = sale.remainingDebt || 0;
-  const isChange = remainingDebt < 0;
-
-  const loyaltyTier = settings?.loyalty?.tiers.find(t => t.name === customer?.loyaltyTier);
   const paperSizeClass = settings?.invoiceFormat === 'A5' ? 'a5-page' : 'a4-page';
+  const paidAmount = sale.customerPayment ?? sale.finalAmount;
+  const change = Math.max(0, paidAmount - sale.finalAmount);
 
 
   return (
@@ -182,154 +166,102 @@ export function SaleInvoice({ sale, items, customer, productsMap, unitsMap, sett
           </Button>
         </div>
       </div>
-        <div className="printable-area">
-        <Card className="p-6 sm:p-8" ref={invoiceRef}>
-            <header className="flex items-start justify-between mb-8">
-                <div className="flex items-center gap-4">
-                     {settings?.companyLogo ? (
-                        <Image src={settings.companyLogo} alt="Company Logo" width={64} height={64} className="h-16 w-16 object-contain" />
-                    ) : (
-                        <div className="h-16 w-16 bg-muted rounded-md flex items-center justify-center">
-                            <span className="text-xs text-muted-foreground">Logo</span>
-                        </div>
-                    )}
-                    <div>
-                        <p className="font-semibold text-lg">{settings?.companyBusinessLine || 'CƠ SỞ SẢN XUẤT VÀ KINH DOANH GIỐNG CÂY TRỒNG'}</p>
-                        <p className="font-bold text-2xl text-primary">{settings?.companyName || 'MINH PHÁT'}</p>
-                    </div>
-                </div>
-                <div className="text-right">
-                    <p className="font-semibold">{settings?.companyAddress || '70 Ấp 1, X. Mỹ Thạnh, H. Thủ Thừa, T. Long an'}</p>
-                    <p>Điện thoại: {settings?.companyPhone || '0915 582 447'}</p>
-                </div>
-            </header>
-
-            <div className="text-center mb-8">
-                <h1 className="text-3xl font-bold tracking-wider">HÓA ĐƠN BÁN HÀNG</h1>
-                <div className="flex justify-center items-center gap-4 text-sm mt-2">
-                    <span>Ngày {new Date(sale.transactionDate).getDate()}</span>
-                    <span>Tháng {new Date(sale.transactionDate).getMonth() + 1}</span>
-                    <span>Năm {new Date(sale.transactionDate).getFullYear()}</span>
-                    <span className="font-semibold">Số HĐ: {sale.invoiceNumber}</span>
-                </div>
+        <div className="printable-area" ref={invoiceRef}>
+          <div className="bg-white p-6 sm:p-8 border rounded-lg">
+            <div className="text-center mb-6">
+              {settings?.companyBusinessLine && (
+                <p className="text-sm text-gray-600">{settings.companyBusinessLine}</p>
+              )}
+              <h1 className="text-3xl font-bold text-orange-500 mb-2">
+                {settings?.companyName || 'Milk Shop'}
+              </h1>
+              {settings?.companyAddress && (
+                <p className="text-sm text-gray-600">{settings.companyAddress}</p>
+              )}
+              {settings?.companyPhone && (
+                <p className="text-sm text-gray-600">ĐT: {settings.companyPhone}</p>
+              )}
             </div>
 
-            <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm mb-6">
-                <p><span className="font-semibold">Khách hàng:</span> {customer?.name || 'Khách lẻ'}</p>
-                <p><span className="font-semibold">Điện thoại:</span> {customer?.phone || 'N/A'}</p>
-                <p className="col-span-2"><span className="font-semibold">Địa chỉ:</span> {customer?.address || 'N/A'}</p>
-                <p className="col-span-2">
-                  <span className="font-semibold">Thông tin ngân hàng:</span>{' '}
-                  {customer && customer.bankName && customer.bankAccountNumber 
-                    ? `${customer.bankName} - ${customer.bankAccountNumber}` 
-                    : 'Chưa có thông tin'}
-                </p>
-            </div>
-            
-            <Table>
-                <TableHeader>
-                    <TableRow>
-                        <TableHead className="w-12">STT</TableHead>
-                        <TableHead>TÊN HÀNG</TableHead>
-                        <TableHead className="text-right">BAO</TableHead>
-                        <TableHead className="text-right">ĐVT</TableHead>
-                        <TableHead className="text-right">SL</TableHead>
-                        <TableHead className="text-right">ĐƠN GIÁ</TableHead>
-                        <TableHead className="text-right">THÀNH TIỀN</TableHead>
-                    </TableRow>
-                </TableHeader>
-                <TableBody>
-                    {items.map((item, index) => {
-                        const product = productsMap.get(item.productId);
-                        if (!product) return null;
-                        
-                        const saleUnitInfo = getUnitInfo(product.unitId);
-                        const baseUnit = saleUnitInfo.baseUnit || unitsMap.get(product.unitId);
-                        
-                        const quantityInSaleUnit = saleUnitInfo.conversionFactor 
-                            ? item.quantity / saleUnitInfo.conversionFactor 
-                            : item.quantity;
-                        
-                        const lineTotal = item.quantity * item.price;
+            <h2 className="text-xl font-bold text-center my-4">HÓA ĐƠN BÁN HÀNG</h2>
 
-                        return (
-                             <TableRow key={item.id}>
-                                <TableCell className="text-center">{index + 1}</TableCell>
-                                <TableCell className="font-medium">{product.name}</TableCell>
-                                <TableCell className="text-right">{quantityInSaleUnit.toLocaleString(undefined, { maximumFractionDigits: 2 })}</TableCell>
-                                <TableCell className="text-right">{baseUnit?.name}</TableCell>
-                                <TableCell className="text-right">{item.quantity.toLocaleString()}</TableCell>
-                                <TableCell className="text-right">{formatCurrency(item.price)}</TableCell>
-                                <TableCell className="text-right font-semibold">{formatCurrency(lineTotal)}</TableCell>
-                            </TableRow>
-                        )
-                    })}
-                </TableBody>
-                <TableFooter>
-                    <TableRow>
-                        <TableCell colSpan={6} className="text-right font-medium py-1">Tổng tiền hàng</TableCell>
-                        <TableCell className="text-right font-semibold py-1">{formatCurrency(sale.totalAmount)}</TableCell>
-                    </TableRow>
-                    {sale.tierDiscountAmount && sale.tierDiscountAmount > 0 ? (
-                        <TableRow>
-                            <TableCell colSpan={6} className="text-right font-medium py-1">Ưu đãi hạng {loyaltyTier?.vietnameseName} ({sale.tierDiscountPercentage}%)</TableCell>
-                            <TableCell className="text-right font-semibold py-1">-{formatCurrency(sale.tierDiscountAmount)}</TableCell>
-                        </TableRow>
-                    ) : null}
-                    {sale.discount && sale.discount > 0 ? (
-                        <TableRow>
-                            <TableCell colSpan={6} className="text-right font-medium py-1">Giảm giá</TableCell>
-                            <TableCell className="text-right font-semibold py-1">-{formatCurrency(sale.discount)}</TableCell>
-                        </TableRow>
-                    ) : null}
-                     {sale.pointsDiscount && sale.pointsDiscount > 0 ? (
-                        <TableRow>
-                            <TableCell colSpan={6} className="text-right font-medium py-1">Giảm giá điểm thưởng ({sale.pointsUsed} điểm)</TableCell>
-                            <TableCell className="text-right font-semibold py-1">-{formatCurrency(sale.pointsDiscount)}</TableCell>
-                        </TableRow>
-                    ) : null}
-                     {sale.vatAmount && sale.vatAmount > 0 && settings?.vatRate ? (
-                        <TableRow>
-                            <TableCell colSpan={6} className="text-right font-medium py-1">Thuế VAT ({settings.vatRate}%)</TableCell>
-                            <TableCell className="text-right font-semibold py-1">{formatCurrency(sale.vatAmount)}</TableCell>
-                        </TableRow>
-                    ) : null}
-                     <TableRow>
-                        <TableCell colSpan={6} className="text-right font-medium py-1">Tổng cộng</TableCell>
-                        <TableCell className="text-right font-semibold py-1">{formatCurrency(sale.finalAmount)}</TableCell>
-                    </TableRow>
-                    <TableRow>
-                        <TableCell colSpan={6} className="text-right font-medium py-1">Nợ cũ</TableCell>
-                        <TableCell className="text-right font-semibold py-1">{formatCurrency(sale.previousDebt || 0)}</TableCell>
-                    </TableRow>
-                    <TableRow>
-                        <TableCell colSpan={6} className="text-right font-medium py-1">Khách thanh toán</TableCell>
-                        <TableCell className="text-right font-semibold py-1">{formatCurrency(sale.customerPayment || 0)}</TableCell>
-                    </TableRow>
-                     <TableRow className="text-lg">
-                        <TableCell colSpan={6} className={`text-right font-bold py-2 ${isChange ? 'text-green-600' : ''}`}>
-                            {isChange ? 'Tiền thối lại' : 'Còn nợ lại'}
-                        </TableCell>
-                        <TableCell className={`text-right font-bold py-2 ${isChange ? 'text-green-600' : ''}`}>
-                            {formatCurrency(Math.abs(remainingDebt))}
-                        </TableCell>
-                    </TableRow>
-                </TableFooter>
-            </Table>
-            
-            <div className="mt-12 text-center text-sm">
-                <p>Minh Phát chân thành cảm ơn quý khách hàng đã luôn tin tưởng và ủng hộ sản phẩm bên chúng tôi!</p>
+            <div className="flex justify-between text-sm mb-6">
+              <span>Số HĐ: {sale.invoiceNumber}</span>
+              <span>Ngày: {new Date(sale.transactionDate).toLocaleString('vi-VN')}</span>
             </div>
-            
-            <div className="flex justify-around mt-8 pt-8">
-                <div className="text-center">
-                    <p className="font-semibold">NGƯỜI GIAO HÀNG</p>
-                </div>
-                <div className="text-center">
-                    <p className="font-semibold">NGƯỜI NHẬN HÀNG</p>
-                </div>
+
+            <div className="text-sm mb-6">
+              <p><strong>Khách hàng:</strong> {customer?.name || 'Khách lẻ'}</p>
+              {customer?.phone && <p><strong>SĐT:</strong> {customer.phone}</p>}
+              {sale.projectName && <p><strong>Công trình:</strong> {sale.projectName}</p>}
             </div>
-        </Card>
+
+            <table className="w-full border-collapse mb-6 text-sm">
+              <thead>
+                <tr className="bg-gray-100">
+                  <th className="border p-3 text-left">STT</th>
+                  <th className="border p-3 text-left">Sản phẩm</th>
+                  <th className="border p-3 text-right">SL</th>
+                  <th className="border p-3 text-right">Đơn giá</th>
+                  <th className="border p-3 text-right">Thành tiền</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item, index) => {
+                  const product = productsMap.get(item.productId);
+                  if (!product) return null;
+
+                  return (
+                    <tr key={item.id}>
+                      <td className="border p-3">{index + 1}</td>
+                      <td className="border p-3">{product.name}</td>
+                      <td className="border p-3 text-right">{item.quantity}</td>
+                      <td className="border p-3 text-right">{formatCurrency(item.price)}</td>
+                      <td className="border p-3 text-right">{formatCurrency(item.price * item.quantity)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+
+            <div className="border-t pt-4 text-sm">
+              <div className="flex justify-between py-1">
+                <span>Tổng tiền hàng:</span>
+                <span>{formatCurrency(sale.totalAmount)}</span>
+              </div>
+              {sale.discount && sale.discount > 0 && (
+                <div className="flex justify-between py-1">
+                  <span>Giảm giá:</span>
+                  <span>-{formatCurrency(sale.discount)}</span>
+                </div>
+              )}
+              {sale.vatAmount && sale.vatAmount > 0 && (
+                <div className="flex justify-between py-1">
+                  <span>VAT ({settings?.vatRate || 0}%):</span>
+                  <span>{formatCurrency(sale.vatAmount)}</span>
+                </div>
+              )}
+              <div className="flex justify-between py-2 border-t-2 border-gray-800 font-bold text-lg mt-2">
+                <span>Tổng cộng:</span>
+                <span>{formatCurrency(sale.finalAmount)}</span>
+              </div>
+              <div className="flex justify-between py-1">
+                <span>Khách thanh toán:</span>
+                <span>{formatCurrency(paidAmount)}</span>
+              </div>
+              {change > 0 && (
+                <div className="flex justify-between py-1 text-green-600">
+                  <span>Tiền thối lại:</span>
+                  <span>{formatCurrency(change)}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="text-center mt-10 text-sm text-gray-600">
+              <p>Cảm ơn quý khách đã mua hàng!</p>
+              <p>Hẹn gặp lại!</p>
+            </div>
+          </div>
         </div>
     </div>
   )

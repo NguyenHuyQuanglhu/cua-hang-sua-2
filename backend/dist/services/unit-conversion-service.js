@@ -18,7 +18,7 @@ class UnitConversionService {
         const baseUnitId = productResult[0].unit_id;
         const baseUnitName = productResult[0].unit_name;
         // Get all units that can convert to this base unit
-        const unitsResult = await (0, db_1.query)(`SELECT id, name, 
+        const unitsResult = await (0, db_1.query)(`SELECT id, name,
               CASE WHEN base_unit_id IS NULL THEN 1 ELSE 0 END as is_base,
               ISNULL(conversion_factor, 1) as conversion_factor
        FROM Units

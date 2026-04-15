@@ -14,7 +14,9 @@ export interface CreateSaleItemInput {
  */
 export interface CreateSaleInput {
     customerId?: string;
+    contractorId?: string;
     shiftId?: string;
+    projectName?: string;
     items: CreateSaleItemInput[];
     discount?: number;
     discountType?: 'percentage' | 'amount';
@@ -26,6 +28,7 @@ export interface CreateSaleInput {
     customerPayment?: number;
     previousDebt?: number;
     vatAmount?: number;
+    status?: 'pending' | 'processed';
 }
 /**
  * Result of creating a sale
@@ -40,6 +43,8 @@ export interface CreateSaleResult {
  * Handles sales transactions with automatic inventory deduction and unit conversion
  */
 export declare class SalesService {
+    private resolvePreferredColumnName;
+    private resolveStoreColumnName;
     /**
      * Generate a unique invoice number
      */
@@ -47,7 +52,7 @@ export declare class SalesService {
     /**
      * Create a new sale with automatic inventory deduction
      */
-    createSale(saleData: CreateSaleInput, storeId: string): Promise<CreateSaleResult>;
+    createSale(saleData: CreateSaleInput, storeId: string, userId?: string): Promise<CreateSaleResult>;
     /**
      * Cancel a sale and restore inventory
      */

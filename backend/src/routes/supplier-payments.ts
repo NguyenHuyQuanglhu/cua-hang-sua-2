@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
-import { query } from '../db';
+import { query, queryOne } from '../db';
 import { authenticate, storeContext, AuthRequest } from '../middleware/auth';
+import { cashTransactionRepository } from '../repositories/cash-transaction-repository';
 
 const router = Router();
 
@@ -45,16 +46,20 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     const storeId = req.storeId!;
     const { supplierId, purchaseId, amount, paymentDate, paymentMethod, notes } = req.body;
 
+    const paymentId = crypto.randomUUID();
+    const paymentDateValue = paymentDate || new Date();
+
     // Insert payment record
     await query(
       `INSERT INTO SupplierPayments (id, store_id, supplier_id, purchase_id, amount, payment_date, payment_method, notes, created_at)
-       VALUES (NEWID(), @storeId, @supplierId, @purchaseId, @amount, @paymentDate, @paymentMethod, @notes, GETDATE())`,
+       VALUES (@paymentId, @storeId, @supplierId, @purchaseId, @amount, @paymentDate, @paymentMethod, @notes, GETDATE())`,
       {
+        paymentId,
         storeId,
         supplierId,
         purchaseId: purchaseId || null,
         amount,
-        paymentDate: paymentDate || new Date(),
+        paymentDate: paymentDateValue,
         paymentMethod: paymentMethod || 'cash',
         notes
       }
@@ -117,6 +122,33 @@ router.post('/', async (req: AuthRequest, res: Response) => {
         WHERE pd.running_total - p.remaining_debt < @amount`,
         { supplierId, storeId, amount }
       );
+    }
+
+    // Get supplier name for cash transaction description
+    const supplier = await queryOne<{ name: string }>(
+      `SELECT name FROM Suppliers WHERE id = @supplierId AND store_id = @storeId`,
+      { supplierId, storeId }
+    );
+    const supplierName = supplier?.name || 'Nhà cung cấp';
+
+    // Create cash transaction for the payment (expense)
+    try {
+      await cashTransactionRepository.create(
+        {
+          storeId,
+          type: 'chi',
+          transactionDate: paymentDateValue instanceof Date ? paymentDateValue.toISOString() : new Date(paymentDateValue).toISOString(),
+          amount: amount,
+          reason: `Thanh toán cho ${supplierName}${notes ? ` - ${notes}` : ''}`,
+          category: 'Thanh toán nhà cung cấp',
+          relatedInvoiceId: paymentId,
+        },
+        storeId
+      );
+      console.log(`[SupplierPayments] Created cash transaction for payment to ${supplierName}: ${amount}`);
+    } catch (cashError) {
+      // Log but don't fail the payment if cash transaction fails
+      console.error('[SupplierPayments] Failed to create cash transaction:', cashError);
     }
 
     res.status(201).json({ success: true });

@@ -9,4 +9,5 @@ export { InventoryTransferService, inventoryTransferService, InsufficientStockEx
 export { SyncDataService, syncDataService, UNITS_BY_STORE_TYPE, SUPPLIERS_BY_STORE_TYPE, SAMPLE_CUSTOMERS, type SyncDataResult, } from './sync-data-service';
 export { InventoryService, inventoryService, InsufficientStockError as InventoryInsufficientStockError, type DeductInventoryResult, type InventoryDisplayInfo, } from './inventory-service';
 export { SalesService, salesService, type CreateSaleItemInput, type CreateSaleInput, type CreateSaleResult, } from './sales-service';
+export { StatusMapper, } from './statusMapper';
 //# sourceMappingURL=index.d.ts.map

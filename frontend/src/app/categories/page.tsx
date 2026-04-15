@@ -1,12 +1,13 @@
 'use client'
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useTransition } from "react"
 import {
   MoreHorizontal,
   PlusCircle,
   Search,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  File,
 } from "lucide-react"
 
 import {
@@ -44,7 +45,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { CategoryForm } from "./components/category-form"
-import { deleteCategory } from "./actions"
+import { deleteCategory, generateCategoryTemplate } from "./actions"
 import { useToast } from "@/hooks/use-toast"
 import { Input } from "@/components/ui/input"
 import { useUserRole } from "@/hooks/use-user-role"
@@ -61,6 +62,7 @@ export default function CategoriesPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [isExporting, startExportingTransition] = useTransition();
   
   const { toast } = useToast();
   const { permissions, isLoading: isRoleLoading } = useUserRole();
@@ -144,6 +146,30 @@ export default function CategoriesPage() {
     setCategoryToDelete(null);
   }
 
+  const handleExportTemplate = () => {
+    startExportingTransition(async () => {
+      const result = await generateCategoryTemplate();
+      if (result.success && result.data) {
+        const link = document.createElement("a");
+        link.href = `data:text/csv;charset=utf-8;base64,${result.data}`;
+        link.download = "category_template.csv";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        toast({ 
+          title: "Thành công", 
+          description: "Đã tải xuống file mẫu danh mục." 
+        });
+      } else {
+        toast({ 
+          variant: "destructive", 
+          title: "Lỗi", 
+          description: result.error || "Không thể tạo file mẫu" 
+        });
+      }
+    });
+  }
+
   const isLoading = categoriesLoading || isRoleLoading;
   const canView = permissions?.categories?.includes('view');
   const canAdd = permissions?.categories?.includes('add');
@@ -202,6 +228,12 @@ export default function CategoriesPage() {
             </p>
         </div>
         {canAdd && <div className="ml-auto flex items-center gap-2">
+          <Button size="sm" variant="outline" className="h-8 gap-1" onClick={handleExportTemplate} disabled={isExporting}>
+            <File className="h-3.5 w-3.5" />
+            <span className="sr-only sm:not-sr-only sm:whitespace-nowrap">
+              {isExporting ? 'Đang xuất...' : 'Xuất Template'}
+            </span>
+          </Button>
           <Button size="sm" className="h-8 gap-1" onClick={handleAddCategory}>
             <PlusCircle className="h-3.5 w-3.5" />
             <span className="sr-only sm:not-sr-only sm:whitespace-nowrap">

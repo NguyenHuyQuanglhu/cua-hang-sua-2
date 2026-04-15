@@ -7,6 +7,7 @@ import { Providers } from './providers';
 import { MainNav } from '@/components/main-nav';
 import { Header } from '@/components/header';
 import { NoStorePrompt } from '@/components/stores';
+import { AssetRecoveryListener } from '@/components/asset-recovery-listener';
 
 const ptSans = PT_Sans({
   subsets: ['latin'],
@@ -34,6 +35,7 @@ export default function RootLayout({
         )}
       >
         <Providers>
+          <AssetRecoveryListener />
           <div className="flex min-h-screen">
             <MainNav />
             <div className="flex-1 flex flex-col p-6 gap-6 min-w-0">

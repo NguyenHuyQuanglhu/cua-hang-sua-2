@@ -6,14 +6,133 @@ import {
   productInventoryRepository,
   unitConversionLogRepository,
   inventorySPRepository,
+  purchaseOrderRepository,
 } from '../repositories';
 import { productsSPRepository } from '../repositories/products-sp-repository';
 import { inventoryService, InventoryInsufficientStockError } from '../services';
 
 const router = Router();
 
+interface ProductPurchaseLotInput {
+  id?: string;
+  importDate: string;
+  quantity: number;
+  cost: number;
+  unitId: string;
+  supplierId: string;
+}
+
+async function getUnitConversionForStore(unitId: string, storeId: string): Promise<{ baseUnitId: string; conversionFactor: number }> {
+  try {
+    const unit = await queryOne<{ id: string; baseUnitId: string | null; conversionFactor: number | null }>(
+      `SELECT id, base_unit_id as baseUnitId, conversion_factor as conversionFactor
+       FROM Units
+       WHERE id = @unitId AND store_id = @storeId`,
+      { unitId, storeId }
+    );
+
+    if (!unit) {
+      throw new Error('not-found');
+    }
+
+    return {
+      baseUnitId: unit.baseUnitId || unit.id,
+      conversionFactor: Number(unit.conversionFactor || 1),
+    };
+  } catch (error) {
+    const unit = await queryOne<{ id: string; baseUnitId: string | null; conversionFactor: number | null }>(
+      `SELECT id, BaseUnitId as baseUnitId, ConversionFactor as conversionFactor
+       FROM Units
+       WHERE id = @unitId AND StoreId = @storeId`,
+      { unitId, storeId }
+    );
+
+    if (!unit) {
+      throw error;
+    }
+
+    return {
+      baseUnitId: unit.baseUnitId || unit.id,
+      conversionFactor: Number(unit.conversionFactor || 1),
+    };
+  }
+}
+
+async function validateSupplierForStore(supplierId: string, storeId: string): Promise<boolean> {
+  try {
+    const supplier = await queryOne<{ id: string }>(
+      `SELECT id FROM Suppliers WHERE id = @supplierId AND store_id = @storeId`,
+      { supplierId, storeId }
+    );
+    return !!supplier;
+  } catch (error) {
+    const supplier = await queryOne<{ id: string }>(
+      `SELECT Id as id FROM Suppliers WHERE Id = @supplierId AND StoreId = @storeId`,
+      { supplierId, storeId }
+    );
+    return !!supplier;
+  }
+}
+
 router.use(authenticate);
 router.use(storeContext);
+
+// GET /api/products/low-stock - Get products with low stock
+router.get('/low-stock', async (req: AuthRequest, res: Response) => {
+  try {
+    const storeId = req.storeId!;
+    const { threshold = '10' } = req.query;
+    const thresholdNum = parseInt(threshold as string);
+
+    // Get products with stock below threshold
+    // Use same logic as sp_Products_GetByStore: SUM of ProductInventory, fallback to stock_quantity
+    const lowStockQuery = `
+      SELECT 
+        p.id,
+        p.name,
+        p.sku,
+        p.price,
+        p.cost_price as costPrice,
+        p.stock_quantity as stockQuantity,
+        p.unit_id as unitId,
+        u.name as unitName,
+        c.name as categoryName,
+        p.category_id as categoryId,
+        ISNULL((SELECT SUM(Quantity) FROM ProductInventory WHERE ProductId = p.id AND StoreId = @storeId), p.stock_quantity) AS currentStock
+      FROM Products p
+      LEFT JOIN Units u ON p.unit_id = u.id
+      LEFT JOIN Categories c ON p.category_id = c.id
+      WHERE p.store_id = @storeId 
+        AND p.status = 'active'
+        AND ISNULL((SELECT SUM(Quantity) FROM ProductInventory WHERE ProductId = p.id AND StoreId = @storeId), p.stock_quantity) <= @threshold
+      ORDER BY ISNULL((SELECT SUM(Quantity) FROM ProductInventory WHERE ProductId = p.id AND StoreId = @storeId), p.stock_quantity) ASC, p.name ASC
+    `;
+
+    const products = await query(lowStockQuery, { storeId, threshold: thresholdNum });
+
+    res.json({
+      success: true,
+      data: products.map((p: any) => ({
+        id: p.id,
+        name: p.name,
+        sku: p.sku,
+        price: p.price,
+        costPrice: p.costPrice,
+        stockQuantity: p.stockQuantity || 0,
+        currentStock: p.currentStock,
+        unitId: p.unitId,
+        unitName: p.unitName,
+        categoryName: p.categoryName,
+        categoryId: p.categoryId,
+      })),
+      threshold: thresholdNum,
+      total: products.length,
+    });
+  } catch (error) {
+    console.error('Get low stock products error:', error);
+    res.status(500).json({ error: 'Failed to get low stock products' });
+  }
+});
 
 // GET /api/products
 router.get('/', async (req: AuthRequest, res: Response) => {
@@ -51,9 +170,8 @@ router.get('/', async (req: AuthRequest, res: Response) => {
     const offset = (pageNum - 1) * pageSizeNum;
     const paginatedProducts = products.slice(offset, offset + pageSizeNum);
 
-    res.json({
-      success: true,
-      data: paginatedProducts.map((p) => {
+    const mappedProducts = await Promise.all(
+      paginatedProducts.map(async (p) => {
         // Parse avgCostByUnit JSON if exists
         let avgCostByUnit = [];
         if ((p as any).avgCostByUnit) {
@@ -63,6 +181,21 @@ router.get('/', async (req: AuthRequest, res: Response) => {
           } catch (e) {
             console.error('Failed to parse avgCostByUnit:', e);
             avgCostByUnit = [];
+          }
+        }
+
+        // Always calculate stock in product display unit to avoid mixing quantities across units.
+        const productUnitId = (p as any).unitId as string | undefined;
+        let displayStock = p.currentStock ?? p.stockQuantity ?? 0;
+        if (productUnitId) {
+          try {
+            displayStock = await inventorySPRepository.getAvailable(p.id, storeId, productUnitId);
+          } catch (stockError) {
+            console.error('[GET /api/products] Failed to get stock by unit, using fallback:', {
+              productId: p.id,
+              unitId: productUnitId,
+              error: stockError,
+            });
           }
         }
 
@@ -77,9 +210,9 @@ router.get('/', async (req: AuthRequest, res: Response) => {
           costPrice: p.costPrice,
           sku: p.sku,
           barcode: p.sku, // Use sku as barcode for now
-          stockQuantity: p.currentStock ?? p.stockQuantity ?? 0, // Use ProductInventory first, fallback to Products
-          currentStock: p.currentStock ?? p.stockQuantity ?? 0, // Add currentStock for POS compatibility
-          unitId: (p as any).unitId,
+          stockQuantity: displayStock,
+          currentStock: displayStock,
+          unitId: productUnitId,
           images: p.images,
           status: p.status,
           purchaseLots: [], // Empty array for now
@@ -87,7 +220,12 @@ router.get('/', async (req: AuthRequest, res: Response) => {
           createdAt: p.createdAt,
           updatedAt: p.updatedAt,
         };
-      }),
+      })
+    );
+
+    res.json({
+      success: true,
+      data: mappedProducts,
       total,
       page: pageNum,
       pageSize: pageSizeNum,
@@ -124,10 +262,13 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
         pl.unit_id,
         u.name as unit_name,
         pl.purchase_order_id,
-        po.order_number
+        po.order_number,
+        po.supplier_id,
+        s.name as supplier_name
       FROM PurchaseLots pl
       LEFT JOIN Units u ON pl.unit_id = u.id
       LEFT JOIN PurchaseOrders po ON pl.purchase_order_id = po.id
+      LEFT JOIN Suppliers s ON po.supplier_id = s.id
       WHERE pl.product_id = @productId AND pl.store_id = @storeId AND pl.remaining_quantity > 0
       ORDER BY pl.import_date DESC
     `;
@@ -144,6 +285,8 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
       unitName: lot.unit_name,
       purchaseOrderId: lot.purchase_order_id,
       orderNumber: lot.order_number,
+      supplierId: lot.supplier_id,
+      supplierName: lot.supplier_name,
     }));
 
     res.json({
@@ -181,6 +324,12 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       return;
     }
 
+    // Validate unit_id is required
+    if (!unitId) {
+      res.status(400).json({ error: 'Đơn vị tính là bắt buộc' });
+      return;
+    }
+
     // Use SP Repository instead of inline query
     const product = await productsSPRepository.create({
       storeId,
@@ -190,7 +339,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       price: price || 0,
       costPrice: costPrice || 0,
       sku: sku || null,
-      unitId: unitId || null,
+      unitId: unitId, // Now required, no fallback to null
       stockQuantity: stockQuantity || 0,
       images: images ? JSON.stringify(images) : null,
       status: status || 'active',
@@ -223,27 +372,88 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const storeId = req.storeId!;
-    const { name, description, categoryId, price, costPrice, sku, unitId, images, status } = req.body;
+    const { name, description, categoryId, price, costPrice, sku, unitId, images, status, purchaseLots } = req.body;
+
+    console.log('[PUT /api/products/:id] Request body:', req.body);
+    console.log('[PUT /api/products/:id] unitId:', unitId);
+
+    // Build update data, only include fields that are explicitly provided
+    const updateData: any = {};
+    
+    if (name !== undefined) updateData.name = name;
+    if (description !== undefined) updateData.description = description;
+    if (categoryId !== undefined) updateData.categoryId = categoryId;
+    if (price !== undefined) updateData.price = price;
+    if (costPrice !== undefined) updateData.costPrice = costPrice;
+    if (sku !== undefined) updateData.sku = sku;
+    if (unitId !== undefined && unitId !== null && unitId !== '') {
+      updateData.unitId = unitId;
+    }
+    if (images !== undefined) updateData.images = images ? JSON.stringify(images) : null;
+    if (status !== undefined) updateData.status = status;
+
+    console.log('[PUT /api/products/:id] Update data:', updateData);
 
     // Use SP Repository instead of inline query
-    const product = await productsSPRepository.update(id, storeId, {
-      name,
-      description: description !== undefined ? description : undefined,
-      categoryId: categoryId !== undefined ? categoryId : undefined,
-      price,
-      costPrice,
-      sku: sku !== undefined ? sku : undefined,
-      unitId: unitId !== undefined ? unitId : undefined,
-      images: images ? JSON.stringify(images) : undefined,
-      status,
-    });
+    const product = await productsSPRepository.update(id, storeId, updateData);
 
     if (!product) {
       res.status(404).json({ error: 'Không tìm thấy sản phẩm' });
       return;
     }
 
-    res.json({ success: true });
+    if (Array.isArray(purchaseLots) && purchaseLots.length > 0) {
+      const newLots = (purchaseLots as ProductPurchaseLotInput[]).filter((lot) => !lot.id);
+
+      for (const lot of newLots) {
+        if (!lot.importDate || !lot.unitId || !lot.supplierId) {
+          continue;
+        }
+
+        const quantity = Number(lot.quantity || 0);
+        const cost = Number(lot.cost || 0);
+
+        if (quantity <= 0 || cost < 0) {
+          continue;
+        }
+
+        const supplierValid = await validateSupplierForStore(lot.supplierId, storeId);
+        if (!supplierValid) {
+          continue;
+        }
+
+        const { baseUnitId, conversionFactor } = await getUnitConversionForStore(lot.unitId, storeId);
+        const safeFactor = conversionFactor > 0 ? conversionFactor : 1;
+        const baseQuantity = quantity * safeFactor;
+        const baseCost = cost / safeFactor;
+
+        await purchaseOrderRepository.createWithItems(
+          {
+            supplierId: lot.supplierId,
+            importDate: lot.importDate,
+            notes: `Nhập hàng khi cập nhật sản phẩm ${product.name}`,
+            totalAmount: baseQuantity * baseCost,
+            createdBy: req.user?.id,
+            items: [
+              {
+                productId: id,
+                quantity,
+                cost,
+                unitId: lot.unitId,
+                baseQuantity,
+                baseCost,
+                baseUnitId,
+              },
+            ],
+          },
+          storeId
+        );
+      }
+    }
+
+    console.log('[PUT /api/products/:id] Updated product:', product);
+
+    res.json({ success: true, product });
   } catch (error) {
     console.error('Update product error:', error);
     res.status(500).json({ error: 'Failed to update product' });

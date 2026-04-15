@@ -521,6 +521,8 @@ router.delete('/:id/permanent', async (req: AuthRequest, res: Response) => {
       await query('DELETE FROM Customers WHERE store_id = @id', { id });
       // Delete suppliers
       await query('DELETE FROM Suppliers WHERE store_id = @id', { id });
+      // Delete contractors
+      await query('DELETE FROM Contractors WHERE store_id = @id', { id }).catch(() => {});
       // Delete categories
       await query('DELETE FROM Categories WHERE store_id = @id', { id });
       // Delete units

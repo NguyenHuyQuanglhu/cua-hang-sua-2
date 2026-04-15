@@ -60,7 +60,7 @@ export function CreateVoucherDialog({
     setIsSubmitting(true)
 
     try {
-      const response = await apiClient.request('/vouchers', {
+      const response = await apiClient.request<{ code: string }>('/vouchers', {
         method: 'POST',
         body: JSON.stringify({
           ...formData,

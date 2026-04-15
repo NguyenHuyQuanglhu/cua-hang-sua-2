@@ -148,17 +148,96 @@ export async function deleteCashTransaction(transactionId: string): Promise<{ su
 }
 
 /**
- * Generate cash transactions Excel
+ * Generate cash transactions Excel/CSV
  */
 export async function generateCashTransactionsExcel(
-  _transactions?: Array<Record<string, unknown>>
+  transactions?: Array<Record<string, unknown>>
 ): Promise<{
   success: boolean;
   data?: string;
   error?: string;
 }> {
-  return {
-    success: true,
-    data: '', // Base64 encoded Excel data would go here
-  };
+  try {
+    if (!transactions || transactions.length === 0) {
+      return {
+        success: false,
+        error: 'Không có dữ liệu để xuất',
+      };
+    }
+
+    // Create CSV content with BOM for UTF-8
+    const headers = [
+      'Ngày',
+      'Loại',
+      'Danh mục',
+      'Số tiền',
+      'Lý do',
+      'Mô tả',
+    ];
+
+    let csvContent = '\uFEFF'; // BOM for UTF-8
+    
+    // Add title
+    csvContent += 'SỔ QUỸ\n';
+    csvContent += `Ngày xuất: ${new Date().toLocaleDateString('vi-VN')}\n`;
+    csvContent += '\n';
+    
+    // Add headers
+    csvContent += headers.join(',') + '\n';
+    
+    // Add data rows
+    transactions.forEach((transaction: any) => {
+      const date = transaction.transactionDate || transaction.date || transaction.createdAt;
+      const formattedDate = date ? new Date(date).toLocaleDateString('vi-VN') : '';
+      const type = transaction.type === 'thu' ? 'Thu' : 'Chi';
+      const category = transaction.category || '';
+      const amount = transaction.amount || 0;
+      const reason = transaction.reason || '';
+      const description = transaction.description || '';
+      
+      const row = [
+        formattedDate,
+        type,
+        category,
+        amount.toLocaleString('vi-VN'),
+        reason,
+        description,
+      ];
+      
+      // Escape and quote fields
+      csvContent += row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',') + '\n';
+    });
+    
+    // Add summary
+    csvContent += '\n';
+    csvContent += 'TỔNG KẾT\n';
+    
+    const totalIncome = transactions
+      .filter((t: any) => t.type === 'thu')
+      .reduce((sum: number, t: any) => sum + (t.amount || 0), 0);
+    
+    const totalExpense = transactions
+      .filter((t: any) => t.type === 'chi')
+      .reduce((sum: number, t: any) => sum + (t.amount || 0), 0);
+    
+    const balance = totalIncome - totalExpense;
+    
+    csvContent += `"Tổng thu","","","${totalIncome.toLocaleString('vi-VN')}","",""\n`;
+    csvContent += `"Tổng chi","","","${totalExpense.toLocaleString('vi-VN')}","",""\n`;
+    csvContent += `"Số dư","","","${balance.toLocaleString('vi-VN')}","",""\n`;
+
+    // Convert to base64
+    const base64 = btoa(unescape(encodeURIComponent(csvContent)));
+
+    return {
+      success: true,
+      data: base64,
+    };
+  } catch (error) {
+    console.error('Error generating cash transactions file:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Không thể tạo file sổ quỹ',
+    };
+  }
 }

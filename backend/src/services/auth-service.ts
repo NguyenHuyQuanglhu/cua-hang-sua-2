@@ -36,6 +36,7 @@ export interface TenantDbUser {
   role: UserRole;
   permissions?: Permissions;
   status: string;
+  photoURL?: string;
 }
 
 /**
@@ -65,6 +66,7 @@ export interface AuthenticationResult {
     tenantId: string;
     email: string;
     displayName?: string;
+    photoURL?: string;
     role: UserRole;
     permissions: Permissions;
   };
@@ -187,6 +189,7 @@ export class AuthService {
           tenantId: tenantUser.tenantId,
           email: tenantDbUser.email,
           displayName: tenantDbUser.displayName,
+          photoURL: tenantDbUser.photoURL,
           role: tenantDbUser.role,
           permissions: effectivePermissions,
         },
@@ -214,7 +217,7 @@ export class AuthService {
     const result = await pool.request()
       .input('email', sql.NVarChar, email)
       .query(`
-        SELECT id, email, display_name, role, permissions, status
+        SELECT id, email, display_name, role, permissions, status, photo_url
         FROM Users
         WHERE email = @email
       `);
@@ -231,6 +234,7 @@ export class AuthService {
       role: row.role as UserRole,
       permissions: row.permissions ? JSON.parse(row.permissions) : undefined,
       status: row.status,
+      photoURL: row.photo_url || undefined,
     };
   }
 
@@ -395,7 +399,7 @@ export class AuthService {
       const userResult = await pool.request()
         .input('userId', sql.UniqueIdentifier, userId)
         .query(`
-          SELECT id, email, display_name, role, permissions, status
+          SELECT id, email, display_name, role, permissions, status, photo_url
           FROM Users
           WHERE id = @userId AND status = 'active'
         `);
@@ -412,6 +416,7 @@ export class AuthService {
         role: row.role as UserRole,
         permissions: row.permissions ? JSON.parse(row.permissions) : undefined,
         status: row.status,
+        photoURL: row.photo_url || undefined,
       };
 
       // Get stores
@@ -440,6 +445,7 @@ export class AuthService {
           tenantId,
           email: user.email,
           displayName: user.displayName,
+          photoURL: user.photoURL,
           role: user.role,
           permissions: effectivePermissions,
         },

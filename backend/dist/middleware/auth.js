@@ -117,7 +117,7 @@ async function authenticateMultiTenant(req, res, next, decoded) {
         const userResult = await tenantPool.request()
             .input('userId', mssql_1.default.UniqueIdentifier, decoded.userId)
             .query(`
-        SELECT id, email, display_name, role, permissions, status 
+        SELECT id, email, display_name, role, permissions, status, photo_url 
         FROM Users 
         WHERE id = @userId
       `);
@@ -135,6 +135,7 @@ async function authenticateMultiTenant(req, res, next, decoded) {
             id: user.id,
             email: user.email,
             displayName: user.display_name || undefined,
+            photoURL: user.photo_url || undefined,
             role: user.role,
             tenantId: decoded.tenantId,
             tenantUserId: decoded.tenantUserId,
@@ -161,7 +162,7 @@ async function authenticateLegacy(req, res, next, decoded) {
         return;
     }
     // Get user
-    const user = await (0, db_1.queryOne)('SELECT id, email, display_name, role, permissions, status FROM Users WHERE id = @userId', { userId: decoded.userId });
+    const user = await (0, db_1.queryOne)('SELECT id, email, display_name, role, permissions, status, photo_url FROM Users WHERE id = @userId', { userId: decoded.userId });
     if (!user || user.status !== 'active') {
         res.status(401).json({ error: 'Không tìm thấy người dùng hoặc tài khoản không hoạt động' });
         return;
@@ -170,6 +171,7 @@ async function authenticateLegacy(req, res, next, decoded) {
         id: user.id,
         email: user.email,
         displayName: user.display_name || undefined,
+        photoURL: user.photo_url || undefined,
         role: user.role,
         permissions: user.permissions ? JSON.parse(user.permissions) : undefined,
     };

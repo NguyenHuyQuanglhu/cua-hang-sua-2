@@ -40,9 +40,18 @@ export declare class EmailNotificationService {
      */
     isConfigured(): boolean;
     /**
-     * Send an email
+     * Send an email (public method for custom emails)
      */
-    private sendEmail;
+    sendEmail(options: {
+        to: string;
+        subject: string;
+        text?: string;
+        html?: string;
+    }): Promise<boolean>;
+    /**
+     * Send an email (private method for internal use)
+     */
+    private sendEmailInternal;
     /**
      * Generate order items HTML table
      */

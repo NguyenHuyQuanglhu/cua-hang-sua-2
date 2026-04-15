@@ -55,7 +55,7 @@ export default function PromotionsPage() {
   const fetchPromotions = async () => {
     setIsLoading(true)
     try {
-      const response = await apiClient.request('/promotions', { method: 'GET' })
+      const response = await apiClient.request<{ data?: Promotion[] }>('/promotions', { method: 'GET' })
       setPromotions(response.data || [])
     } catch (error) {
       console.error('Error fetching promotions:', error)

@@ -74,9 +74,6 @@ const getPaymentMethodLabel = (method: string): string => {
   switch (method) {
     case 'cod': return 'Thanh toán khi nhận hàng (COD)';
     case 'bank_transfer': return 'Chuyển khoản ngân hàng';
-    case 'momo': return 'Ví MoMo';
-    case 'vnpay': return 'VNPay';
-    case 'zalopay': return 'ZaloPay';
     default: return method;
   }
 };
@@ -230,10 +227,10 @@ export function OrderDetailDialog({
                   <span className="text-muted-foreground">Tạm tính:</span>
                   <span>{formatCurrency(order.subtotal)}</span>
                 </div>
-                {order.discountAmount > 0 && (
+                {(Number(order.discountAmount || 0) > 0) && (
                   <div className="flex justify-between text-green-600">
                     <span>Giảm giá:</span>
-                    <span>-{formatCurrency(order.discountAmount)}</span>
+                    <span>-{formatCurrency(Number(order.discountAmount || 0))}</span>
                   </div>
                 )}
                 <div className="flex justify-between">
@@ -250,14 +247,14 @@ export function OrderDetailDialog({
           </div>
 
           {/* Notes */}
-          {(order.customerNote || order.internalNote) && (
+          {(order.customerNote || order.note || order.internalNote) && (
             <>
               <Separator />
               <div className="space-y-2">
-                {order.customerNote && (
+                {(order.customerNote || order.note) && (
                   <div>
                     <h4 className="font-medium text-sm">Ghi chú của khách:</h4>
-                    <p className="text-sm text-muted-foreground">{order.customerNote}</p>
+                    <p className="text-sm text-muted-foreground">{order.customerNote || order.note}</p>
                   </div>
                 )}
                 {order.internalNote && (
@@ -275,16 +272,14 @@ export function OrderDetailDialog({
             <>
               <Separator />
               <div className="flex justify-end gap-2">
-                {order.status !== 'cancelled' && (
-                  <Button
-                    variant="outline"
-                    onClick={() => onStatusChange(order.id, 'cancelled')}
-                    disabled={isUpdating}
-                  >
-                    <XCircle className="h-4 w-4 mr-2" />
-                    Hủy đơn
-                  </Button>
-                )}
+                <Button
+                  variant="outline"
+                  onClick={() => onStatusChange(order.id, 'cancelled')}
+                  disabled={isUpdating}
+                >
+                  <XCircle className="h-4 w-4 mr-2" />
+                  Hủy đơn
+                </Button>
                 {nextStatus && (
                   <Button
                     onClick={() => onStatusChange(order.id, nextStatus)}

@@ -38,13 +38,14 @@ import {
   CommandSeparator,
 } from "@/components/ui/command"
 import { useStore } from "@/contexts/store-context"
+import { apiClient } from "@/lib/api-client"
 import type { Customer, Product, PurchaseOrder, Sale, Supplier } from "@/lib/types"
 
 export function CommandMenu() {
   const router = useRouter()
   const [open, setOpen] = React.useState(false)
   const { currentStore } = useStore()
-  
+
   const [customers, setCustomers] = React.useState<Customer[]>([])
   const [products, setProducts] = React.useState<Product[]>([])
   const [sales, setSales] = React.useState<Sale[]>([])
@@ -78,34 +79,19 @@ export function CommandMenu() {
 
     const fetchData = async () => {
       try {
-        const [customersRes, productsRes, salesRes, purchasesRes, suppliersRes] = await Promise.all([
-          fetch('/api/customers'),
-          fetch('/api/products'),
-          fetch('/api/sales'),
-          fetch('/api/purchases'),
-          fetch('/api/suppliers'),
+        const [customersData, productsData, salesData, purchasesData, suppliersData] = await Promise.all([
+          apiClient.getCustomers(),
+          apiClient.getProducts(),
+          apiClient.getSales({ pageSize: 5 }), // limit logic like slice(0, 5) later
+          apiClient.getPurchases(),
+          apiClient.getSuppliers(),
         ])
 
-        if (customersRes.ok) {
-          const data = await customersRes.json()
-          setCustomers(data.data || [])
-        }
-        if (productsRes.ok) {
-          const data = await productsRes.json()
-          setProducts(data.data || [])
-        }
-        if (salesRes.ok) {
-          const data = await salesRes.json()
-          setSales(data.data || [])
-        }
-        if (purchasesRes.ok) {
-          const data = await purchasesRes.json()
-          setPurchases(data.data || [])
-        }
-        if (suppliersRes.ok) {
-          const data = await suppliersRes.json()
-          setSuppliers(data.data || [])
-        }
+        setCustomers((customersData as any).data || customersData || [])
+        setProducts((productsData as any).data || productsData || [])
+        setSales((salesData as any).data || salesData || [])
+        setPurchases((purchasesData as any).data || purchasesData || [])
+        setSuppliers((suppliersData as any).data || suppliersData || [])
       } catch (error) {
         console.error('Error fetching command menu data:', error)
       }
@@ -191,10 +177,6 @@ export function CommandMenu() {
               <DollarSign className="mr-2 h-4 w-4" />
               <span>Báo cáo Lợi nhuận</span>
             </CommandItem>
-            <CommandItem onSelect={() => runCommand(() => router.push('/reports/debt'))}>
-              <BookUser className="mr-2 h-4 w-4" />
-              <span>Báo cáo Công nợ KH</span>
-            </CommandItem>
             <CommandItem onSelect={() => runCommand(() => router.push('/reports/supplier-debt'))}>
               <Truck className="mr-2 h-4 w-4" />
               <span>Báo cáo Công nợ NCC</span>
@@ -203,9 +185,9 @@ export function CommandMenu() {
               <History className="mr-2 h-4 w-4" />
               <span>Lịch sử Giao dịch</span>
             </CommandItem>
-            <CommandItem onSelect={() => runCommand(() => router.push('/reports/supplier-debt-tracking'))}>
-              <History className="mr-2 h-4 w-4" />
-              <span>Đối soát Công nợ NCC</span>
+            <CommandItem onSelect={() => runCommand(() => router.push('/reports/subscription-history'))}>
+              <Sparkles className="mr-2 h-4 w-4" />
+              <span>Lịch sử gói dịch vụ</span>
             </CommandItem>
             <CommandItem onSelect={() => runCommand(() => router.push('/reports/revenue'))}>
               <FileText className="mr-2 h-4 w-4" />

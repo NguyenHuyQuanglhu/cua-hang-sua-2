@@ -31,10 +31,12 @@ export async function getSuppliers(withDebt: boolean = false): Promise<{
     const response = await apiClient.getSuppliers();
 
     // Extract data array from paginated response - backend returns { success, data: [...], total, page, pageSize, totalPages }
-    const rawSuppliers = (response as { data?: unknown[] }).data || (Array.isArray(response) ? response : []);
+    const rawSuppliers = ((response as { data?: unknown[] }).data || (Array.isArray(response) ? response : [])) as unknown[];
 
     // Map backend fields to frontend expected fields
-    const suppliers: SupplierWithDebt[] = rawSuppliers.map((s: Record<string, unknown>) => ({
+    const suppliers: SupplierWithDebt[] = rawSuppliers.map((row) => {
+      const s = (row || {}) as Record<string, unknown>;
+      return ({
       id: s.id as string,
       name: s.name as string,
       contactPerson: s.contactPerson as string | undefined,
@@ -49,7 +51,8 @@ export async function getSuppliers(withDebt: boolean = false): Promise<{
       debt: (s.totalDebt as number) || 0,
       createdAt: s.createdAt as string | undefined,
       updatedAt: s.updatedAt as string | undefined,
-    }));
+      });
+    });
     
     return { success: true, suppliers };
   } catch (error: unknown) {
@@ -148,7 +151,10 @@ export async function getSupplierPayments(): Promise<{
   error?: string;
 }> {
   try {
-    const payments = await apiClient.getSupplierPayments();
+    const response = await apiClient.getSupplierPayments() as unknown;
+    const payments = Array.isArray(response)
+      ? (response as Array<Record<string, unknown>>)
+      : [];
     return { success: true, payments };
   } catch (error: unknown) {
     console.error('Error fetching supplier payments:', error);

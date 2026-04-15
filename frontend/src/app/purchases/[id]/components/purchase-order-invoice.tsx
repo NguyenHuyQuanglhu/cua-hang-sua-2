@@ -21,7 +21,7 @@ import {
   TableFooter,
 } from "@/components/ui/table"
 import { formatCurrency } from "@/lib/utils"
-import type { PurchaseOrder, PurchaseOrderItem, Product, Unit, ThemeSettings, Supplier } from "@/lib/types"
+import type { PurchaseOrder, PurchaseOrderItem, Product, Unit, ThemeSettings, Supplier, Contractor } from "@/lib/types"
 
 interface PurchaseOrderInvoiceProps {
     purchaseOrder: PurchaseOrder;
@@ -30,9 +30,10 @@ interface PurchaseOrderInvoiceProps {
     unitsMap: Map<string, Unit>;
     settings: ThemeSettings | null;
     supplier: Supplier | null;
+    contractor: Contractor | null;
 }
 
-export function PurchaseOrderInvoice({ purchaseOrder, items, productsMap, unitsMap, settings, supplier }: PurchaseOrderInvoiceProps) {
+export function PurchaseOrderInvoice({ purchaseOrder, items, productsMap, unitsMap, settings, supplier, contractor }: PurchaseOrderInvoiceProps) {
   const invoiceRef = useRef<HTMLDivElement>(null);
 
   const handlePrint = () => {
@@ -166,8 +167,11 @@ export function PurchaseOrderInvoice({ purchaseOrder, items, productsMap, unitsM
 
             <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm mb-6">
                 <p><span className="font-semibold">Nhà cung cấp:</span> {supplier?.name || 'N/A'}</p>
+                <p><span className="font-semibold">Nhà thầu:</span> {contractor?.name || 'Chưa gắn'}</p>
                 <p><span className="font-semibold">Điện thoại:</span> {supplier?.phone || 'N/A'}</p>
+                <p><span className="font-semibold">Liên hệ nhà thầu:</span> {contractor?.phone || 'N/A'}</p>
                 <p className="col-span-2"><span className="font-semibold">Địa chỉ:</span> {supplier?.address || 'N/A'}</p>
+                <p className="col-span-2"><span className="font-semibold">Địa chỉ nhà thầu:</span> {contractor?.address || 'N/A'}</p>
                 <p className="col-span-2"><span className="font-semibold">Ghi chú:</span> {purchaseOrder.notes || 'Không có'}</p>
             </div>
             

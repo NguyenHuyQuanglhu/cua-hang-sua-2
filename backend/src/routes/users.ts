@@ -24,6 +24,10 @@ const router = Router();
 
 router.use(authenticate);
 
+function normalizeUserRole(role: string): UserRole {
+  return role === 'admin' ? 'owner' : (role as UserRole);
+}
+
 /**
  * Check if current user can manage target role based on role hierarchy
  * - Owner can manage all roles including other owners
@@ -70,6 +74,102 @@ function buildUserVisibilityFilter(currentUserRole: UserRole): string {
   return `role IN (${roleList})`;
 }
 
+const PLAN_PRIORITY_FALLBACK: Record<string, number> = {
+  basic: 1,
+  pro: 2,
+  enterprise: 3,
+};
+
+async function getPlanPriority(planId: string): Promise<number> {
+  if (!planId) return 0;
+
+  try {
+    const plan = await queryOne<{ sort_order: number | null; max_stores: number | null }>(
+      `SELECT sort_order, max_stores FROM SubscriptionPlans WHERE id = @planId`,
+      { planId }
+    );
+
+    if (plan?.sort_order && Number(plan.sort_order) > 0) {
+      return Number(plan.sort_order);
+    }
+
+    if (plan?.max_stores && Number(plan.max_stores) > 0) {
+      return Number(plan.max_stores);
+    }
+  } catch (error) {
+    // Fallback mapping is used when SubscriptionPlans is unavailable in legacy schemas.
+    console.warn('Cannot read plan priority from SubscriptionPlans, fallback to default map:', error);
+  }
+
+  return PLAN_PRIORITY_FALLBACK[planId] || 0;
+}
+
+function buildUserDisplayName(
+  displayName: string | null | undefined,
+  email: string | null | undefined,
+  fallbackId?: string
+): string {
+  const normalizedDisplayName = String(displayName || '').trim();
+  if (normalizedDisplayName) {
+    return normalizedDisplayName;
+  }
+
+  const normalizedEmail = String(email || '').trim();
+  if (normalizedEmail) {
+    return normalizedEmail.includes('@') ? normalizedEmail.split('@')[0] : normalizedEmail;
+  }
+
+  return fallbackId ? `ID: ${fallbackId.slice(0, 8)}` : 'Nguoi dung khong xac dinh';
+}
+
+async function ensureSubscriptionTransactionAuditColumns(): Promise<void> {
+  await query(`
+    IF OBJECT_ID('SubscriptionTransactions', 'U') IS NOT NULL
+    BEGIN
+      IF COL_LENGTH('SubscriptionTransactions', 'processed_by_name') IS NULL
+        ALTER TABLE SubscriptionTransactions ADD processed_by_name NVARCHAR(255) NULL;
+
+      IF COL_LENGTH('SubscriptionTransactions', 'processed_by_email') IS NULL
+        ALTER TABLE SubscriptionTransactions ADD processed_by_email NVARCHAR(255) NULL;
+
+      IF COL_LENGTH('SubscriptionTransactions', 'user_name_snapshot') IS NULL
+        ALTER TABLE SubscriptionTransactions ADD user_name_snapshot NVARCHAR(255) NULL;
+
+      IF COL_LENGTH('SubscriptionTransactions', 'user_email_snapshot') IS NULL
+        ALTER TABLE SubscriptionTransactions ADD user_email_snapshot NVARCHAR(255) NULL;
+
+      IF COL_LENGTH('SubscriptionTransactions', 'metadata') IS NULL
+        ALTER TABLE SubscriptionTransactions ADD metadata NVARCHAR(MAX) NULL;
+    END
+  `);
+}
+
+async function dropSubscriptionUserForeignKeysForHistoryRetention(): Promise<void> {
+  await query(`
+    DECLARE @dropSql NVARCHAR(MAX) = N'';
+
+    SELECT @dropSql = @dropSql
+      + N'ALTER TABLE ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id))
+      + N'.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id))
+      + N' DROP CONSTRAINT ' + QUOTENAME(fk.name) + N';'
+    FROM sys.foreign_keys fk
+    INNER JOIN sys.foreign_key_columns fkc ON fk.object_id = fkc.constraint_object_id
+    INNER JOIN sys.columns parent_col
+      ON parent_col.object_id = fkc.parent_object_id
+      AND parent_col.column_id = fkc.parent_column_id
+    INNER JOIN sys.columns ref_col
+      ON ref_col.object_id = fkc.referenced_object_id
+      AND ref_col.column_id = fkc.referenced_column_id
+    WHERE OBJECT_NAME(fk.parent_object_id) IN ('SubscriptionTransactions', 'SubscriptionHistory')
+      AND parent_col.name = 'user_id'
+      AND OBJECT_NAME(fk.referenced_object_id) = 'Users'
+      AND ref_col.name = 'id';
+
+    IF LEN(@dropSql) > 0
+      EXEC sp_executesql @dropSql;
+  `);
+}
+
 
 /**
  * GET /api/users/roles/assignable - Get roles that current user can assign
@@ -77,7 +177,7 @@ function buildUserVisibilityFilter(currentUserRole: UserRole): string {
 router.get('/roles/assignable', async (req: AuthRequest, res: Response) => {
   try {
     const currentUser = req.user!;
-    const currentUserRole = currentUser.role as UserRole;
+    const currentUserRole = normalizeUserRole(currentUser.role);
     const assignableRoles = getManageableRoles(currentUserRole);
     res.json({ roles: assignableRoles, currentRole: currentUserRole });
   } catch (error) {
@@ -202,8 +302,19 @@ router.get('/:id/audit-logs', requireModulePermission('users', 'view'), async (r
  */
 router.post('/', requireModulePermission('users', 'add'), storeContext, async (req: AuthRequest, res: Response) => {
   try {
-    const { email, password, displayName, role, status, storeIds } = req.body;
+    const {
+      email,
+      password,
+      displayName,
+      role,
+      status,
+      storeIds,
+      subscriptionPlanId,
+      subscriptionMonths,
+      autoRenewal,
+    } = req.body;
     const currentUser = req.user!;
+    const currentUserRole = normalizeUserRole(currentUser.role);
     const currentStoreId: string | undefined = req.storeId;
 
     if (!email || !password) {
@@ -218,13 +329,13 @@ router.post('/', requireModulePermission('users', 'add'), storeContext, async (r
     }
 
     // Check role hierarchy - Requirements: 4.1, 4.2
-    if (!canManageRole(currentUser.role as UserRole, targetRole)) {
+    if (!canManageRole(currentUserRole, targetRole)) {
       res.status(403).json({ error: 'Bạn không có quyền tạo người dùng với role này', errorCode: 'PERM001' });
       return;
     }
 
     // Store Manager can only create Salesperson - Requirements: 4.2
-    if (currentUser.role === 'store_manager' && targetRole !== 'salesperson') {
+    if (currentUserRole === 'store_manager' && targetRole !== 'salesperson') {
       res.status(403).json({ error: 'Store Manager chỉ có thể tạo tài khoản Salesperson', errorCode: 'PERM001' });
       return;
     }
@@ -237,11 +348,77 @@ router.post('/', requireModulePermission('users', 'add'), storeContext, async (r
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
+
+    let resolvedPlanId = 'basic';
+    let resolvedMaxStores = 1;
+    let resolvedStartDate: Date | null = null;
+    let resolvedEndDate: Date | null = null;
+    let resolvedSubscriptionStatus = 'active';
+    let resolvedAutoRenewal = false;
+    let resolvedPlanPrice = 0;
+
+    const shouldAssignSubscription =
+      typeof subscriptionPlanId === 'string' &&
+      subscriptionPlanId.trim().length > 0;
+
+    if (shouldAssignSubscription) {
+      const now = new Date();
+      const months = Number(subscriptionMonths) > 0 ? Math.min(Number(subscriptionMonths), 24) : 1;
+
+      let planFromDb: { id: string; max_stores: number; price: number } | null = null;
+      try {
+        planFromDb = await queryOne<{ id: string; max_stores: number; price: number }>(
+          `SELECT id, max_stores, price FROM SubscriptionPlans WHERE id = @planId AND is_active = 1`,
+          { planId: subscriptionPlanId }
+        );
+      } catch (planQueryError) {
+        console.warn('SubscriptionPlans table unavailable, using fallback plans:', planQueryError);
+      }
+
+      const fallbackPlans: Record<string, { maxStores: number; price: number }> = {
+        basic: { maxStores: 1, price: 199000 },
+        pro: { maxStores: 5, price: 499000 },
+        enterprise: { maxStores: 999, price: 1999000 },
+      };
+
+      const fallback = fallbackPlans[subscriptionPlanId as string];
+      if (planFromDb || fallback) {
+        resolvedPlanId = planFromDb?.id || (subscriptionPlanId as string);
+        resolvedMaxStores = Number(planFromDb?.max_stores || fallback?.maxStores || 1);
+        resolvedPlanPrice = Number(planFromDb?.price || fallback?.price || 0);
+        resolvedStartDate = now;
+        resolvedEndDate = new Date(now);
+        resolvedEndDate.setMonth(resolvedEndDate.getMonth() + months);
+        resolvedSubscriptionStatus = 'active';
+        resolvedAutoRenewal = autoRenewal === undefined ? true : Boolean(autoRenewal);
+      }
+    }
+
     const result = await query(
-      `INSERT INTO Users (id, email, password_hash, display_name, role, status, failed_login_attempts, created_at, updated_at)
+      `INSERT INTO Users (
+         id, email, password_hash, display_name, role, status, failed_login_attempts,
+         subscription_plan_id, max_stores, subscription_start_date, subscription_end_date, auto_renewal, subscription_status,
+         created_at, updated_at
+       )
        OUTPUT INSERTED.*
-       VALUES (NEWID(), @email, @passwordHash, @displayName, @role, @status, 0, GETDATE(), GETDATE())`,
-      { email, passwordHash, displayName: displayName || email.split('@')[0], role: targetRole, status: status || 'active' }
+       VALUES (
+         NEWID(), @email, @passwordHash, @displayName, @role, @status, 0,
+         @subscriptionPlanId, @maxStores, @subscriptionStartDate, @subscriptionEndDate, @autoRenewal, @subscriptionStatus,
+         GETDATE(), GETDATE()
+       )`,
+      {
+        email,
+        passwordHash,
+        displayName: displayName || email.split('@')[0],
+        role: targetRole,
+        status: status || 'active',
+        subscriptionPlanId: resolvedPlanId,
+        maxStores: resolvedMaxStores,
+        subscriptionStartDate: resolvedStartDate,
+        subscriptionEndDate: resolvedEndDate,
+        autoRenewal: resolvedAutoRenewal ? 1 : 0,
+        subscriptionStatus: resolvedSubscriptionStatus,
+      }
     );
 
     const newUser = result[0];
@@ -250,7 +427,7 @@ router.post('/', requireModulePermission('users', 'add'), storeContext, async (r
     if (storeIds && Array.isArray(storeIds) && storeIds.length > 0) {
       if (targetRole === 'store_manager' || targetRole === 'salesperson') {
         for (const storeId of storeIds) {
-          if (currentUser.role === 'store_manager') {
+          if (currentUserRole === 'store_manager') {
             const hasAccess = currentUser.stores?.includes(storeId);
             if (!hasAccess) continue;
           }
@@ -287,6 +464,93 @@ router.post('/', requireModulePermission('users', 'add'), storeContext, async (r
       console.error('Audit log error (non-blocking):', auditError);
     }
 
+    if (resolvedStartDate && resolvedEndDate) {
+      try {
+        await query(
+          `INSERT INTO SubscriptionHistory
+             (id, user_id, plan_id, max_stores, amount, payment_method, start_date, end_date, status, auto_renewal, created_at)
+           VALUES
+             (NEWID(), @userId, @planId, @maxStores, @amount, 'admin_assign', @startDate, @endDate, 'active', @autoRenewal, GETDATE())`,
+          {
+            userId: newUser.id,
+            planId: resolvedPlanId,
+            maxStores: resolvedMaxStores,
+            amount: resolvedPlanPrice,
+            startDate: resolvedStartDate,
+            endDate: resolvedEndDate,
+            autoRenewal: resolvedAutoRenewal ? 1 : 0,
+          }
+        );
+
+        await ensureSubscriptionTransactionAuditColumns();
+
+        const assignedByName = buildUserDisplayName(
+          currentUser.displayName,
+          currentUser.email,
+          currentUser.id
+        );
+        const assignedByEmail = String(currentUser.email || '').trim() || null;
+        const assignedToName = buildUserDisplayName(
+          newUser.display_name as string | null,
+          newUser.email as string | null,
+          String(newUser.id || '')
+        );
+        const assignedToEmail = String(newUser.email || '').trim() || null;
+
+        const metadata = JSON.stringify({
+          source: 'admin_assign',
+          assignedBy: {
+            id: currentUser.id,
+            fullName: assignedByName,
+            email: assignedByEmail || '',
+            role: currentUser.role,
+          },
+          assignedTo: {
+            id: String(newUser.id || ''),
+            fullName: assignedToName,
+            email: assignedToEmail || '',
+            role: targetRole,
+          },
+          action: 'create_user',
+        });
+
+        await query(
+          `IF EXISTS (SELECT * FROM sysobjects WHERE name='SubscriptionTransactions' AND xtype='U')
+           BEGIN
+             INSERT INTO SubscriptionTransactions
+               (id, user_id, transaction_type, plan_id, max_stores, amount, currency, payment_method, payment_status,
+                start_date, end_date, auto_renewal, processed_by, processed_by_role,
+                processed_by_name, processed_by_email, user_name_snapshot, user_email_snapshot,
+                notes, metadata, created_at, updated_at)
+             VALUES
+               (NEWID(), @userId, 'manual_purchase', @planId, @maxStores, @amount, 'VND', 'admin_assign', 'completed',
+                @startDate, @endDate, @autoRenewal, @processedBy, @processedByRole,
+                @processedByName, @processedByEmail, @userNameSnapshot, @userEmailSnapshot,
+                @notes, @metadata, GETDATE(), GETDATE())
+           END`,
+          {
+            userId: newUser.id,
+            planId: resolvedPlanId,
+            maxStores: resolvedMaxStores,
+            amount: resolvedPlanPrice,
+            startDate: resolvedStartDate,
+            endDate: resolvedEndDate,
+            autoRenewal: resolvedAutoRenewal ? 1 : 0,
+            processedBy: currentUser.id,
+            processedByRole: currentUser.role,
+            processedByName: assignedByName,
+            processedByEmail: assignedByEmail,
+            userNameSnapshot: assignedToName,
+            userEmailSnapshot: assignedToEmail,
+            notes: `Cấp gói khi tạo tài khoản (${targetRole})`,
+            metadata,
+          }
+        );
+      } catch (subscriptionLogError) {
+        console.error('Subscription history log error (non-blocking):', subscriptionLogError);
+      }
+    }
+
     res.status(201).json({
       id: newUser.id, email: newUser.email, displayName: newUser.display_name,
       role: newUser.role, status: newUser.status, createdAt: newUser.created_at, stores: assignedStoreIds,
@@ -306,7 +570,7 @@ router.post('/', requireModulePermission('users', 'add'), storeContext, async (r
 router.get('/', requireModulePermission('users', 'view'), async (req: AuthRequest, res: Response) => {
   try {
     const currentUser = req.user!;
-    const currentUserRole = currentUser.role as UserRole;
+    const currentUserRole = normalizeUserRole(currentUser.role);
 
     console.log('[GET /api/users] Current user:', currentUser.email, 'Role:', currentUserRole);
 
@@ -326,7 +590,9 @@ router.get('/', requireModulePermission('users', 'view'), async (req: AuthReques
     }
 
     const users = await query(
-      `SELECT id, email, display_name, role, permissions, status, created_at FROM Users WHERE ${whereClause} ORDER BY created_at DESC`
+      `SELECT id, email, display_name, role, permissions, status, created_at, photo_url,
+              subscription_plan_id, max_stores, subscription_start_date, subscription_end_date, auto_renewal, subscription_status
+       FROM Users WHERE ${whereClause} ORDER BY created_at DESC`
     );
 
     const usersWithStores = await Promise.all(
@@ -340,7 +606,13 @@ router.get('/', requireModulePermission('users', 'view'), async (req: AuthReques
         return {
           id: u.id, email: u.email, displayName: u.display_name, role: u.role, 
           permissions: u.permissions ? JSON.parse(u.permissions as string) : undefined,
-          status: u.status, createdAt: u.created_at,
+          status: u.status, createdAt: u.created_at, photoURL: u.photo_url || undefined,
+          subscriptionPlanId: (u.subscription_plan_id as string | null) || undefined,
+          maxStores: Number((u.max_stores as number | null) || 1),
+          subscriptionStartDate: u.subscription_start_date || undefined,
+          subscriptionEndDate: u.subscription_end_date || undefined,
+          autoRenewal: Boolean(u.auto_renewal),
+          subscriptionStatus: (u.subscription_status as string | null) || undefined,
           stores: stores.map((s: Record<string, unknown>) => ({
             storeId: s.storeId, storeName: s.storeName, storeCode: s.storeCode,
           })),
@@ -362,19 +634,26 @@ router.get('/:id', requireModulePermission('users', 'view'), async (req: AuthReq
   try {
     const { id } = req.params;
     const currentUser = req.user!;
-    const currentUserRole = currentUser.role as UserRole;
+    const currentUserRole = normalizeUserRole(currentUser.role);
 
     const user = await queryOne<{
       id: string; email: string; display_name: string | null; role: string;
-      permissions: string | null; status: string; created_at: Date;
-    }>('SELECT id, email, display_name, role, permissions, status, created_at FROM Users WHERE id = @id', { id });
+      permissions: string | null; status: string; created_at: Date; photo_url: string | null;
+      subscription_plan_id: string | null; max_stores: number | null; subscription_start_date: Date | null; subscription_end_date: Date | null;
+      auto_renewal: boolean | null; subscription_status: string | null;
+    }>(
+      `SELECT id, email, display_name, role, permissions, status, created_at, photo_url,
+              subscription_plan_id, max_stores, subscription_start_date, subscription_end_date, auto_renewal, subscription_status
+       FROM Users WHERE id = @id`,
+      { id }
+    );
 
     if (!user) {
       res.status(404).json({ error: 'Không tìm thấy người dùng' });
       return;
     }
 
-    if (currentUserRole !== 'owner' && !canManageRole(currentUserRole, user.role as UserRole)) {
+    if (currentUserRole !== 'owner' && !canManageRole(currentUserRole, normalizeUserRole(user.role))) {
       res.status(403).json({ error: 'Bạn không có quyền xem thông tin người dùng này', errorCode: 'PERM001' });
       return;
     }
@@ -388,7 +667,13 @@ router.get('/:id', requireModulePermission('users', 'view'), async (req: AuthReq
     res.json({
       id: user.id, email: user.email, displayName: user.display_name, role: user.role,
       permissions: user.permissions ? JSON.parse(user.permissions) : null,
-      status: user.status, createdAt: user.created_at,
+      status: user.status, createdAt: user.created_at, photoURL: user.photo_url || undefined,
+      subscriptionPlanId: user.subscription_plan_id || undefined,
+      maxStores: Number(user.max_stores || 1),
+      subscriptionStartDate: user.subscription_start_date || undefined,
+      subscriptionEndDate: user.subscription_end_date || undefined,
+      autoRenewal: Boolean(user.auto_renewal),
+      subscriptionStatus: user.subscription_status || undefined,
       stores: stores.map((s: Record<string, unknown>) => ({
         storeId: s.storeId, storeName: s.storeName, storeCode: s.storeCode,
       })),
@@ -407,17 +692,24 @@ router.get('/:id', requireModulePermission('users', 'view'), async (req: AuthReq
 router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { displayName, role, status, storeIds, permissions, password } = req.body;
+    const { displayName, role, status, storeIds, permissions, password, photoURL, subscriptionPlanId, subscriptionMonths, autoRenewal } = req.body;
     const currentUser = req.user!;
-    const currentUserRole = currentUser.role as UserRole;
+    const currentUserRole = normalizeUserRole(currentUser.role);
     const currentStoreId = req.headers['x-store-id'] as string;
 
-    console.log('[PUT /api/users/:id] Request body:', JSON.stringify({ displayName, role, status, storeIds, permissions: permissions ? 'provided' : 'undefined', password: password ? 'provided' : 'undefined' }));
+    console.log('[PUT /api/users/:id] Request body:', JSON.stringify({ displayName, role, status, storeIds, permissions: permissions ? 'provided' : 'undefined', password: password ? 'provided' : 'undefined', photoURL: photoURL ? 'provided' : 'undefined' }));
     console.log('[PUT /api/users/:id] Current user:', currentUser.email, 'Role:', currentUserRole);
 
-    const user = await queryOne<{ 
+    const user = await queryOne<{
       id: string; email: string; display_name: string | null; role: string; permissions: string | null; status: string;
-    }>('SELECT id, email, display_name, role, permissions, status FROM Users WHERE id = @id', { id });
+      subscription_plan_id: string | null; max_stores: number | null; subscription_start_date: Date | null; subscription_end_date: Date | null;
+      auto_renewal: boolean | null; subscription_status: string | null;
+    }>(
+      `SELECT id, email, display_name, role, permissions, status,
+              subscription_plan_id, max_stores, subscription_start_date, subscription_end_date, auto_renewal, subscription_status
+       FROM Users WHERE id = @id`,
+      { id }
+    );
 
     if (!user) {
       res.status(404).json({ error: 'Không tìm thấy người dùng' });
@@ -425,7 +717,7 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
     }
 
     const isEditingSelf = id === currentUser.id;
-    const targetUserRole = user.role as UserRole;
+    const targetUserRole = normalizeUserRole(user.role);
 
     // Check role hierarchy - Requirements: 4.1, 4.2
     // Owner can edit other owners, users can edit themselves (limited fields)
@@ -439,15 +731,17 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
       return;
     }
 
-    // Non-owner editing self can only change displayName and password
+    // Non-owner editing self can only change displayName, password, and photoURL
     if (isEditingSelf && currentUserRole !== 'owner') {
-      if (role || status || storeIds || permissions) {
-        res.status(403).json({ error: 'Bạn chỉ có thể thay đổi tên hiển thị và mật khẩu của mình', errorCode: 'PERM001' });
+      if (role || status || storeIds || permissions || subscriptionPlanId !== undefined || subscriptionMonths !== undefined || autoRenewal !== undefined) {
+        res.status(403).json({ error: 'Bạn chỉ có thể thay đổi tên hiển thị, mật khẩu và ảnh đại diện của mình', errorCode: 'PERM001' });
         return;
       }
     }
 
-    if (role && role !== user.role && !canManageRole(currentUserRole, role as UserRole)) {
+    const normalizedTargetRole = role ? normalizeUserRole(role) : targetUserRole;
+
+    if (role && normalizeUserRole(role) !== targetUserRole && !canManageRole(currentUserRole, normalizeUserRole(role))) {
       res.status(403).json({ error: 'Bạn không có quyền gán role này', errorCode: 'PERM001' });
       return;
     }
@@ -455,6 +749,9 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
     const oldValues = {
       displayName: user.display_name, role: user.role, status: user.status,
       permissions: user.permissions ? JSON.parse(user.permissions) : null,
+      subscriptionPlanId: user.subscription_plan_id,
+      subscriptionEndDate: user.subscription_end_date,
+      autoRenewal: user.auto_renewal,
     };
 
     const roleChanged = role && role !== user.role;
@@ -464,6 +761,105 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
     let updateFields = `display_name = COALESCE(@displayName, display_name), role = COALESCE(@role, role),
       status = COALESCE(@status, status), updated_at = GETDATE()`;
     const params: Record<string, unknown> = { id, displayName, role, status };
+
+    const shouldUpdateSubscription =
+      subscriptionPlanId !== undefined ||
+      subscriptionMonths !== undefined ||
+      autoRenewal !== undefined;
+
+    let subscriptionUpdateLog:
+      | {
+          planId: string;
+          maxStores: number;
+          amount: number;
+          startDate: Date;
+          endDate: Date;
+          autoRenewal: number;
+        }
+      | null = null;
+
+    if (shouldUpdateSubscription) {
+      const fallbackPlans: Record<string, { maxStores: number }> = {
+        basic: { maxStores: 1 },
+        pro: { maxStores: 5 },
+        enterprise: { maxStores: 999 },
+      };
+
+      const requestedPlanId = typeof subscriptionPlanId === 'string' ? subscriptionPlanId.trim() : '';
+      const finalPlanId = requestedPlanId || user.subscription_plan_id || '';
+
+      if (requestedPlanId && user.subscription_plan_id && requestedPlanId !== user.subscription_plan_id) {
+        const [currentPriority, requestedPriority] = await Promise.all([
+          getPlanPriority(user.subscription_plan_id),
+          getPlanPriority(requestedPlanId),
+        ]);
+
+        if (requestedPriority > 0 && currentPriority > 0 && requestedPriority < currentPriority) {
+          res.status(400).json({
+            error: 'Không thể cấp gói thấp hơn gói hiện tại của người dùng',
+          });
+          return;
+        }
+      }
+
+      if (!finalPlanId) {
+        updateFields += `,
+          subscription_plan_id = NULL,
+          max_stores = 1,
+          subscription_start_date = NULL,
+          subscription_end_date = NULL,
+          auto_renewal = 0,
+          subscription_status = 'inactive'`;
+      } else {
+        const months = Number(subscriptionMonths) > 0 ? Math.min(Number(subscriptionMonths), 24) : 1;
+        const startDate = new Date();
+        const endDate = new Date(startDate);
+        endDate.setMonth(endDate.getMonth() + months);
+
+        let maxStores = 1;
+        let planPrice = 0;
+        try {
+          const planFromDb = await queryOne<{ max_stores: number; price: number }>(
+            `SELECT max_stores, price FROM SubscriptionPlans WHERE id = @planId`,
+            { planId: finalPlanId }
+          );
+          maxStores = Number(planFromDb?.max_stores || fallbackPlans[finalPlanId]?.maxStores || 1);
+          planPrice = Number(planFromDb?.price || 0);
+        } catch (planLookupError) {
+          maxStores = Number(fallbackPlans[finalPlanId]?.maxStores || 1);
+          const fallbackPrices: Record<string, number> = {
+            basic: 199000,
+            pro: 499000,
+            enterprise: 1999000,
+          };
+          planPrice = Number(fallbackPrices[finalPlanId] || 0);
+          console.warn('Subscription plan lookup failed, using fallback max stores:', planLookupError);
+        }
+
+        updateFields += `,
+          subscription_plan_id = @subscriptionPlanId,
+          max_stores = @maxStores,
+          subscription_start_date = @subscriptionStartDate,
+          subscription_end_date = @subscriptionEndDate,
+          auto_renewal = @autoRenewal,
+          subscription_status = 'active'`;
+
+        params.subscriptionPlanId = finalPlanId;
+        params.maxStores = maxStores;
+        params.subscriptionStartDate = startDate;
+        params.subscriptionEndDate = endDate;
+        params.autoRenewal = autoRenewal === undefined ? Number(Boolean(user.auto_renewal)) : Number(Boolean(autoRenewal));
+
+        subscriptionUpdateLog = {
+          planId: finalPlanId,
+          maxStores,
+          amount: planPrice,
+          startDate,
+          endDate,
+          autoRenewal: Number(params.autoRenewal),
+        };
+      }
+    }
 
     if (permissions !== undefined) {
       // Save permissions as-is (empty object {} means user explicitly cleared all permissions)
@@ -479,6 +875,12 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
       params.passwordHash = passwordHash;
     }
 
+    if (photoURL !== undefined) {
+      updateFields += `, photo_url = @photoURL`;
+      params.photoURL = photoURL;
+      console.log('[PUT /api/users/:id] Updating photo URL');
+    }
+
     await query(`UPDATE Users SET ${updateFields} WHERE id = @id`, params);
 
     if (storeIds !== undefined && Array.isArray(storeIds)) {
@@ -489,6 +891,93 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
            VALUES (NEWID(), @userId, @storeId)`,
           { userId: id, storeId }
         );
+      }
+    }
+
+    if (subscriptionUpdateLog) {
+      try {
+        await query(
+          `INSERT INTO SubscriptionHistory
+             (id, user_id, plan_id, max_stores, amount, payment_method, start_date, end_date, status, auto_renewal, created_at)
+           VALUES
+             (NEWID(), @userId, @planId, @maxStores, @amount, 'admin_assign', @startDate, @endDate, 'active', @autoRenewal, GETDATE())`,
+          {
+            userId: id,
+            planId: subscriptionUpdateLog.planId,
+            maxStores: subscriptionUpdateLog.maxStores,
+            amount: subscriptionUpdateLog.amount,
+            startDate: subscriptionUpdateLog.startDate,
+            endDate: subscriptionUpdateLog.endDate,
+            autoRenewal: subscriptionUpdateLog.autoRenewal,
+          }
+        );
+
+        await ensureSubscriptionTransactionAuditColumns();
+
+        const assignedByName = buildUserDisplayName(
+          currentUser.displayName,
+          currentUser.email,
+          currentUser.id
+        );
+        const assignedByEmail = String(currentUser.email || '').trim() || null;
+        const assignedToName = buildUserDisplayName(
+          typeof displayName === 'string' ? displayName : user.display_name,
+          user.email,
+          id
+        );
+        const assignedToEmail = String(user.email || '').trim() || null;
+
+        const metadata = JSON.stringify({
+          source: 'admin_assign',
+          assignedBy: {
+            id: currentUser.id,
+            fullName: assignedByName,
+            email: assignedByEmail || '',
+            role: currentUser.role,
+          },
+          assignedTo: {
+            id,
+            fullName: assignedToName,
+            email: assignedToEmail || '',
+            role: normalizedTargetRole,
+          },
+          action: 'update_user',
+        });
+
+        await query(
+          `IF EXISTS (SELECT * FROM sysobjects WHERE name='SubscriptionTransactions' AND xtype='U')
+           BEGIN
+             INSERT INTO SubscriptionTransactions
+               (id, user_id, transaction_type, plan_id, max_stores, amount, currency, payment_method, payment_status,
+                start_date, end_date, auto_renewal, processed_by, processed_by_role,
+                processed_by_name, processed_by_email, user_name_snapshot, user_email_snapshot,
+                notes, metadata, created_at, updated_at)
+             VALUES
+               (NEWID(), @userId, 'manual_purchase', @planId, @maxStores, @amount, 'VND', 'admin_assign', 'completed',
+                @startDate, @endDate, @autoRenewal, @processedBy, @processedByRole,
+                @processedByName, @processedByEmail, @userNameSnapshot, @userEmailSnapshot,
+                @notes, @metadata, GETDATE(), GETDATE())
+           END`,
+          {
+            userId: id,
+            planId: subscriptionUpdateLog.planId,
+            maxStores: subscriptionUpdateLog.maxStores,
+            amount: subscriptionUpdateLog.amount,
+            startDate: subscriptionUpdateLog.startDate,
+            endDate: subscriptionUpdateLog.endDate,
+            autoRenewal: subscriptionUpdateLog.autoRenewal,
+            processedBy: currentUser.id,
+            processedByRole: currentUser.role,
+            processedByName: assignedByName,
+            processedByEmail: assignedByEmail,
+            userNameSnapshot: assignedToName,
+            userEmailSnapshot: assignedToEmail,
+            notes: `Cấp gói khi cập nhật tài khoản (${normalizedTargetRole})`,
+            metadata,
+          }
+        );
+      } catch (subscriptionLogError) {
+        console.error('Subscription update history log error (non-blocking):', subscriptionLogError);
       }
     }
 
@@ -509,6 +998,9 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
     if (status !== undefined) newValues.status = status;
     if (permissions !== undefined) newValues.permissions = permissions;
     if (storeIds !== undefined) newValues.storeIds = storeIds;
+    if (subscriptionPlanId !== undefined) newValues.subscriptionPlanId = subscriptionPlanId;
+    if (subscriptionMonths !== undefined) newValues.subscriptionMonths = subscriptionMonths;
+    if (autoRenewal !== undefined) newValues.autoRenewal = autoRenewal;
     if (password) newValues.passwordChanged = true;
 
     try {
@@ -535,19 +1027,207 @@ router.put('/:id', requireModulePermission('users', 'edit'), async (req: AuthReq
   }
 });
 
-
 /**
- * DELETE /api/users/:id - Deactivate user (soft delete)
- * Requirements: 4.1, 4.2, 4.4, 4.5
+ * POST /api/users/:id/reset-password - Reset user password
+ * Requirements: 4.1, 4.2, 4.5
+ * Admin can reset password for users they can manage
  */
-router.delete('/:id', requireModulePermission('users', 'delete'), async (req: AuthRequest, res: Response) => {
+router.post('/:id/reset-password', requireModulePermission('users', 'edit'), async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const currentUser = req.user!;
     const currentUserRole = currentUser.role as UserRole;
     const currentStoreId = req.headers['x-store-id'] as string;
 
+    console.log('[RESET PASSWORD] Request:', { userId: id, currentUser: currentUser.email, currentUserRole });
+
+    // Cannot reset own password through this endpoint
     if (id === currentUser.id) {
+      console.log('[RESET PASSWORD] Error: Cannot reset own password');
+      return res.status(400).json({ error: 'Không thể đặt lại mật khẩu của chính mình qua chức năng này' });
+    }
+
+    // Get target user
+    console.log('[RESET PASSWORD] Fetching user:', id);
+    const user = await queryOne<{ 
+      id: string; 
+      email: string; 
+      display_name: string | null;
+      role: string;
+      status: string;
+    }>(
+      `SELECT id, email, display_name, role, status FROM Users WHERE id = @id`,
+      { id }
+    );
+
+    if (!user) {
+      console.log('[RESET PASSWORD] Error: User not found');
+      return res.status(404).json({ error: 'Không tìm thấy người dùng' });
+    }
+
+    console.log('[RESET PASSWORD] User found:', { email: user.email, role: user.role });
+
+    // Check if current user can manage target user's role
+    const targetRole = user.role as UserRole;
+    if (!canManageRole(currentUserRole, targetRole)) {
+      console.log('[RESET PASSWORD] Error: Cannot manage role', { currentUserRole, targetRole });
+      return res.status(403).json({ error: 'Bạn không có quyền đặt lại mật khẩu cho người dùng này' });
+    }
+
+    // Generate a temporary password (user should change it after first login)
+    const tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-8).toUpperCase();
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+    console.log('[RESET PASSWORD] Updating password for user:', user.email);
+
+    // Update password
+    await query(
+      `UPDATE Users SET password_hash = @passwordHash, updated_at = GETDATE() WHERE id = @id`,
+      { id, passwordHash: hashedPassword }
+    );
+
+    console.log('[RESET PASSWORD] Password updated successfully');
+
+    // Delete all sessions for this user (force re-login with new password)
+    await query('DELETE FROM Sessions WHERE user_id = @userId', { userId: id });
+    console.log('[RESET PASSWORD] All sessions deleted for user');
+
+    // Invalidate user's permission cache
+    try {
+      invalidateUserPermissionCache(id);
+    } catch (cacheError) {
+      console.error('[RESET PASSWORD] Cache invalidation error (non-blocking):', cacheError);
+    }
+
+    // Log audit - temporarily disabled for debugging
+    /*
+    try {
+      await auditLogRepository.create({
+        tenantId: currentUser.tenantId || null,
+        storeId: currentStoreId || 'system',
+        userId: currentUser.id,
+        action: 'reset_password',
+        entityType: 'User',
+        entityId: id,
+        newValues: { resetBy: currentUser.email },
+        ipAddress: (req.ip as string) || undefined,
+        userAgent: req.headers['user-agent'],
+      });
+    } catch (auditError) {
+      console.error('[RESET PASSWORD] Audit log error (non-blocking):', auditError);
+    }
+    */
+
+    // In production, you would send an email with the temporary password
+    // For now, return it in the response (NOT RECOMMENDED for production)
+    console.log(`[RESET PASSWORD] Success - User: ${user.email}, Temp Password: ${tempPassword}`);
+
+    res.json({ 
+      success: true, 
+      message: 'Mật khẩu đã được đặt lại thành công. Người dùng cần đăng nhập lại với mật khẩu mới.',
+      // TODO: Remove this in production - send via email instead
+      tempPassword: tempPassword,
+      note: 'Mật khẩu tạm thời đã được tạo. Vui lòng gửi mật khẩu này cho người dùng. Họ sẽ cần đăng nhập lại và nên đổi mật khẩu ngay sau đó.'
+    });
+  } catch (error) {
+    console.error('[RESET PASSWORD] Error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorStack = error instanceof Error ? error.stack : '';
+    console.error('[RESET PASSWORD] Stack:', errorStack);
+    res.status(500).json({ error: `Không thể đặt lại mật khẩu: ${errorMessage}` });
+  }
+});
+
+/**
+ * POST /api/users/change-password - Change own password
+ * User can change their own password
+ */
+router.post('/change-password', authenticate, async (req: AuthRequest, res: Response) => {
+  try {
+    const currentUser = req.user!;
+    const { currentPassword, newPassword } = req.body;
+
+    console.log('[CHANGE PASSWORD] Request from user:', currentUser.email);
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Vui lòng cung cấp mật khẩu hiện tại và mật khẩu mới' });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'Mật khẩu mới phải có ít nhất 6 ký tự' });
+    }
+
+    // Get user with password hash
+    const user = await queryOne<{ 
+      id: string; 
+      email: string; 
+      password_hash: string;
+    }>(
+      `SELECT id, email, password_hash FROM Users WHERE id = @id`,
+      { id: currentUser.id }
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: 'Không tìm thấy người dùng' });
+    }
+
+    // Verify current password
+    const isValidPassword = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!isValidPassword) {
+      console.log('[CHANGE PASSWORD] Invalid current password');
+      return res.status(401).json({ error: 'Mật khẩu hiện tại không đúng' });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password
+    await query(
+      `UPDATE Users SET password_hash = @passwordHash, updated_at = GETDATE() WHERE id = @id`,
+      { id: currentUser.id, passwordHash: hashedPassword }
+    );
+
+    console.log('[CHANGE PASSWORD] Password updated successfully for:', user.email);
+
+    // Invalidate user's permission cache
+    try {
+      invalidateUserPermissionCache(currentUser.id);
+    } catch (cacheError) {
+      console.error('[CHANGE PASSWORD] Cache invalidation error (non-blocking):', cacheError);
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Mật khẩu đã được thay đổi thành công'
+    });
+  } catch (error) {
+    console.error('[CHANGE PASSWORD] Error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    res.status(500).json({ error: `Không thể đổi mật khẩu: ${errorMessage}` });
+  }
+});
+
+
+/**
+ * DELETE /api/users/:id - Delete user permanently
+ * Requirements: 4.1, 4.2, 4.4, 4.5
+ */
+router.delete('/:id', requireModulePermission('users', 'delete'), async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const currentUser = req.user!;
+    const currentUserRole = normalizeUserRole(currentUser.role);
+    const currentStoreId = req.headers['x-store-id'] as string;
+
+    console.log('[DELETE USER] Request received:', {
+      targetUserId: id,
+      currentUserId: currentUser.id,
+      currentUserRole,
+      currentStoreId
+    });
+
+    if (id === currentUser.id) {
+      console.log('[DELETE USER] Error: Cannot delete self');
       res.status(400).json({ error: 'Không thể xóa tài khoản của chính mình' });
       return;
     }
@@ -557,20 +1237,238 @@ router.delete('/:id', requireModulePermission('users', 'delete'), async (req: Au
     }>('SELECT id, email, display_name, role, status FROM Users WHERE id = @id', { id });
 
     if (!user) {
+      console.log('[DELETE USER] Error: User not found');
       res.status(404).json({ error: 'Không tìm thấy người dùng' });
       return;
     }
 
+    console.log('[DELETE USER] Target user found:', {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      status: user.status
+    });
+
     // Check role hierarchy - Requirements: 4.1, 4.2
-    if (!canManageRole(currentUserRole, user.role as UserRole)) {
+    const targetUserRole = normalizeUserRole(user.role);
+    const canManage = canManageRole(currentUserRole, targetUserRole);
+    console.log('[DELETE USER] Role hierarchy check:', {
+      currentUserRole,
+      targetUserRole,
+      canManage
+    });
+
+    if (!canManage) {
+      console.log('[DELETE USER] Error: Cannot manage role');
       res.status(403).json({ error: 'Bạn không có quyền xóa người dùng này', errorCode: 'PERM001' });
       return;
     }
 
-    // Soft delete - Requirements: 4.4
-    await query(`UPDATE Users SET status = 'inactive', updated_at = GETDATE() WHERE id = @id`, { id });
+    // Prevent deleting owner of stores
+    const storesTableExists = await queryOne<{ hasTable: number }>(
+      `SELECT CASE WHEN OBJECT_ID('Stores', 'U') IS NOT NULL THEN 1 ELSE 0 END AS hasTable`
+    );
+
+    let ownedStoresResult: { count: number } | null = { count: 0 };
+
+    if ((storesTableExists?.hasTable || 0) === 1) {
+      const hasSnakeOwnerId = await queryOne<{ hasColumn: number }>(
+        `SELECT CASE WHEN COL_LENGTH('Stores', 'owner_id') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+      );
+
+      if ((hasSnakeOwnerId?.hasColumn || 0) === 1) {
+        ownedStoresResult = await queryOne<{ count: number }>(
+          `SELECT COUNT(*) AS count FROM Stores WHERE owner_id = @userId`,
+          { userId: id }
+        );
+      } else {
+        const hasPascalOwnerId = await queryOne<{ hasColumn: number }>(
+          `SELECT CASE WHEN COL_LENGTH('Stores', 'OwnerId') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+        );
+
+        if ((hasPascalOwnerId?.hasColumn || 0) === 1) {
+          ownedStoresResult = await queryOne<{ count: number }>(
+            `SELECT COUNT(*) AS count FROM Stores WHERE OwnerId = @userId`,
+            { userId: id }
+          );
+        }
+      }
+    }
+    if ((ownedStoresResult?.count || 0) > 0) {
+      res.status(400).json({
+        error: 'Người dùng đang là chủ cửa hàng. Vui lòng chuyển quyền sở hữu trước khi xóa.',
+      });
+      return;
+    }
+
+    // Prevent deleting users tied to core business history
+    let shiftCountResult: { count: number } | null = { count: 0 };
+    const shiftsTableExists = await queryOne<{ hasTable: number }>(
+      `SELECT CASE WHEN OBJECT_ID('Shifts', 'U') IS NOT NULL THEN 1 ELSE 0 END AS hasTable`
+    );
+    if ((shiftsTableExists?.hasTable || 0) === 1) {
+      const shiftsHasSnakeUserId = await queryOne<{ hasColumn: number }>(
+        `SELECT CASE WHEN COL_LENGTH('Shifts', 'user_id') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+      );
+      if ((shiftsHasSnakeUserId?.hasColumn || 0) === 1) {
+        shiftCountResult = await queryOne<{ count: number }>(
+          `SELECT COUNT(*) AS count FROM Shifts WHERE user_id = @userId`,
+          { userId: id }
+        );
+      } else {
+        const shiftsHasPascalUserId = await queryOne<{ hasColumn: number }>(
+          `SELECT CASE WHEN COL_LENGTH('Shifts', 'UserId') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+        );
+        if ((shiftsHasPascalUserId?.hasColumn || 0) === 1) {
+          shiftCountResult = await queryOne<{ count: number }>(
+            `SELECT COUNT(*) AS count FROM Shifts WHERE UserId = @userId`,
+            { userId: id }
+          );
+        }
+      }
+    }
+    if ((shiftCountResult?.count || 0) > 0) {
+      res.status(400).json({
+        error: 'Người dùng đã có lịch sử ca làm việc. Không thể xóa vĩnh viễn.',
+      });
+      return;
+    }
+
+    let salesCountResult: { count: number } | null = { count: 0 };
+    const salesTableExists = await queryOne<{ hasTable: number }>(
+      `SELECT CASE WHEN OBJECT_ID('Sales', 'U') IS NOT NULL THEN 1 ELSE 0 END AS hasTable`
+    );
+    if ((salesTableExists?.hasTable || 0) === 1) {
+      const salesHasSnakeCreatedBy = await queryOne<{ hasColumn: number }>(
+        `SELECT CASE WHEN COL_LENGTH('Sales', 'created_by') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+      );
+      if ((salesHasSnakeCreatedBy?.hasColumn || 0) === 1) {
+        salesCountResult = await queryOne<{ count: number }>(
+          `SELECT COUNT(*) AS count FROM Sales WHERE created_by = @userId`,
+          { userId: id }
+        );
+      } else {
+        const salesHasPascalCreatedBy = await queryOne<{ hasColumn: number }>(
+          `SELECT CASE WHEN COL_LENGTH('Sales', 'CreatedBy') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+        );
+        if ((salesHasPascalCreatedBy?.hasColumn || 0) === 1) {
+          salesCountResult = await queryOne<{ count: number }>(
+            `SELECT COUNT(*) AS count FROM Sales WHERE CreatedBy = @userId`,
+            { userId: id }
+          );
+        }
+      }
+    }
+    if ((salesCountResult?.count || 0) > 0) {
+      res.status(400).json({
+        error: 'Người dùng đã có lịch sử đơn bán hàng. Không thể xóa vĩnh viễn.',
+      });
+      return;
+    }
+
+    console.log('[DELETE USER] Performing hard delete...');
+
+    // Clean up child records first to satisfy foreign keys across schema variants.
+    const sessionsTableExists = await queryOne<{ hasTable: number }>(
+      `SELECT CASE WHEN OBJECT_ID('Sessions', 'U') IS NOT NULL THEN 1 ELSE 0 END AS hasTable`
+    );
+    if ((sessionsTableExists?.hasTable || 0) === 1) {
+      const sessionsHasSnakeUserId = await queryOne<{ hasColumn: number }>(
+        `SELECT CASE WHEN COL_LENGTH('Sessions', 'user_id') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+      );
+      if ((sessionsHasSnakeUserId?.hasColumn || 0) === 1) {
+        await query(`DELETE FROM Sessions WHERE user_id = @userId`, { userId: id });
+      } else {
+        const sessionsHasPascalUserId = await queryOne<{ hasColumn: number }>(
+          `SELECT CASE WHEN COL_LENGTH('Sessions', 'UserId') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+        );
+        if ((sessionsHasPascalUserId?.hasColumn || 0) === 1) {
+          await query(`DELETE FROM Sessions WHERE UserId = @userId`, { userId: id });
+        }
+      }
+    }
+
+    const userStoresTableExists = await queryOne<{ hasTable: number }>(
+      `SELECT CASE WHEN OBJECT_ID('UserStores', 'U') IS NOT NULL THEN 1 ELSE 0 END AS hasTable`
+    );
+    if ((userStoresTableExists?.hasTable || 0) === 1) {
+      const userStoresHasSnakeUserId = await queryOne<{ hasColumn: number }>(
+        `SELECT CASE WHEN COL_LENGTH('UserStores', 'user_id') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+      );
+      if ((userStoresHasSnakeUserId?.hasColumn || 0) === 1) {
+        await query(`DELETE FROM UserStores WHERE user_id = @userId`, { userId: id });
+      } else {
+        const userStoresHasPascalUserId = await queryOne<{ hasColumn: number }>(
+          `SELECT CASE WHEN COL_LENGTH('UserStores', 'UserId') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+        );
+        if ((userStoresHasPascalUserId?.hasColumn || 0) === 1) {
+          await query(`DELETE FROM UserStores WHERE UserId = @userId`, { userId: id });
+        }
+      }
+    }
+
+    const permissionsTableExists = await queryOne<{ hasTable: number }>(
+      `SELECT CASE WHEN OBJECT_ID('Permissions', 'U') IS NOT NULL THEN 1 ELSE 0 END AS hasTable`
+    );
+    if ((permissionsTableExists?.hasTable || 0) === 1) {
+      const permissionsHasSnakeUserId = await queryOne<{ hasColumn: number }>(
+        `SELECT CASE WHEN COL_LENGTH('Permissions', 'user_id') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+      );
+      if ((permissionsHasSnakeUserId?.hasColumn || 0) === 1) {
+        await query(`DELETE FROM Permissions WHERE user_id = @userId`, { userId: id });
+      } else {
+        const permissionsHasPascalUserId = await queryOne<{ hasColumn: number }>(
+          `SELECT CASE WHEN COL_LENGTH('Permissions', 'UserId') IS NOT NULL THEN 1 ELSE 0 END AS hasColumn`
+        );
+        if ((permissionsHasPascalUserId?.hasColumn || 0) === 1) {
+          await query(`DELETE FROM Permissions WHERE UserId = @userId`, { userId: id });
+        }
+      }
+    }
+
+    const deletedUserNameSnapshot = buildUserDisplayName(user.display_name, user.email, id);
+    const deletedUserEmailSnapshot = String(user.email || '').trim() || null;
+
+    await ensureSubscriptionTransactionAuditColumns();
+    await query(
+      `IF OBJECT_ID('SubscriptionTransactions', 'U') IS NOT NULL
+       BEGIN
+         UPDATE st
+         SET
+           processed_by_name = CASE
+             WHEN st.processed_by = @userId
+               THEN COALESCE(NULLIF(st.processed_by_name, ''), @snapshotName)
+             ELSE st.processed_by_name
+           END,
+           processed_by_email = CASE
+             WHEN st.processed_by = @userId
+               THEN COALESCE(NULLIF(st.processed_by_email, ''), @snapshotEmail)
+             ELSE st.processed_by_email
+           END,
+           user_name_snapshot = CASE
+             WHEN st.user_id = @userId
+               THEN COALESCE(NULLIF(st.user_name_snapshot, ''), @snapshotName)
+             ELSE st.user_name_snapshot
+           END,
+           user_email_snapshot = CASE
+             WHEN st.user_id = @userId
+               THEN COALESCE(NULLIF(st.user_email_snapshot, ''), @snapshotEmail)
+             ELSE st.user_email_snapshot
+           END
+         FROM SubscriptionTransactions st
+         WHERE st.processed_by = @userId OR st.user_id = @userId;
+       END`,
+      {
+        userId: id,
+        snapshotName: deletedUserNameSnapshot,
+        snapshotEmail: deletedUserEmailSnapshot,
+      }
+    );
+
+    await dropSubscriptionUserForeignKeysForHistoryRetention();
+
+    await query('DELETE FROM Users WHERE id = @id', { id });
     invalidateUserPermissionCache(id);
-    await query('DELETE FROM Sessions WHERE user_id = @userId', { userId: id });
 
     // Audit log - Requirements: 4.5
     try {
@@ -581,7 +1479,7 @@ router.delete('/:id', requireModulePermission('users', 'delete'), async (req: Au
         entityType: 'User',
         entityId: id,
         oldValues: { email: user.email, displayName: user.display_name, role: user.role, status: user.status },
-        newValues: { status: 'inactive' },
+        newValues: { deleted: true },
         ipAddress: (req.ip as string) || undefined,
         userAgent: req.headers['user-agent'],
       });
@@ -589,10 +1487,12 @@ router.delete('/:id', requireModulePermission('users', 'delete'), async (req: Au
       console.error('Audit log error (non-blocking):', auditError);
     }
 
-    res.json({ success: true });
+    console.log('[DELETE USER] Success');
+    res.json({ success: true, hardDeleted: true });
   } catch (error) {
     console.error('Delete user error:', error);
-    res.status(500).json({ error: 'Không thể xóa người dùng' });
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    res.status(500).json({ error: `Không thể xóa người dùng: ${errorMessage}` });
   }
 });
 
@@ -820,6 +1720,81 @@ router.delete('/:id/stores/:storeId', requireModulePermission('users', 'edit'), 
   } catch (error) {
     console.error('Remove store access error:', error);
     res.status(500).json({ error: 'Không thể xóa quyền truy cập cửa hàng' });
+  }
+});
+
+/**
+ * PUT /api/users/:id/shift-hours - Update max shift hours for user
+ * Allows managers to configure maximum working hours per shift for employees
+ */
+router.put('/:id/shift-hours', requireModulePermission('users', 'edit'), async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { maxShiftHours } = req.body;
+    const currentUser = req.user!;
+    const currentUserRole = currentUser.role as UserRole;
+    const currentStoreId = req.headers['x-store-id'] as string;
+
+    if (maxShiftHours === undefined || maxShiftHours === null) {
+      res.status(400).json({ error: 'maxShiftHours là bắt buộc' });
+      return;
+    }
+
+    if (typeof maxShiftHours !== 'number' || maxShiftHours <= 0 || maxShiftHours > 24) {
+      res.status(400).json({ error: 'maxShiftHours phải là số từ 0.1 đến 24' });
+      return;
+    }
+
+    // Get target user
+    const user = await queryOne<{ id: string; role: string; email: string; max_shift_hours: number | null }>(
+      'SELECT id, role, email, max_shift_hours FROM Users WHERE id = @id',
+      { id }
+    );
+
+    if (!user) {
+      res.status(404).json({ error: 'Không tìm thấy người dùng' });
+      return;
+    }
+
+    // Check role hierarchy
+    if (!canManageRole(currentUserRole, user.role as UserRole)) {
+      res.status(403).json({ error: 'Bạn không có quyền cấu hình người dùng này', errorCode: 'PERM001' });
+      return;
+    }
+
+    const oldMaxShiftHours = user.max_shift_hours;
+
+    // Update max shift hours
+    await query(
+      'UPDATE Users SET max_shift_hours = @maxShiftHours, updated_at = GETDATE() WHERE id = @id',
+      { id, maxShiftHours }
+    );
+
+    // Audit log
+    try {
+      await auditLogRepository.create({
+        storeId: currentStoreId || 'system',
+        userId: currentUser.id,
+        action: 'UPDATE',
+        entityType: 'User',
+        entityId: id,
+        oldValues: { maxShiftHours: oldMaxShiftHours },
+        newValues: { maxShiftHours },
+        ipAddress: (req.ip as string) || undefined,
+        userAgent: req.headers['user-agent'],
+      });
+    } catch (auditError) {
+      console.error('Audit log error (non-blocking):', auditError);
+    }
+
+    res.json({ 
+      success: true, 
+      message: `Đã cập nhật thời gian làm việc tối đa cho ${user.email}: ${maxShiftHours} giờ`,
+      maxShiftHours 
+    });
+  } catch (error) {
+    console.error('Update max shift hours error:', error);
+    res.status(500).json({ error: 'Không thể cập nhật thời gian làm việc' });
   }
 });
 

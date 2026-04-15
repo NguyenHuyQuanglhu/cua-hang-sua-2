@@ -14,7 +14,7 @@ async function setupDatabase() {
     const tablesToDrop = [
       'AuditLogs', 'Settings', 'CashTransactions', 'PurchaseOrderItems', 
       'PurchaseOrders', 'SupplierPayments', 'Payments', 'SalesItems', 
-      'Sales', 'Shifts', 'Suppliers', 'Units', 'UserStores', 'Sessions', 'Users'
+      'Sales', 'Shifts', 'Contractors', 'Suppliers', 'Units', 'UserStores', 'Sessions', 'Users'
     ];
     
     for (const table of tablesToDrop) {
@@ -109,6 +109,26 @@ async function setupDatabase() {
     `);
     console.log('  ✅ Suppliers table created');
 
+    // Create Contractors table
+    await pool.request().query(`
+      CREATE TABLE Contractors (
+        id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+        store_id UNIQUEIDENTIFIER NOT NULL,
+        name NVARCHAR(255) NOT NULL,
+        contact_person NVARCHAR(255),
+        email NVARCHAR(255),
+        phone NVARCHAR(50),
+        address NVARCHAR(500),
+        tax_code NVARCHAR(50),
+        identity_number NVARCHAR(50),
+        description NVARCHAR(MAX),
+        created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+        updated_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+        FOREIGN KEY (store_id) REFERENCES Stores(id)
+      )
+    `);
+    console.log('  âœ… Contractors table created');
+
     // Create Shifts table
     await pool.request().query(`
       CREATE TABLE Shifts (
@@ -142,6 +162,7 @@ async function setupDatabase() {
         store_id UNIQUEIDENTIFIER NOT NULL,
         invoice_number NVARCHAR(50) NOT NULL,
         customer_id UNIQUEIDENTIFIER,
+        contractor_id UNIQUEIDENTIFIER,
         shift_id UNIQUEIDENTIFIER,
         transaction_date DATETIME2 NOT NULL,
         status NVARCHAR(20) NOT NULL DEFAULT 'pending',
@@ -162,6 +183,7 @@ async function setupDatabase() {
         updated_at DATETIME2 NOT NULL DEFAULT GETDATE(),
         FOREIGN KEY (store_id) REFERENCES Stores(id),
         FOREIGN KEY (customer_id) REFERENCES Customers(id),
+        FOREIGN KEY (contractor_id) REFERENCES Contractors(id),
         FOREIGN KEY (shift_id) REFERENCES Shifts(id)
       )
     `);
@@ -221,13 +243,15 @@ async function setupDatabase() {
         store_id UNIQUEIDENTIFIER NOT NULL,
         order_number NVARCHAR(50) NOT NULL,
         supplier_id UNIQUEIDENTIFIER,
+        contractor_id UNIQUEIDENTIFIER,
         import_date DATETIME2 NOT NULL,
         total_amount DECIMAL(18,2) NOT NULL,
         notes NVARCHAR(MAX),
         created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
         updated_at DATETIME2 NOT NULL DEFAULT GETDATE(),
         FOREIGN KEY (store_id) REFERENCES Stores(id),
-        FOREIGN KEY (supplier_id) REFERENCES Suppliers(id)
+        FOREIGN KEY (supplier_id) REFERENCES Suppliers(id),
+        FOREIGN KEY (contractor_id) REFERENCES Contractors(id)
       )
     `);
     console.log('  ✅ PurchaseOrders table created');

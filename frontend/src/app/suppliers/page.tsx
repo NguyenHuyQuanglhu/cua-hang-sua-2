@@ -44,7 +44,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import { Supplier } from "@/lib/types"
 import { SupplierForm } from "./components/supplier-form"
 import { deleteSupplier, getSuppliers, SupplierWithDebt } from "./actions"
 import { useToast } from "@/hooks/use-toast"
@@ -58,8 +57,8 @@ type SortKey = 'name' | 'contactPerson' | 'email' | 'phone' | 'debt';
 
 export default function SuppliersPage() {
   const [isFormOpen, setIsFormOpen] = useState(false);
-  const [selectedSupplier, setSelectedSupplier] = useState<Supplier | undefined>(undefined);
-  const [supplierToDelete, setSupplierToDelete] = useState<Supplier | null>(null);
+  const [selectedSupplier, setSelectedSupplier] = useState<SupplierWithDebt | undefined>(undefined);
+  const [supplierToDelete, setSupplierToDelete] = useState<SupplierWithDebt | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [sortKey, setSortKey] = useState<SortKey | null>('name');
@@ -153,7 +152,7 @@ export default function SuppliersPage() {
     setIsFormOpen(true);
   }
 
-  const handleEditSupplier = (supplier: Supplier) => {
+  const handleEditSupplier = (supplier: SupplierWithDebt) => {
     setSelectedSupplier(supplier);
     setIsFormOpen(true);
   }

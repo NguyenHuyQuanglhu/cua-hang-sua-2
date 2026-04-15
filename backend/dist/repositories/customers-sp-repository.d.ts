@@ -17,12 +17,22 @@ export interface Customer {
     email?: string;
     address?: string;
     customerType?: string;
+    customerGroup?: string;
+    gender?: string;
+    birthday?: string;
+    zalo?: string;
+    bankName?: string;
+    bankAccountNumber?: string;
+    bankBranch?: string;
+    creditLimit?: number;
     loyaltyTier?: string;
+    loyaltyPoints?: number;
     totalSpent?: number;
     totalPaid?: number;
     totalDebt?: number;
+    calculatedDebt?: number;
+    totalPayments?: number;
     status?: string;
-    customerGroup?: string;
     lifetimePoints?: number;
     notes?: string;
     createdAt?: string;
@@ -39,7 +49,19 @@ export interface CreateCustomerSPInput {
     email?: string | null;
     address?: string | null;
     customerType?: string;
+    customerGroup?: string | null;
+    gender?: string | null;
+    birthday?: string | null;
+    zalo?: string | null;
+    bankName?: string | null;
+    bankAccountNumber?: string | null;
+    bankBranch?: string | null;
+    creditLimit?: number;
     loyaltyTier?: string;
+    loyaltyPoints?: number;
+    lifetimePoints?: number;
+    status?: string;
+    notes?: string | null;
 }
 /**
  * Input for updating a customer via stored procedure
@@ -50,7 +72,19 @@ export interface UpdateCustomerSPInput {
     email?: string | null;
     address?: string | null;
     customerType?: string;
+    customerGroup?: string | null;
+    gender?: string | null;
+    birthday?: string | null;
+    zalo?: string | null;
+    bankName?: string | null;
+    bankAccountNumber?: string | null;
+    bankBranch?: string | null;
+    creditLimit?: number;
+    lifetimePoints?: number;
+    loyaltyPoints?: number;
     loyaltyTier?: string;
+    status?: string;
+    notes?: string | null;
 }
 /**
  * Customers repository using stored procedures
@@ -85,9 +119,10 @@ export declare class CustomersSPRepository extends SPBaseRepository<Customer> {
      *
      * @param id - Customer ID
      * @param storeId - Store ID
+     * @param forceDelete - Admin can force delete customers with transactions
      * @returns True if deleted, false if not found
      */
-    delete(id: string, storeId: string): Promise<boolean>;
+    delete(id: string, storeId: string, forceDelete?: boolean): Promise<boolean>;
     /**
      * Get all customers for a store using sp_Customers_GetByStore
      * Requirements: 3.4
@@ -97,8 +132,7 @@ export declare class CustomersSPRepository extends SPBaseRepository<Customer> {
      */
     getByStore(storeId: string): Promise<Customer[]>;
     /**
-     * Get a single customer by ID
-     * Uses sp_Customers_GetByStore and filters by ID
+     * Get a single customer by ID using sp_Customers_GetById
      *
      * @param id - Customer ID
      * @param storeId - Store ID
@@ -148,6 +182,27 @@ export declare class CustomersSPRepository extends SPBaseRepository<Customer> {
         totalPaid: number;
         totalDebt: number;
     } | null>;
+    /**
+     * Get customer debt history from Sales and Payments
+     * Requirements: 3.6
+     *
+     * @param customerId - Customer ID
+     * @param storeId - Store ID
+     * @returns Array of debt history items
+     */
+    getDebtHistory(customerId: string, storeId: string): Promise<CustomerDebtHistoryItem[]>;
+}
+/**
+ * Customer debt history item
+ */
+export interface CustomerDebtHistoryItem {
+    id: string;
+    customerId: string;
+    amount: number;
+    type: 'sale' | 'payment';
+    date: string;
+    description: string;
+    runningBalance: number;
 }
 export declare const customersSPRepository: CustomersSPRepository;
 //# sourceMappingURL=customers-sp-repository.d.ts.map

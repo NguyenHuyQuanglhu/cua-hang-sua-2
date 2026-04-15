@@ -6,6 +6,94 @@ import { productUnitsRepository } from '../repositories/product-units-repository
 
 const router = Router();
 
+function extractUnitDeleteErrorInfo(error: unknown): {
+  number?: number;
+  message: string;
+} {
+  if (!error || typeof error !== 'object') {
+    return { message: '' };
+  }
+
+  const err = error as {
+    number?: unknown;
+    message?: unknown;
+    originalError?: {
+      number?: unknown;
+      info?: {
+        number?: unknown;
+        message?: unknown;
+      };
+      message?: unknown;
+    };
+  };
+
+  const parsedNumber = Number(
+    err.number ?? err.originalError?.info?.number ?? err.originalError?.number
+  );
+
+  const message = String(
+    err.message ?? err.originalError?.info?.message ?? err.originalError?.message ?? ''
+  ).trim();
+
+  return {
+    number: Number.isFinite(parsedNumber) ? parsedNumber : undefined,
+    message,
+  };
+}
+
+function getIdentifierTail(identifier: string): string {
+  const normalized = identifier.replace(/[\[\]"]/g, '');
+  const parts = normalized.split('.').filter(Boolean);
+  return parts.length > 0 ? parts[parts.length - 1] : normalized;
+}
+
+function mapUnitDeleteError(error: unknown): { status: number; message: string } | null {
+  const { number, message } = extractUnitDeleteErrorInfo(error);
+
+  if (!message) {
+    return null;
+  }
+
+  if (/unit not found/i.test(message)) {
+    return {
+      status: 404,
+      message: 'Không tìm thấy đơn vị tính.',
+    };
+  }
+
+  const isConstraintError =
+    number === 547 ||
+    /reference constraint|foreign key|conflicted with the reference constraint/i.test(message);
+
+  if (!isConstraintError) {
+    return null;
+  }
+
+  const tableRaw = message.match(/table\s+"([^"]+)"/i)?.[1];
+  const columnRaw = message.match(/column\s+'([^']+)'/i)?.[1];
+  const table = tableRaw ? getIdentifierTail(tableRaw) : undefined;
+  const column = columnRaw ? getIdentifierTail(columnRaw) : undefined;
+
+  if (table && column) {
+    return {
+      status: 409,
+      message: `Không thể xóa đơn vị tính vì đang được sử dụng ở ${table}.${column}. Vui lòng cập nhật hoặc xóa dữ liệu liên quan trước.`,
+    };
+  }
+
+  if (table) {
+    return {
+      status: 409,
+      message: `Không thể xóa đơn vị tính vì đang được sử dụng ở bảng ${table}. Vui lòng cập nhật hoặc xóa dữ liệu liên quan trước.`,
+    };
+  }
+
+  return {
+    status: 409,
+    message: 'Không thể xóa đơn vị tính vì đang được sử dụng trong dữ liệu. Vui lòng cập nhật hoặc xóa dữ liệu liên quan trước.',
+  };
+}
+
 router.use(authenticate);
 router.use(storeContext);
 
@@ -148,6 +236,11 @@ router.delete('/:id', async (req: AuthRequest, res: Response) => {
     res.json({ success: true });
   } catch (error) {
     console.error('Delete unit error:', error);
+    const mapped = mapUnitDeleteError(error);
+    if (mapped) {
+      res.status(mapped.status).json({ error: mapped.message });
+      return;
+    }
     res.status(500).json({ error: 'Failed to delete unit' });
   }
 });

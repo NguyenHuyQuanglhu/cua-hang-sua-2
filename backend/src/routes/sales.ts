@@ -1,58 +1,449 @@
-import { Router, Response } from 'express';
-import { query } from '../db';
-import { authenticate, storeContext, AuthRequest } from '../middleware/auth';
-import { salesService, InventoryInsufficientStockError } from '../services';
-import { salesSPRepository } from '../repositories/sales-sp-repository';
-import * as pdfInvoiceService from '../services/pdf-invoice-service';
+    import { Router, Response } from 'express';
+    import { query, queryOne } from '../db';
+    import { authenticate, storeContext, AuthRequest } from '../middleware/auth';
+    import { salesService, InventoryInsufficientStockError } from '../services';
+    import { salesSPRepository } from '../repositories/sales-sp-repository';
+    import { cashTransactionRepository } from '../repositories/cash-transaction-repository';
+    import * as pdfInvoiceService from '../services/pdf-invoice-service';
+    import { validateAndNormalizeStatus, validateStatusQuery } from '../middleware/validateStatus';
 
-const router = Router();
+    const router = Router();
 
-router.use(authenticate);
-router.use(storeContext);
+    router.use(authenticate);
+    router.use(storeContext);
 
-// GET /api/sales
-router.get('/', async (req: AuthRequest, res: Response) => {
-  try {
-    const storeId = req.storeId!;
-    const { page = '1', pageSize = '20', search, status, customerId, dateFrom, dateTo } = req.query;
-    
-    const pageNum = parseInt(page as string);
-    const pageSizeNum = parseInt(pageSize as string);
+    async function resolveStoreColumnName(tableName: string): Promise<'store_id' | 'StoreId' | 'StoreID'> {
+      const row = await queryOne<{ store_column: string }>(
+        `SELECT TOP 1 c.name AS store_column
+         FROM sys.columns c
+         INNER JOIN sys.objects o ON o.object_id = c.object_id
+         WHERE o.type = 'U'
+           AND o.name = @tableName
+           AND c.name IN ('store_id', 'StoreId', 'StoreID')
+         ORDER BY CASE c.name
+           WHEN 'store_id' THEN 1
+           WHEN 'StoreId' THEN 2
+           WHEN 'StoreID' THEN 3
+           ELSE 4
+         END`,
+        { tableName }
+      );
 
-    // Use SP Repository to get sales with filters
-    const filters = {
-      startDate: dateFrom ? new Date(dateFrom as string) : null,
-      endDate: dateTo ? new Date(dateTo as string) : null,
-      customerId: customerId && customerId !== 'all' ? customerId as string : null,
-      status: status && status !== 'all' ? status as string : null,
-    };
+      if (row?.store_column === 'StoreID') {
+        return 'StoreID';
+      }
 
-    let sales = await salesSPRepository.getByStore(storeId, filters);
+      if (row?.store_column === 'StoreId') {
+        return 'StoreId';
+      }
 
-    // Apply search filter (client-side since SP doesn't support it)
-    if (search) {
-      const searchLower = (search as string).toLowerCase();
-      sales = sales.filter(s => 
-        s.invoiceNumber?.toLowerCase().includes(searchLower) ||
-        s.customerName?.toLowerCase().includes(searchLower)
+      return 'store_id';
+    }
+
+    async function resolvePreferredColumnName(tableName: string, candidates: string[]): Promise<string | null> {
+      if (!candidates.length) {
+        return null;
+      }
+
+      const quotedCandidates = candidates.map((name) => `'${name.replace(/'/g, "''")}'`).join(',');
+      const row = await queryOne<{ column_name: string }>(
+        `SELECT TOP 1 c.name AS column_name
+         FROM sys.columns c
+         INNER JOIN sys.objects o ON o.object_id = c.object_id
+         WHERE o.type = 'U'
+           AND o.name = @tableName
+           AND c.name IN (${quotedCandidates})
+         ORDER BY CASE c.name ${candidates.map((name, idx) => `WHEN '${name.replace(/'/g, "''")}' THEN ${idx + 1}`).join(' ')} ELSE ${candidates.length + 1} END`,
+        { tableName }
+      );
+
+      return row?.column_name || null;
+    }
+
+    async function ensureSalesProjectInfra(): Promise<void> {
+      await query(`
+        IF COL_LENGTH('Sales', 'project_name') IS NULL
+        BEGIN
+          ALTER TABLE Sales ADD project_name NVARCHAR(200) NULL;
+        END
+      `);
+    }
+
+    async function ensureSalesContractorInfra(): Promise<void> {
+      await query(`
+        IF COL_LENGTH('Sales', 'contractor_id') IS NULL
+        BEGIN
+          ALTER TABLE Sales ADD contractor_id UNIQUEIDENTIFIER NULL;
+        END
+
+        IF OBJECT_ID('Contractors', 'U') IS NOT NULL
+           AND COL_LENGTH('Sales', 'contractor_id') IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_Sales_Contractors')
+        BEGIN
+          ALTER TABLE Sales WITH NOCHECK
+          ADD CONSTRAINT FK_Sales_Contractors
+          FOREIGN KEY (contractor_id) REFERENCES Contractors(id);
+        END
+
+        IF COL_LENGTH('Sales', 'contractor_id') IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Sales_contractor_id' AND object_id = OBJECT_ID('Sales'))
+        BEGIN
+          CREATE INDEX IX_Sales_contractor_id ON Sales(contractor_id);
+        END
+      `);
+    }
+
+    async function ensureCustomerDiscountInfra(): Promise<void> {
+      await query(`
+        IF OBJECT_ID('CustomerDiscountProfiles', 'U') IS NULL
+        BEGIN
+          CREATE TABLE CustomerDiscountProfiles (
+            id UNIQUEIDENTIFIER PRIMARY KEY DEFAULT NEWID(),
+            customer_id UNIQUEIDENTIFIER NOT NULL,
+            store_id UNIQUEIDENTIFIER NOT NULL,
+            customer_segment NVARCHAR(50) NOT NULL DEFAULT 'personal',
+            discount_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+            created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+            updated_at DATETIME2 NOT NULL DEFAULT GETDATE()
+          );
+          CREATE UNIQUE INDEX UX_CustomerDiscountProfiles_CustomerStore
+          ON CustomerDiscountProfiles(customer_id, store_id);
+        END
+      `);
+
+      await query(`
+        IF OBJECT_ID('CustomerDiscountTransactions', 'U') IS NULL
+        BEGIN
+          CREATE TABLE CustomerDiscountTransactions (
+            id UNIQUEIDENTIFIER PRIMARY KEY,
+            customer_id UNIQUEIDENTIFIER NOT NULL,
+            store_id UNIQUEIDENTIFIER NOT NULL,
+            amount DECIMAL(18,2) NOT NULL,
+            description NVARCHAR(500) NULL,
+            status NVARCHAR(20) NOT NULL DEFAULT 'pending',
+            paid_at DATETIME2 NULL,
+            payment_note NVARCHAR(500) NULL,
+            created_by UNIQUEIDENTIFIER NULL,
+            source_sale_id UNIQUEIDENTIFIER NULL,
+            created_at DATETIME2 NOT NULL DEFAULT GETDATE(),
+            updated_at DATETIME2 NOT NULL DEFAULT GETDATE()
+          );
+          CREATE INDEX IX_CustomerDiscountTransactions_CustomerStore
+          ON CustomerDiscountTransactions(customer_id, store_id, status, created_at DESC);
+        END
+      `);
+
+      await query(`
+        IF COL_LENGTH('CustomerDiscountTransactions', 'source_sale_id') IS NULL
+        BEGIN
+          ALTER TABLE CustomerDiscountTransactions
+          ADD source_sale_id UNIQUEIDENTIFIER NULL;
+        END
+      `);
+
+      await query(`
+        IF COL_LENGTH('CustomerDiscountTransactions', 'invoice_number') IS NULL
+        BEGIN
+          ALTER TABLE CustomerDiscountTransactions ADD invoice_number NVARCHAR(50) NULL;
+        END
+        IF COL_LENGTH('CustomerDiscountTransactions', 'invoice_date') IS NULL
+        BEGIN
+          ALTER TABLE CustomerDiscountTransactions ADD invoice_date DATETIME2 NULL;
+        END
+        IF COL_LENGTH('CustomerDiscountTransactions', 'invoice_total_amount') IS NULL
+        BEGIN
+          ALTER TABLE CustomerDiscountTransactions ADD invoice_total_amount DECIMAL(18,2) NULL;
+        END
+        IF COL_LENGTH('CustomerDiscountTransactions', 'invoice_final_amount') IS NULL
+        BEGIN
+          ALTER TABLE CustomerDiscountTransactions ADD invoice_final_amount DECIMAL(18,2) NULL;
+        END
+        IF COL_LENGTH('CustomerDiscountTransactions', 'discount_rate') IS NULL
+        BEGIN
+          ALTER TABLE CustomerDiscountTransactions ADD discount_rate DECIMAL(7,4) NULL;
+        END
+        IF COL_LENGTH('CustomerDiscountTransactions', 'discount_percent_of_invoice') IS NULL
+        BEGIN
+          ALTER TABLE CustomerDiscountTransactions ADD discount_percent_of_invoice DECIMAL(7,4) NULL;
+        END
+        IF COL_LENGTH('CustomerDiscountTransactions', 'project_name') IS NULL
+        BEGIN
+          ALTER TABLE CustomerDiscountTransactions ADD project_name NVARCHAR(200) NULL;
+        END
+      `);
+
+      await query(`
+        IF NOT EXISTS (
+          SELECT * FROM sys.indexes WHERE name = 'UX_CustomerDiscountTransactions_SourceSale'
+        )
+        BEGIN
+          CREATE UNIQUE INDEX UX_CustomerDiscountTransactions_SourceSale
+          ON CustomerDiscountTransactions(source_sale_id)
+          WHERE source_sale_id IS NOT NULL;
+        END
+      `);
+
+      await query(`
+        IF OBJECT_ID('CustomerDiscountDefaultRates', 'U') IS NULL
+        BEGIN
+          CREATE TABLE CustomerDiscountDefaultRates (
+            customer_segment NVARCHAR(50) PRIMARY KEY,
+            bronze_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+            silver_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+            gold_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+            diamond_rate DECIMAL(5,2) NOT NULL DEFAULT 0,
+            updated_at DATETIME2 NOT NULL DEFAULT GETDATE()
+          );
+        END
+      `);
+
+      const defaultRateSeeds = [
+        { segment: 'personal', bronze: 0, silver: 0, gold: 0, diamond: 0 },
+        { segment: 'worker', bronze: 5, silver: 6, gold: 7, diamond: 8 },
+        { segment: 'business', bronze: 10, silver: 11, gold: 12, diamond: 13 },
+        { segment: 'wholesaler', bronze: 12, silver: 13, gold: 14, diamond: 15 },
+        { segment: 'agency', bronze: 15, silver: 16, gold: 17, diamond: 18 },
+        { segment: 'vip', bronze: 8, silver: 9, gold: 10, diamond: 12 },
+      ];
+
+      for (const rate of defaultRateSeeds) {
+        await query(
+          `IF NOT EXISTS (SELECT 1 FROM CustomerDiscountDefaultRates WHERE customer_segment = @segment)
+           BEGIN
+             INSERT INTO CustomerDiscountDefaultRates
+               (customer_segment, bronze_rate, silver_rate, gold_rate, diamond_rate, updated_at)
+             VALUES
+               (@segment, @bronze, @silver, @gold, @diamond, GETDATE())
+           END`,
+          {
+            segment: rate.segment,
+            bronze: rate.bronze,
+            silver: rate.silver,
+            gold: rate.gold,
+            diamond: rate.diamond,
+          }
+        );
+      }
+    }
+
+    async function getCustomerCommissionRate(customerId: string, storeId: string): Promise<number> {
+      await ensureCustomerDiscountInfra();
+
+      const discountProfileStoreColumn = await resolveStoreColumnName('CustomerDiscountProfiles');
+      const customerStoreColumn = await resolveStoreColumnName('Customers');
+
+      const profile = await queryOne<{ customer_segment: string; discount_rate: number }>(
+        `SELECT customer_segment, discount_rate
+         FROM CustomerDiscountProfiles
+         WHERE customer_id = @customerId AND ${discountProfileStoreColumn} = @storeId`,
+        { customerId, storeId }
+      );
+
+      let customerSegment = String(profile?.customer_segment || 'personal').toLowerCase();
+      if (!profile) {
+        const hasCustomerType = await queryOne<{ has_column: number }>(
+          `SELECT CASE WHEN COL_LENGTH('Customers', 'customer_type') IS NOT NULL THEN 1 ELSE 0 END AS has_column`
+        );
+        if ((hasCustomerType?.has_column || 0) === 1) {
+          const customerTypeRow = await queryOne<{ customer_type: string }>(
+            `SELECT customer_type FROM Customers WHERE id = @customerId AND ${customerStoreColumn} = @storeId`,
+            { customerId, storeId }
+          );
+          customerSegment = String(customerTypeRow?.customer_type || customerSegment).toLowerCase();
+        }
+      }
+
+      let loyaltyTier = 'bronze';
+      const hasLoyaltyTier = await queryOne<{ has_column: number }>(
+        `SELECT CASE WHEN COL_LENGTH('Customers', 'loyalty_tier') IS NOT NULL THEN 1 ELSE 0 END AS has_column`
+      );
+      if ((hasLoyaltyTier?.has_column || 0) === 1) {
+        const tierRow = await queryOne<{ loyalty_tier: string }>(
+          `SELECT loyalty_tier FROM Customers WHERE id = @customerId AND ${customerStoreColumn} = @storeId`,
+          { customerId, storeId }
+        );
+        loyaltyTier = String(tierRow?.loyalty_tier || 'bronze').toLowerCase();
+      }
+
+      const defaultRate = await queryOne<{
+        bronze_rate: number;
+        silver_rate: number;
+        gold_rate: number;
+        diamond_rate: number;
+      }>(
+        `SELECT bronze_rate, silver_rate, gold_rate, diamond_rate
+         FROM CustomerDiscountDefaultRates
+         WHERE customer_segment = @segment`,
+        { segment: customerSegment }
+      );
+
+      const tierRate = loyaltyTier === 'diamond'
+        ? Number(defaultRate?.diamond_rate || 0)
+        : loyaltyTier === 'gold'
+          ? Number(defaultRate?.gold_rate || 0)
+          : loyaltyTier === 'silver'
+            ? Number(defaultRate?.silver_rate || 0)
+            : Number(defaultRate?.bronze_rate || 0);
+
+      return profile ? Number(profile.discount_rate || tierRate || 0) : tierRate;
+    }
+
+    async function createAutoCustomerCommission(params: {
+      saleId: string;
+      invoiceNumber: string;
+      customerId?: string;
+      projectName?: string;
+      storeId: string;
+      userId: string;
+      saleDate?: Date;
+      saleTotalAmount: number;
+      saleFinalAmount: number;
+    }): Promise<void> {
+      if (!params.customerId || params.saleFinalAmount <= 0) {
+        return;
+      }
+
+      const rate = await getCustomerCommissionRate(params.customerId, params.storeId);
+      if (!Number.isFinite(rate) || rate <= 0) {
+        return;
+      }
+
+      const commissionAmount = Math.round(((Number(params.saleFinalAmount) * rate) / 100) * 100) / 100;
+      if (commissionAmount <= 0) {
+        return;
+      }
+
+      await query(
+        `IF @discountPercentOfInvoice > 0
+           AND @amount > 0
+           AND NOT EXISTS (SELECT 1 FROM CustomerDiscountTransactions WHERE source_sale_id = @saleId)
+         BEGIN
+           INSERT INTO CustomerDiscountTransactions
+             (id, customer_id, store_id, amount, description, status, created_by,
+              source_sale_id, invoice_number, invoice_date, invoice_total_amount, invoice_final_amount,
+              discount_rate, discount_percent_of_invoice, project_name,
+              created_at, updated_at)
+           VALUES
+             (NEWID(), @customerId, @storeId, @amount, @description, 'pending', @createdBy,
+              @saleId, @invoiceNumber, @invoiceDate, @invoiceTotalAmount, @invoiceFinalAmount,
+              @discountRate, @discountPercentOfInvoice, @projectName,
+              GETDATE(), GETDATE())
+         END`,
+        {
+          saleId: params.saleId,
+          customerId: params.customerId,
+          storeId: params.storeId,
+          amount: commissionAmount,
+          createdBy: params.userId,
+          invoiceNumber: params.invoiceNumber,
+          invoiceDate: params.saleDate || new Date(),
+          invoiceTotalAmount: Number(params.saleTotalAmount || 0),
+          invoiceFinalAmount: Number(params.saleFinalAmount || 0),
+          discountRate: Number(rate || 0),
+          discountPercentOfInvoice: Number(rate || 0),
+          projectName: params.projectName || null,
+          description: params.projectName
+            ? `Hoa hong tu dong ${rate}% tu hoa don ${params.invoiceNumber} (Cong trinh: ${params.projectName})`
+            : `Hoa hong tu dong ${rate}% tu hoa don ${params.invoiceNumber}`,
+        }
       );
     }
 
-    // Calculate pagination
-    const total = sales.length;
-    const totalPages = Math.ceil(total / pageSizeNum);
-    const offset = (pageNum - 1) * pageSizeNum;
-    const paginatedSales = sales.slice(offset, offset + pageSizeNum);
+    // Helper function to generate invoice number
+    async function generateInvoiceNumber(storeId: string): Promise<string> {
+      const today = new Date();
+      const year = today.getFullYear();
+      const month = (today.getMonth() + 1).toString().padStart(2, '0');
+      const day = today.getDate().toString().padStart(2, '0');
+      const datePrefix = `PN${year}${month}${day}`;
 
-    // Get item counts for all paginated sales in a single query (fix N+1)
-    let itemCountMap: Record<string, number> = {};
-    if (paginatedSales.length > 0) {
-      const saleIds = paginatedSales.map(s => s.id);
-      const placeholders = saleIds.map((_, i) => `@id${i}`).join(',');
-      const params: Record<string, string> = {};
-      saleIds.forEach((id, i) => { params[`id${i}`] = id; });
+      const result = await queryOne<{ invoice_number: string }>(
+        `SELECT TOP 1 invoice_number 
+        FROM Sales 
+        WHERE store_id = @storeId AND invoice_number LIKE @prefix + '%' 
+        ORDER BY invoice_number DESC`,
+        { storeId, prefix: datePrefix }
+      );
 
-      const countResults = await query(
+      let nextSequence = 1;
+      if (result) {
+        const lastSequence = parseInt(
+          result.invoice_number.substring(datePrefix.length),
+          10
+        );
+        if (!isNaN(lastSequence)) {
+          nextSequence = lastSequence + 1;
+        }
+      }
+
+      return `${datePrefix}${nextSequence.toString().padStart(4, '0')}`;
+    }
+
+    // GET /api/sales
+    router.get('/', validateStatusQuery, async (req: AuthRequest, res: Response) => {
+      try {
+        const storeId = req.storeId!;
+        const userId = req.user!.id;
+        const userRole = req.user!.role;
+        const { page = '1', pageSize = '20', search, status, customerId, dateFrom, dateTo } = req.query;
+
+        await ensureSalesProjectInfra();
+        await ensureSalesContractorInfra();
+        const salesStoreColumn = await resolveStoreColumnName('Sales');
+        const discountStoreColumn = await resolveStoreColumnName('CustomerDiscountTransactions');
+
+        const pageNum = parseInt(page as string);
+        const pageSizeNum = parseInt(pageSize as string);
+
+        // Use SP Repository to get sales with filters
+        const filters = {
+          startDate: dateFrom ? new Date(dateFrom as string) : null,
+          endDate: dateTo ? new Date(dateTo as string) : null,
+          customerId: customerId && customerId !== 'all' ? customerId as string : null,
+          status: status && status !== 'all' ? status as string : null,
+        };
+
+        let sales = await salesSPRepository.getByStore(storeId, filters);
+
+        // Filter by employee: only show sales created by current user
+        // Exception: owner and company_manager can see all sales
+        if (userRole !== 'owner' && userRole !== 'company_manager') {
+          sales = sales.filter(s => s.createdBy === userId);
+        }
+
+        // Apply search filter (client-side since SP doesn't support it)
+        if (search) {
+          const searchLower = (search as string).toLowerCase();
+          sales = sales.filter(s =>
+            s.invoiceNumber?.toLowerCase().includes(searchLower) ||
+            s.customerName?.toLowerCase().includes(searchLower)
+          );
+        }
+
+        // Calculate status counts for all sales (before pagination)
+        const statusCounts = {
+          pending: sales.filter(s => s.status === 'pending').length,
+          processed: sales.filter(s => s.status === 'processed').length,
+        };
+
+        // Calculate pagination
+        const total = sales.length;
+        const totalPages = Math.ceil(total / pageSizeNum);
+        const offset = (pageNum - 1) * pageSizeNum;
+        const paginatedSales = sales.slice(offset, offset + pageSizeNum);
+
+        // Get item counts for all paginated sales in a single query (fix N+1)
+        let itemCountMap: Record<string, number> = {};
+        let projectNameMap: Record<string, string | null> = {};
+        let contractorIdMap: Record<string, string | null> = {};
+        const contractorNameById: Record<string, string> = {};
+        if (paginatedSales.length > 0) {
+          const saleIds = paginatedSales.map(s => s.id);
+          const placeholders = saleIds.map((_, i) => `@id${i}`).join(',');
+          const params: Record<string, string> = {};
+          saleIds.forEach((id, i) => { params[`id${i}`] = id; });
+
+          const countResults = await query(
         `SELECT sales_transaction_id, COUNT(*) as item_count
          FROM SalesItems
          WHERE sales_transaction_id IN (${placeholders})
@@ -63,12 +454,75 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       (countResults as Array<{ sales_transaction_id: string; item_count: number }>).forEach(r => {
         itemCountMap[r.sales_transaction_id] = r.item_count;
       });
+
+      const projectRows = await query<{ id: string; project_name: string | null; contractor_id: string | null }>(
+        `SELECT s.id,
+                COALESCE(cdt.project_name, s.project_name) AS project_name,
+                s.contractor_id
+         FROM Sales s
+         LEFT JOIN CustomerDiscountTransactions cdt
+           ON cdt.source_sale_id = s.id
+          AND cdt.${discountStoreColumn} = s.${salesStoreColumn}
+         WHERE s.${salesStoreColumn} = @storeId
+           AND s.id IN (${placeholders})`,
+        {
+          ...params,
+          storeId,
+        }
+      );
+
+      projectRows.forEach((row) => {
+        projectNameMap[row.id] = row.project_name || null;
+        contractorIdMap[row.id] = row.contractor_id || null;
+      });
+
+      const contractorIds = Array.from(
+        new Set(projectRows.map((row) => row.contractor_id).filter((id): id is string => Boolean(id)))
+      );
+
+      if (contractorIds.length > 0) {
+        const contractorsTableState = await queryOne<{ table_exists: number }>(
+          `SELECT CASE WHEN OBJECT_ID('Contractors', 'U') IS NULL THEN 0 ELSE 1 END AS table_exists`
+        );
+
+        if (Number(contractorsTableState?.table_exists || 0) === 1) {
+          const contractorsStoreColumn = await resolveStoreColumnName('Contractors');
+          const contractorPlaceholders = contractorIds.map((_, i) => `@contractorId${i}`).join(',');
+          const contractorParams: Record<string, unknown> = { storeId };
+          contractorIds.forEach((id, i) => {
+            contractorParams[`contractorId${i}`] = id;
+          });
+
+          const contractorRows = await query<{ id: string; name: string }>(
+            `SELECT id, name
+             FROM Contractors
+             WHERE id IN (${contractorPlaceholders})
+               AND ${contractorsStoreColumn} = @storeId`,
+            contractorParams
+          );
+
+          contractorRows.forEach((row) => {
+            contractorNameById[row.id] = row.name || '';
+          });
+        }
+      }
     }
 
-    const salesWithItemCount = paginatedSales.map(s => ({
-      ...s,
-      itemCount: itemCountMap[s.id] || 0,
-    }));
+    const salesWithItemCount = paginatedSales.map((s) => {
+      const resolvedContractorId = contractorIdMap[s.id] || (s as any).contractorId || null;
+      const resolvedContractorName =
+        (resolvedContractorId ? contractorNameById[resolvedContractorId] : '') ||
+        (s as any).contractorName ||
+        null;
+
+      return {
+        ...s,
+        itemCount: itemCountMap[s.id] || 0,
+        contractorId: resolvedContractorId,
+        contractorName: resolvedContractorName,
+        projectName: projectNameMap[s.id] || (s as any).projectName || null,
+      };
+    });
 
     res.json({
       success: true,
@@ -78,6 +532,8 @@ router.get('/', async (req: AuthRequest, res: Response) => {
         invoiceNumber: s.invoiceNumber,
         customerId: s.customerId,
         customerName: s.customerName,
+        contractorId: (s as any).contractorId || null,
+        contractorName: (s as any).contractorName || null,
         shiftId: s.shiftId,
         transactionDate: s.transactionDate,
         status: s.status,
@@ -95,6 +551,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
         previousDebt: s.previousDebt,
         remainingDebt: s.remainingDebt,
         paymentMethod: (s as any).paymentMethod,
+        projectName: (s as any).projectName,
         itemCount: s.itemCount,
         createdAt: s.createdAt,
         updatedAt: s.updatedAt,
@@ -103,6 +560,7 @@ router.get('/', async (req: AuthRequest, res: Response) => {
       page: pageNum,
       pageSize: pageSizeNum,
       totalPages,
+      counts: statusCounts,
     });
   } catch (error) {
     console.error('Get sales error:', error);
@@ -160,11 +618,59 @@ router.get('/items/all', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// GET /api/sales/project-names - Get recently used project names for POS
+router.get('/project-names', async (req: AuthRequest, res: Response) => {
+  try {
+    const storeId = req.storeId!;
+    const salesStoreColumn = await resolveStoreColumnName('Sales');
+
+    await ensureSalesProjectInfra();
+    await ensureSalesContractorInfra();
+
+    const rows = await query<{
+      project_name: string;
+      sale_count: number;
+      total_discount: number;
+      last_transaction_date: Date;
+    }>(
+      `SELECT TOP 100
+              project_name,
+              COUNT(*) AS sale_count,
+              SUM(ISNULL(discount, 0) + ISNULL(tier_discount_amount, 0) + ISNULL(points_discount, 0)) AS total_discount,
+              MAX(transaction_date) AS last_transaction_date
+       FROM Sales
+       WHERE ${salesStoreColumn} = @storeId
+         AND project_name IS NOT NULL
+         AND LTRIM(RTRIM(project_name)) <> ''
+       GROUP BY project_name
+       ORDER BY MAX(transaction_date) DESC`,
+      { storeId }
+    );
+
+    res.json({
+      success: true,
+      data: rows.map((row) => ({
+        projectName: row.project_name,
+        saleCount: Number(row.sale_count || 0),
+        totalDiscount: Number(row.total_discount || 0),
+        lastTransactionDate: row.last_transaction_date,
+      })),
+    });
+  } catch (error) {
+    console.error('Get sales project names error:', error);
+    res.status(500).json({ error: 'Failed to get project names' });
+  }
+});
+
 // GET /api/sales/:id
 router.get('/:id', async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const storeId = req.storeId!;
+    const salesStoreColumn = await resolveStoreColumnName('Sales');
+    const discountStoreColumn = await resolveStoreColumnName('CustomerDiscountTransactions');
+
+    await ensureSalesProjectInfra();
 
     // Use SP Repository instead of inline query
     const result = await salesSPRepository.getById(id, storeId);
@@ -175,6 +681,39 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
     }
 
     const { sale, items } = result;
+    const saleMetaRow = await queryOne<{ project_name: string | null; contractor_id: string | null }>(
+      `SELECT COALESCE(cdt.project_name, s.project_name) AS project_name
+              ,s.contractor_id
+       FROM Sales s
+       LEFT JOIN CustomerDiscountTransactions cdt
+         ON cdt.source_sale_id = s.id
+        AND cdt.${discountStoreColumn} = s.${salesStoreColumn}
+       WHERE s.id = @id AND s.${salesStoreColumn} = @storeId`,
+      { id, storeId }
+    );
+
+    let contractorName: string | null = null;
+    if (saleMetaRow?.contractor_id) {
+      const contractorsTableState = await queryOne<{ table_exists: number }>(
+        `SELECT CASE WHEN OBJECT_ID('Contractors', 'U') IS NULL THEN 0 ELSE 1 END AS table_exists`
+      );
+
+      if (Number(contractorsTableState?.table_exists || 0) === 1) {
+        const contractorsStoreColumn = await resolveStoreColumnName('Contractors');
+        const contractorRow = await queryOne<{ name: string }>(
+          `SELECT TOP 1 name
+           FROM Contractors
+           WHERE id = @contractorId
+             AND ${contractorsStoreColumn} = @storeId`,
+          {
+            contractorId: saleMetaRow.contractor_id,
+            storeId,
+          }
+        );
+
+        contractorName = contractorRow?.name || null;
+      }
+    }
 
     res.json({
       sale: {
@@ -183,6 +722,8 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
         invoiceNumber: sale.invoiceNumber,
         customerId: sale.customerId,
         customerName: sale.customerName,
+        contractorId: saleMetaRow?.contractor_id || (sale as any).contractorId || null,
+        contractorName,
         shiftId: sale.shiftId,
         transactionDate: sale.transactionDate,
         status: sale.status,
@@ -199,6 +740,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
         customerPayment: sale.customerPayment,
         previousDebt: sale.previousDebt,
         remainingDebt: sale.remainingDebt,
+        projectName: saleMetaRow?.project_name || (sale as any).projectName || null,
         items: items.map((item) => ({
           id: item.id,
           salesId: item.salesTransactionId,
@@ -251,21 +793,231 @@ router.get('/:id/items', async (req: AuthRequest, res: Response) => {
 });
 
 // POST /api/sales
-router.post('/', async (req: AuthRequest, res: Response) => {
+router.post('/', validateAndNormalizeStatus, async (req: AuthRequest, res: Response) => {
   try {
     const storeId = req.storeId!;
-    const { 
-      customerId, shiftId, items, totalAmount, vatAmount, finalAmount,
+    const userId = req.user!.id;
+    const {
+      customerId, contractorId, shiftId, items, totalAmount, vatAmount, finalAmount,
       discount, discountType, discountValue, customerPayment,
       previousDebt, remainingDebt, tierDiscountPercentage, tierDiscountAmount,
-      pointsUsed, pointsDiscount, status
+      pointsUsed, pointsDiscount, status, projectName
     } = req.body;
 
-    console.log('[POST /api/sales] Creating sale:', { storeId, customerId, shiftId, itemsCount: items?.length, totalAmount, finalAmount });
+    await ensureSalesProjectInfra();
+    await ensureSalesContractorInfra();
 
-    // Validate items
-    if (!items || items.length === 0) {
+    const normalizedProjectName = typeof projectName === 'string' ? projectName.trim() : '';
+    const projectNameValue = normalizedProjectName ? normalizedProjectName.slice(0, 200) : null;
+    const contractorIdValue = typeof contractorId === 'string' && contractorId.trim() ? contractorId.trim() : null;
+
+    if (contractorIdValue) {
+      const contractorsStoreColumn = await resolveStoreColumnName('Contractors');
+      const contractor = await queryOne<{ id: string }>(
+        `SELECT TOP 1 id FROM Contractors WHERE id = @contractorId AND ${contractorsStoreColumn} = @storeId`,
+        { contractorId: contractorIdValue, storeId }
+      );
+
+      if (!contractor) {
+        res.status(400).json({ error: 'Nhà thầu không hợp lệ hoặc không thuộc cửa hàng hiện tại.' });
+        return;
+      }
+    }
+
+    // Convert previousDebt to number if it's a string
+    const previousDebtAmount = previousDebt ? Number(previousDebt) : 0;
+    const customerPaymentAmount = customerPayment ? Number(customerPayment) : 0;
+    const totalAmountValue = totalAmount ? Number(totalAmount) : 0;
+
+    // Smart status determination (Requirement 2.2 + Auto-fix)
+    let orderStatus = status || 'pending';
+    
+    // Auto-fix: If customer has paid in full, automatically set to 'processed'
+    // This works regardless of whether status was provided or not
+    if (customerPaymentAmount > 0 && finalAmount > 0 && customerPaymentAmount >= finalAmount) {
+      orderStatus = 'processed';
+      console.log('[POST /api/sales] Auto-fixing status: paid in full -> processed');
+      console.log(`[POST /api/sales] Payment: ${customerPaymentAmount}, Final: ${finalAmount}`);
+    }
+
+    console.log('[POST /api/sales] Creating sale:', { 
+      storeId, userId, customerId, shiftId, 
+      contractorId: contractorIdValue,
+      itemsCount: items?.length, 
+      totalAmount: totalAmountValue, 
+      finalAmount, 
+      previousDebt: previousDebtAmount,
+      customerPayment: customerPaymentAmount,
+      projectName: projectNameValue,
+      status: orderStatus 
+    });
+
+    // Allow empty items if this is a debt payment only (previousDebt > 0 and totalAmount = 0)
+    const isDebtPaymentOnly = previousDebtAmount > 0 && totalAmountValue === 0 && (!items || items.length === 0);
+
+    // Validate items (unless it's debt payment only)
+    if (!isDebtPaymentOnly && (!items || items.length === 0)) {
       res.status(400).json({ error: 'Đơn hàng phải có ít nhất một sản phẩm' });
+      return;
+    }
+
+    // If debt payment only, create a simple sale record without inventory management
+    if (isDebtPaymentOnly) {
+      console.log('[POST /api/sales] Creating debt payment only sale');
+      console.log('[POST /api/sales] Debt payment details:', { 
+        customerId, 
+        previousDebt: previousDebtAmount, 
+        customerPayment: customerPaymentAmount, 
+        totalAmount: totalAmountValue 
+      });
+
+      const saleId = crypto.randomUUID();
+      const invoiceNumber = await generateInvoiceNumber(storeId);
+
+      await query(
+        `INSERT INTO Sales (
+          id, store_id, customer_id, shift_id, invoice_number, transaction_date,
+          total_amount, discount, discount_type, discount_value, vat_amount, final_amount,
+          customer_payment, previous_debt, remaining_debt, status, contractor_id, project_name, CreatedBy, created_at, updated_at
+        ) VALUES (
+          @id, @storeId, @customerId, @shiftId, @invoiceNumber, GETDATE(),
+          @totalAmount, @discount, @discountType, @discountValue, @vatAmount, @finalAmount,
+          @customerPayment, @previousDebt, @remainingDebt, @status, @contractorId, @projectName, @createdBy, GETDATE(), GETDATE()
+        )`,
+        {
+          id: saleId,
+          storeId,
+          customerId: customerId || null,
+          shiftId: shiftId || null,
+          invoiceNumber,
+          totalAmount: 0,
+          discount: 0,
+          discountType: 'amount',
+          discountValue: 0,
+          vatAmount: 0,
+          finalAmount: 0,
+          customerPayment: customerPaymentAmount,
+          previousDebt: previousDebtAmount,
+          remainingDebt: 0, // Debt is paid
+          status: orderStatus,
+          contractorId: contractorIdValue,
+          projectName: projectNameValue,
+          createdBy: userId,
+        }
+      );
+
+      // Update customer debt and clear remaining_debt from old sales
+      // IMPORTANT: Always run this if we have customerId and previousDebt
+      if (customerId && previousDebtAmount > 0) {
+        console.log('[POST /api/sales] ✓ Starting debt update process');
+        console.log('[POST /api/sales] Customer ID:', customerId);
+        console.log('[POST /api/sales] Previous Debt:', previousDebtAmount);
+        console.log('[POST /api/sales] Store ID:', storeId);
+        
+        // First, update the customer's total_debt
+        const updateCustomerResult = await query(
+          `UPDATE Customers 
+           SET total_debt = ISNULL(total_debt, 0) - @previousDebt,
+               total_paid = ISNULL(total_paid, 0) + @previousDebt,
+               updated_at = GETDATE()
+           WHERE id = @customerId AND store_id = @storeId`,
+          { customerId, previousDebt: previousDebtAmount, storeId }
+        );
+
+        console.log('[POST /api/sales] ✓ Customer table updated');
+
+        // Then, clear remaining_debt from old sales (FIFO - oldest first)
+        // Get all sales with remaining debt
+        const salesWithDebt = await query(
+          `SELECT id, remaining_debt, transaction_date, created_at, invoice_number
+           FROM Sales
+           WHERE customer_id = @customerId 
+             AND store_id = @storeId 
+             AND remaining_debt > 0
+           ORDER BY transaction_date ASC, created_at ASC`,
+          { customerId, storeId }
+        ) as Array<{ id: string; remaining_debt: number; transaction_date: Date; created_at: Date; invoice_number: string }>;
+
+        console.log('[POST /api/sales] ✓ Found', salesWithDebt.length, 'sales with debt');
+
+        // Apply payment to sales (FIFO)
+        let remainingPayment = previousDebtAmount;
+        for (const sale of salesWithDebt) {
+          if (remainingPayment <= 0) break;
+
+          const debtToPay = Math.min(sale.remaining_debt, remainingPayment);
+          const newRemainingDebt = sale.remaining_debt - debtToPay;
+
+          console.log('[POST /api/sales] ✓ Updating sale:', {
+            invoice: sale.invoice_number,
+            saleId: sale.id,
+            oldDebt: sale.remaining_debt,
+            payment: debtToPay,
+            newDebt: newRemainingDebt
+          });
+
+          await query(
+            `UPDATE Sales
+             SET remaining_debt = @newRemainingDebt,
+                 updated_at = GETDATE()
+             WHERE id = @saleId`,
+            { saleId: sale.id, newRemainingDebt }
+          );
+
+          remainingPayment -= debtToPay;
+        }
+
+        console.log('[POST /api/sales] ✓ Debt update completed successfully!');
+        console.log('[POST /api/sales] Remaining payment after allocation:', remainingPayment);
+      } else {
+        console.log('[POST /api/sales] ✗ SKIPPING debt update');
+        console.log('[POST /api/sales] Reason: customerId =', customerId, '(type:', typeof customerId, ')');
+        console.log('[POST /api/sales] Reason: previousDebt =', previousDebtAmount, '(type:', typeof previousDebtAmount, ')');
+      }
+
+      // Ensure debt payment appears in payment history and cashbook as a cash-in transaction.
+      if (customerId && customerPaymentAmount > 0) {
+        await query(
+          `INSERT INTO Payments (id, store_id, customer_id, payment_date, amount, notes, created_at)
+           VALUES (NEWID(), @storeId, @customerId, @paymentDate, @amount, @notes, @createdAt)`,
+          {
+            storeId,
+            customerId,
+            paymentDate: new Date(),
+            amount: customerPaymentAmount,
+            notes: `Thanh toán công nợ tại quầy (Hóa đơn ${invoiceNumber})`,
+            createdAt: new Date(),
+          }
+        );
+
+        await cashTransactionRepository.create(
+          {
+            storeId,
+            type: 'thu',
+            transactionDate: new Date().toISOString(),
+            amount: customerPaymentAmount,
+            reason: `Thu tiền công nợ khách hàng - ${invoiceNumber}`,
+            category: 'Thu tiền khách hàng',
+            relatedInvoiceId: saleId,
+          },
+          storeId
+        );
+      }
+
+      console.log('[POST /api/sales] Debt payment sale created:', saleId, invoiceNumber);
+
+      res.status(201).json({
+        id: saleId,
+        invoiceNumber,
+        status: orderStatus,
+        contractorId: contractorIdValue,
+        projectName: projectNameValue,
+        finalAmount: 0,
+        customerPayment: customerPaymentAmount,
+        previousDebt: previousDebtAmount,
+        totalAmount: 0,
+        conversions: [],
+      });
       return;
     }
 
@@ -282,6 +1034,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     const result = await salesService.createSale(
       {
         customerId,
+        contractorId: contractorIdValue || undefined,
         shiftId,
         items: mappedItems,
         discount,
@@ -294,8 +1047,11 @@ router.post('/', async (req: AuthRequest, res: Response) => {
         customerPayment,
         previousDebt,
         vatAmount,
+        projectName: projectNameValue || undefined,
+        status: orderStatus, // Pass the status to the service
       },
-      storeId
+      storeId,
+      userId
     );
 
     console.log('[POST /api/sales] Sale created:', result.sale.id, result.sale.invoiceNumber);
@@ -303,10 +1059,29 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       console.log('[POST /api/sales] Auto conversions:', result.conversions.length);
     }
 
+    // Commission-style discount ledger: record separately, do not affect invoice totals.
+    try {
+      await createAutoCustomerCommission({
+        saleId: result.sale.id,
+        invoiceNumber: result.sale.invoiceNumber,
+        customerId,
+        projectName: projectNameValue || undefined,
+        storeId,
+        userId,
+        saleDate: result.sale.transactionDate ? new Date(result.sale.transactionDate) : undefined,
+        saleTotalAmount: Number(result.sale.totalAmount || 0),
+        saleFinalAmount: Number(result.sale.finalAmount || 0),
+      });
+    } catch (commissionError) {
+      console.error('[POST /api/sales] Commission logging failed (non-blocking):', commissionError);
+    }
+
     res.status(201).json({
       id: result.sale.id,
       invoiceNumber: result.sale.invoiceNumber,
       status: result.sale.status,
+      contractorId: result.sale.contractorId || contractorIdValue,
+      projectName: result.sale.projectName || projectNameValue,
       finalAmount: result.sale.finalAmount,
       conversions: result.conversions.map((c) => ({
         id: c.id,
@@ -319,7 +1094,7 @@ router.post('/', async (req: AuthRequest, res: Response) => {
     });
   } catch (error) {
     console.error('Create sale error:', error);
-    
+
     // Handle insufficient stock error
     if (error instanceof InventoryInsufficientStockError) {
       res.status(400).json({
@@ -333,22 +1108,49 @@ router.post('/', async (req: AuthRequest, res: Response) => {
       return;
     }
 
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    // Catch SQL Server RAISERROR for insufficient stock caused by concurrent transaction race conditions
+    if (errorMessage.includes('Insufficient stock for product')) {
+      res.status(400).json({
+        error: 'Sản phẩm đã hết hàng hoặc không đủ số lượng để bán. Vui lòng kiểm tra lại tồn kho.',
+        code: 'INSUFFICIENT_STOCK',
+        details: errorMessage
+      });
+      return;
+    }
+
     res.status(500).json({ error: `Failed to create sale: ${errorMessage}` });
   }
 });
 
 // PUT /api/sales/:id
-router.put('/:id', async (req: AuthRequest, res: Response) => {
+router.put('/:id', validateAndNormalizeStatus, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const storeId = req.storeId!;
     const { status, customerPayment, remainingDebt } = req.body;
+    const contractorId = typeof req.body.contractorId === 'string' && req.body.contractorId.trim()
+      ? req.body.contractorId.trim()
+      : undefined;
+
+    console.log('[Sales PUT] Update request:', {
+      id,
+      storeId,
+      status,
+      customerPayment,
+      remainingDebt,
+      contractorId,
+    });
 
     // Use SP Repository for status update if only status is being updated
-    if (status && !customerPayment && !remainingDebt) {
+    if (status && !customerPayment && !remainingDebt && !contractorId) {
+      console.log('[Sales PUT] Using SP for status update');
       const updated = await salesSPRepository.updateStatus(id, storeId, status);
+      console.log('[Sales PUT] SP result:', updated);
+
       if (!updated) {
+        console.error('[Sales PUT] Sale not found:', { id, storeId });
         res.status(404).json({ error: 'Sale not found' });
         return;
       }
@@ -357,14 +1159,70 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
     }
 
     // For other updates, use inline query (SP doesn't support partial updates)
+    console.log('[Sales PUT] Using inline query for update');
     await query(
       `UPDATE Sales SET 
         status = COALESCE(@status, status),
         customer_payment = COALESCE(@customerPayment, customer_payment),
         remaining_debt = COALESCE(@remainingDebt, remaining_debt),
+        contractor_id = COALESCE(@contractorId, contractor_id),
         updated_at = GETDATE()
        WHERE id = @id AND store_id = @storeId`,
-      { id, storeId, status, customerPayment, remainingDebt }
+      { id, storeId, status, customerPayment, remainingDebt, contractorId: contractorId || null }
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Update sale error:', error);
+    res.status(500).json({ error: 'Failed to update sale' });
+  }
+});
+
+// PATCH /api/sales/:id - Update sale status (Requirement 2.3, 2.4, 3.1)
+router.patch('/:id', validateAndNormalizeStatus, async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const storeId = req.storeId!;
+    const { status, customerPayment, remainingDebt } = req.body;
+    const contractorId = typeof req.body.contractorId === 'string' && req.body.contractorId.trim()
+      ? req.body.contractorId.trim()
+      : undefined;
+
+    console.log('[Sales PATCH] Update request:', {
+      id,
+      storeId,
+      status,
+      customerPayment,
+      remainingDebt,
+      contractorId,
+    });
+
+    // Use SP Repository for status update if only status is being updated
+    if (status && !customerPayment && !remainingDebt && !contractorId) {
+      console.log('[Sales PATCH] Using SP for status update');
+      const updated = await salesSPRepository.updateStatus(id, storeId, status);
+      console.log('[Sales PATCH] SP result:', updated);
+
+      if (!updated) {
+        console.error('[Sales PATCH] Sale not found:', { id, storeId });
+        res.status(404).json({ error: 'Sale not found' });
+        return;
+      }
+      res.json({ success: true });
+      return;
+    }
+
+    // For other updates, use inline query (SP doesn't support partial updates)
+    console.log('[Sales PATCH] Using inline query for update');
+    const result = await query(
+      `UPDATE Sales SET 
+        status = COALESCE(@status, status),
+        customer_payment = COALESCE(@customerPayment, customer_payment),
+        remaining_debt = COALESCE(@remainingDebt, remaining_debt),
+        contractor_id = COALESCE(@contractorId, contractor_id),
+        updated_at = GETDATE()
+       WHERE id = @id AND store_id = @storeId`,
+      { id, storeId, status, customerPayment, remainingDebt, contractorId: contractorId || null }
     );
 
     res.json({ success: true });
@@ -380,11 +1238,19 @@ router.delete('/:id', async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     const storeId = req.storeId!;
 
+    const salesStoreColumn = await resolveStoreColumnName('Sales');
+    const salesItemsTransactionColumn =
+      (await resolvePreferredColumnName('SalesItems', [
+        'sales_transaction_id',
+        'SalesTransactionId',
+        'SalesTransactionID',
+      ])) || 'sales_transaction_id';
+
     // Delete sale items first
-    await query('DELETE FROM SalesItems WHERE sales_transaction_id = @id', { id });
+    await query(`DELETE FROM SalesItems WHERE ${salesItemsTransactionColumn} = @id`, { id });
 
     // Delete sale
-    await query('DELETE FROM Sales WHERE id = @id AND store_id = @storeId', { id, storeId });
+    await query(`DELETE FROM Sales WHERE id = @id AND ${salesStoreColumn} = @storeId`, { id, storeId });
 
     res.json({ success: true });
   } catch (error) {

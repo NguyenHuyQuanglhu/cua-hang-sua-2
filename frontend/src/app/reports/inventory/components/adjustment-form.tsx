@@ -29,6 +29,7 @@ import { useRouter } from 'next/navigation'
 import { upsertProduct } from '@/app/products/actions'
 import { useStore } from '@/contexts/store-context'
 import { Product, PurchaseLot, Unit } from '@/lib/types'
+import { apiClient } from '@/lib/api-client'
 
 const adjustmentFormSchema = z.object({
   actualStock: z.coerce.number().min(0, "Số lượng phải là số không âm.").optional(),
@@ -61,18 +62,20 @@ export function InventoryAdjustmentForm({ isOpen, onOpenChange, productInfo }: I
 
     const fetchProduct = async () => {
       try {
-        const res = await fetch(`/api/products/${productInfo.productId}`);
-        if (res.ok) {
-          const data = await res.json();
-          setProductData(data.data || null);
-        }
+        const response = await apiClient.getProduct(productInfo.productId);
+        setProductData((response as any).data || response as Product);
       } catch (error) {
         console.error('Error fetching product:', error);
+        toast({
+          variant: "destructive",
+          title: "Lỗi",
+          description: "Không thể tải thông tin sản phẩm."
+        });
       }
     };
 
     fetchProduct();
-  }, [isOpen, productInfo?.productId]);
+  }, [isOpen, productInfo?.productId, toast]);
   
   const conversionFactor = productInfo.mainUnit?.conversionFactor || 1;
 

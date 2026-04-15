@@ -35,10 +35,10 @@ export class VoucherService {
     error?: string;
   }> {
     console.log('[VoucherService] Validating voucher:', { code, storeId, subtotal, customerId });
-    
+
     const now = new Date();
 
-    const result = await queryOne(
+    const result = await queryOne<any>(
       `SELECT * FROM Vouchers 
        WHERE code = @code 
          AND store_id = @storeId 
@@ -73,7 +73,7 @@ export class VoucherService {
       usageLimit: result.usage_limit,
       usageCount: result.usage_count,
       usagePerCustomer: result.usage_per_customer,
-      status: result.status,
+      status: result.status as NonNullable<Voucher['status']>,
     };
 
     // Check usage limit

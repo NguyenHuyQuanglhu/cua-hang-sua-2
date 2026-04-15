@@ -118,10 +118,6 @@ export default function OrderConfirmationPage() {
     switch (method) {
       case 'bank_transfer':
         return CreditCard;
-      case 'momo':
-      case 'vnpay':
-      case 'zalopay':
-        return Wallet;
       default:
         return Banknote;
     }
@@ -133,12 +129,6 @@ export default function OrderConfirmationPage() {
         return 'Thanh toán khi nhận hàng (COD)';
       case 'bank_transfer':
         return 'Chuyển khoản ngân hàng';
-      case 'momo':
-        return 'Ví MoMo';
-      case 'vnpay':
-        return 'VNPay';
-      case 'zalopay':
-        return 'ZaloPay';
       default:
         return method;
     }

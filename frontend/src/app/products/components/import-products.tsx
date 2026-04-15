@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { Upload } from 'lucide-react'
+import { Upload, Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -14,19 +14,49 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/hooks/use-toast'
-import { importProducts } from '../actions'
+import { downloadProductTemplate, importProductsFromExcel } from '../import-export-actions'
 import { useRouter } from 'next/navigation'
 
 export function ImportProducts() {
   const [open, setOpen] = useState(false)
   const [file, setFile] = useState<File | null>(null)
   const [isPending, startTransition] = useTransition()
+  const [isDownloading, setIsDownloading] = useState(false)
   const { toast } = useToast()
   const router = useRouter()
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
       setFile(e.target.files[0])
+    }
+  }
+
+  const handleDownloadTemplate = async () => {
+    setIsDownloading(true)
+    try {
+      const result = await downloadProductTemplate()
+      if (result.success && result.data) {
+        // Create download link
+        const link = document.createElement('a')
+        link.href = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${result.data}`
+        link.download = 'product-import-template.xlsx'
+        link.click()
+        
+        toast({
+          title: "Thành công!",
+          description: "Đã tải template thành công.",
+        })
+      } else {
+        throw new Error(result.error)
+      }
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Lỗi",
+        description: error instanceof Error ? error.message : "Không thể tải template",
+      })
+    } finally {
+      setIsDownloading(false)
     }
   }
 
@@ -45,11 +75,11 @@ export function ImportProducts() {
       reader.readAsDataURL(file)
       reader.onload = async () => {
         const base64 = (reader.result as string).split(',')[1]
-        const result = await importProducts(base64)
+        const result = await importProductsFromExcel(base64)
         if (result.success) {
           toast({
             title: "Thành công!",
-            description: `Đã nhập thành công ${result.createdCount} sản phẩm.`,
+            description: `Đã nhập thành công ${result.imported} sản phẩm${result.failed ? `, ${result.failed} thất bại` : ''}.`,
           })
           router.refresh()
           setOpen(false)
@@ -58,7 +88,7 @@ export function ImportProducts() {
           toast({
             variant: "destructive",
             title: "Ôi! Đã có lỗi xảy ra.",
-            description: result.error,
+            description: result.error || 'Không thể import sản phẩm',
           })
         }
       }
@@ -80,8 +110,15 @@ export function ImportProducts() {
           <DialogTitle>Nhập sản phẩm từ file Excel</DialogTitle>
           <DialogDescription>
             Chọn file Excel (.xlsx) chứa dữ liệu sản phẩm để thêm hàng loạt.
-            Hãy chắc chắn file của bạn có các cột: `name`, `categoryId`, `unitId`, `status`, `lowStockThreshold`.
-            Giá trị `categoryId` phải là tên chính xác của danh mục và `unitId` phải là ID của đơn vị đã có trong hệ thống.
+            <Button 
+              variant="link" 
+              className="p-0 h-auto font-normal text-blue-600"
+              onClick={handleDownloadTemplate}
+              disabled={isDownloading}
+            >
+              <Download className="h-3 w-3 mr-1" />
+              {isDownloading ? 'Đang tải...' : 'Tải file mẫu'}
+            </Button>
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-4">

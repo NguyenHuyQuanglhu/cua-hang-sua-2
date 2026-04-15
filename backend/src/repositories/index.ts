@@ -169,13 +169,6 @@ export {
   type GetSalesByStoreFilters,
 } from './sales-sp-repository';
 
-// Export Payment repository (customer payments)
-export {
-  PaymentRepository,
-  paymentRepository,
-  type Payment,
-} from './payment-repository';
-
 // Export SupplierPayment repository
 export {
   SupplierPaymentRepository,

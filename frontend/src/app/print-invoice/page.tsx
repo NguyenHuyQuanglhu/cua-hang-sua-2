@@ -21,6 +21,7 @@ async function getAuthHeaders() {
 async function getSaleData(saleId: string) {
   try {
     const headers = await getAuthHeaders();
+    const storeId = (await cookies()).get('store-id')?.value;
 
     const saleResponse = await fetch(`${API_BASE_URL}/sales/${saleId}`, {
       method: 'GET',
@@ -29,7 +30,7 @@ async function getSaleData(saleId: string) {
     });
 
     if (!saleResponse.ok) {
-      return { sale: null, items: [], customer: null, productsMap: new Map(), unitsMap: new Map(), settings: null };
+      return { sale: null, items: [], customer: null, productsMap: new Map(), unitsMap: new Map(), settings: null, storeName: undefined };
     }
 
     const saleData = await saleResponse.json();
@@ -88,6 +89,20 @@ async function getSaleData(saleId: string) {
       settings = settingsData.settings;
     }
 
+    // Fetch store information
+    let storeName: string | undefined = undefined;
+    if (storeId) {
+      const storeResponse = await fetch(`${API_BASE_URL}/stores/${storeId}`, {
+        method: 'GET',
+        headers,
+        cache: 'no-store',
+      });
+      if (storeResponse.ok) {
+        const storeData = await storeResponse.json();
+        storeName = storeData.name;
+      }
+    }
+
     const mappedItems = items.map((item: any) => ({
       id: item.id,
       salesTransactionId: item.salesId,
@@ -118,10 +133,10 @@ async function getSaleData(saleId: string) {
       remainingDebt: sale.remainingDebt,
     };
 
-    return { sale: mappedSale, items: mappedItems, customer, productsMap, unitsMap, settings };
+    return { sale: mappedSale, items: mappedItems, customer, productsMap, unitsMap, settings, storeName };
   } catch (error) {
     console.error('Error fetching sale data:', error);
-    return { sale: null, items: [], customer: null, productsMap: new Map(), unitsMap: new Map(), settings: null };
+    return { sale: null, items: [], customer: null, productsMap: new Map(), unitsMap: new Map(), settings: null, storeName: undefined };
   }
 }
 
@@ -137,7 +152,7 @@ export default async function PrintInvoicePage({ searchParams }: PageProps) {
     notFound()
   }
   
-  const { sale, items, customer, productsMap, unitsMap, settings } = await getSaleData(saleId);
+  const { sale, items, customer, productsMap, unitsMap, settings, storeName } = await getSaleData(saleId);
 
   if (!sale) {
     notFound()
@@ -157,6 +172,7 @@ export default async function PrintInvoicePage({ searchParams }: PageProps) {
             productsMap={productsMap}
             unitsMap={unitsMap}
             settings={settings}
+            storeName={storeName}
           />
         </div>
       );

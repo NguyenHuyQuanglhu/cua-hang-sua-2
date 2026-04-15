@@ -101,6 +101,7 @@ BEGIN
             p.price,
             p.cost_price AS costPrice,
             p.sku,
+            p.unit_id AS unitId,
             p.stock_quantity AS stockQuantity,
             p.images,
             p.status,
@@ -275,16 +276,17 @@ BEGIN
         p.price,
         p.cost_price AS costPrice,
         p.sku,
+        p.unit_id AS unitId,
         p.stock_quantity AS stockQuantity,
         p.images,
         p.status,
         p.created_at AS createdAt,
         p.updated_at AS updatedAt,
         c.name AS categoryName,
-        ISNULL(pi.Quantity, p.stock_quantity) AS currentStock
+        -- Use SUM of all ProductInventory records, fallback to stock_quantity
+        ISNULL((SELECT SUM(Quantity) FROM ProductInventory WHERE ProductId = p.id AND StoreId = @storeId), p.stock_quantity) AS currentStock
     FROM Products p
     LEFT JOIN Categories c ON p.category_id = c.id
-    LEFT JOIN ProductInventory pi ON p.id = pi.ProductId AND pi.StoreId = @storeId
     WHERE p.store_id = @storeId
         AND p.status != 'deleted'
         AND (@status IS NULL OR p.status = @status)
@@ -320,16 +322,17 @@ BEGIN
         p.price,
         p.cost_price AS costPrice,
         p.sku,
+        p.unit_id AS unitId,
         p.stock_quantity AS stockQuantity,
         p.images,
         p.status,
         p.created_at AS createdAt,
         p.updated_at AS updatedAt,
         c.name AS categoryName,
-        ISNULL(pi.Quantity, p.stock_quantity) AS currentStock
+        -- Use SUM of all ProductInventory records, fallback to stock_quantity
+        ISNULL((SELECT SUM(Quantity) FROM ProductInventory WHERE ProductId = p.id AND StoreId = @storeId), p.stock_quantity) AS currentStock
     FROM Products p
     LEFT JOIN Categories c ON p.category_id = c.id
-    LEFT JOIN ProductInventory pi ON p.id = pi.ProductId AND pi.StoreId = @storeId
     WHERE p.id = @id AND p.store_id = @storeId;
 END
 GO

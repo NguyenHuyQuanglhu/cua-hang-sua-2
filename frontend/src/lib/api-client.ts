@@ -1,5 +1,5 @@
-// Hardcode API URL for now - env var not loading properly
-const API_URL = 'http://localhost:3001/api';
+// Use Next.js API proxy to avoid CORS and network access issues
+const API_URL = '/api/proxy';
 
 // Debug: log API URL
 if (typeof window !== 'undefined') {
@@ -14,6 +14,15 @@ interface ApiOptions {
 
 interface ApiError extends Error {
   status?: number;
+}
+
+export interface StoreCustomerSegment {
+  segmentKey: string;
+  segmentLabel: string;
+  baseCustomerType: 'personal' | 'business';
+  defaultDiscountRate: number;
+  isActive: boolean;
+  isSystem: boolean;
 }
 
 // Store types
@@ -56,13 +65,25 @@ class ApiClient {
   private token: string | null = null;
   private storeId: string | null = null;
 
+  constructor() {
+    // Initialize from localStorage if available
+    if (typeof window !== 'undefined') {
+      this.token = localStorage.getItem('auth_token');
+      this.storeId = localStorage.getItem('store_id');
+    }
+  }
+
   setToken(token: string | null) {
     this.token = token;
     if (typeof window !== 'undefined') {
       if (token) {
         localStorage.setItem('auth_token', token);
+        // Also set cookie for server actions
+        document.cookie = `auth_token=${token}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax`;
       } else {
         localStorage.removeItem('auth_token');
+        // Remove cookie
+        document.cookie = 'auth_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
       }
     }
   }
@@ -72,8 +93,12 @@ class ApiClient {
     if (typeof window !== 'undefined') {
       if (storeId) {
         localStorage.setItem('store_id', storeId);
+        // Also set cookie for server actions
+        document.cookie = `store_id=${storeId}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax`;
       } else {
         localStorage.removeItem('store_id');
+        // Remove cookie
+        document.cookie = 'store_id=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
       }
     }
   }
@@ -125,6 +150,7 @@ class ApiClient {
       method,
       headers: requestHeaders,
       body: body ? JSON.stringify(body) : undefined,
+      cache: 'no-store',
     });
 
     if (!response.ok) {
@@ -151,11 +177,11 @@ class ApiClient {
   // ==================== Auth ====================
   async login(email: string, password: string) {
     const result = await this.request<{
-      user: { 
-        id: string; 
-        email: string; 
-        displayName?: string; 
-        role: string; 
+      user: {
+        id: string;
+        email: string;
+        displayName?: string;
+        role: string;
         permissions?: Record<string, string[]>;
         tenantId?: string;
         tenantUserId?: string;
@@ -189,11 +215,11 @@ class ApiClient {
 
   async getMe() {
     return this.request<{
-      user: { 
-        id: string; 
-        email: string; 
-        displayName?: string; 
-        role: string; 
+      user: {
+        id: string;
+        email: string;
+        displayName?: string;
+        role: string;
         permissions?: Record<string, string[]>;
         tenantId?: string;
         tenantUserId?: string;
@@ -217,16 +243,16 @@ class ApiClient {
   }
 
   async createCategory(data: { name: string; description?: string }) {
-    return this.request<{ id: string; name: string; description?: string }>('/categories', { 
-      method: 'POST', 
-      body: data 
+    return this.request<{ id: string; name: string; description?: string }>('/categories', {
+      method: 'POST',
+      body: data
     });
   }
 
   async updateCategory(id: string, data: { name?: string; description?: string }) {
-    return this.request<{ id: string; name: string; description?: string }>(`/categories/${id}`, { 
-      method: 'PUT', 
-      body: data 
+    return this.request<{ id: string; name: string; description?: string }>(`/categories/${id}`, {
+      method: 'PUT',
+      body: data
     });
   }
 
@@ -345,20 +371,24 @@ class ApiClient {
     return this.request<{ success: boolean }>(`/customers/${id}`, { method: 'DELETE' });
   }
 
-  async getCustomerDebtHistory(customerId: string) {
-    return this.request<{
-      success: boolean;
-      customerId: string;
-      history: Array<{
-        id: string;
-        customerId: string;
-        amount: number;
-        type: 'sale' | 'payment';
-        date: string;
-        description: string;
-        runningBalance: number;
-      }>;
-    }>(`/customers/${customerId}/history`);
+  async getCustomerDebtHistory(id: string) {
+    return this.request<{ success: boolean; customerId: string; history: Array<Record<string, unknown>> }>(`/customers/${id}/history`);
+  }
+
+  async getCustomerSegments() {
+    return this.request<{ success: boolean; data: StoreCustomerSegment[] }>('/customers/segment-types');
+  }
+
+  async createCustomerSegment(data: {
+    segmentLabel: string;
+    segmentKey?: string;
+    baseCustomerType?: 'personal' | 'business';
+    defaultDiscountRate?: number;
+  }) {
+    return this.request<{ success: boolean; data: StoreCustomerSegment }>('/customers/segment-types', {
+      method: 'POST',
+      body: data,
+    });
   }
 
   // ==================== Suppliers ====================
@@ -380,6 +410,58 @@ class ApiClient {
 
   async deleteSupplier(id: string) {
     return this.request<{ success: boolean }>(`/suppliers/${id}`, { method: 'DELETE' });
+  }
+
+  // ==================== Contractors ====================
+  async getContractors() {
+    return this.request<{
+      success: boolean;
+      data: Array<Record<string, unknown>>;
+      total: number;
+      page: number;
+      pageSize: number;
+      totalPages: number;
+    }>('/contractors');
+  }
+
+  async getContractor(id: string) {
+    return this.request<Record<string, unknown>>(`/contractors/${id}`);
+  }
+
+  async createContractor(data: Record<string, unknown>) {
+    return this.request('/contractors', { method: 'POST', body: data });
+  }
+
+  async updateContractor(id: string, data: Record<string, unknown>) {
+    return this.request(`/contractors/${id}`, { method: 'PUT', body: data });
+  }
+
+  async deleteContractor(id: string) {
+    return this.request<{ success: boolean }>(`/contractors/${id}`, { method: 'DELETE' });
+  }
+
+  // ==================== Supplier Payments ====================
+  async getSupplierPayments() {
+    return this.request('/supplier-payments');
+  }
+
+  async createSupplierPayment(data: Record<string, unknown>) {
+    return this.request('/supplier-payments', {
+      method: 'POST',
+      body: data,
+    });
+  }
+
+  // ==================== Customer Payments ====================
+  async getPayments() {
+    return this.request<Array<Record<string, unknown>>>('/payments');
+  }
+
+  async createPayment(data: Record<string, unknown>) {
+    return this.request('/payments', {
+      method: 'POST',
+      body: data,
+    });
   }
 
   // ==================== Sales ====================
@@ -466,10 +548,10 @@ class ApiClient {
   }
 
   // ==================== Cash Flow ====================
-  async getCashFlow(params?: { 
-    page?: number; 
-    pageSize?: number; 
-    type?: 'thu' | 'chi'; 
+  async getCashFlow(params?: {
+    page?: number;
+    pageSize?: number;
+    type?: 'thu' | 'chi';
     category?: string;
     dateFrom?: string;
     dateTo?: string;
@@ -515,23 +597,6 @@ class ApiClient {
     return this.request<{ success: boolean }>(`/cash-flow/${id}`, { method: 'DELETE' });
   }
 
-  // ==================== Payments ====================
-  async getPayments() {
-    return this.request<Array<Record<string, unknown>>>('/payments');
-  }
-
-  async createPayment(data: Record<string, unknown>) {
-    return this.request('/payments', { method: 'POST', body: data });
-  }
-
-  async getSupplierPayments() {
-    return this.request<Array<Record<string, unknown>>>('/supplier-payments');
-  }
-
-  async createSupplierPayment(data: Record<string, unknown>) {
-    return this.request('/supplier-payments', { method: 'POST', body: data });
-  }
-
   // ==================== Settings ====================
   async getSettings() {
     return this.request<Record<string, unknown>>('/settings');
@@ -571,13 +636,19 @@ class ApiClient {
 
   async deleteStorePermanently(id: string) {
     return this.request<{ success: boolean; message: string; deletedData?: { products: number; orders: number; customers: number } }>(
-      `/stores/${id}/permanent?confirm=true`, 
+      `/stores/${id}/permanent?confirm=true`,
       { method: 'DELETE' }
     );
   }
 
   // ==================== Users ====================
   async getUsers() {
+    // Check if we have a valid token before making the request
+    const token = this.getToken();
+    if (!token) {
+      throw new Error('Chưa đăng nhập. Vui lòng đăng nhập lại.');
+    }
+    
     return this.request<Array<Record<string, unknown>>>('/users');
   }
 
@@ -594,7 +665,18 @@ class ApiClient {
   }
 
   async deleteUser(id: string) {
-    return this.request<{ success: boolean }>(`/users/${id}`, { method: 'DELETE' });
+    console.log('API Client: deleteUser called with id:', id);
+    console.log('API Client: token:', this.getToken() ? 'present' : 'missing');
+    console.log('API Client: storeId:', this.getStoreId());
+    
+    try {
+      const result = await this.request<{ success: boolean }>(`/users/${id}`, { method: 'DELETE' });
+      console.log('API Client: deleteUser success:', result);
+      return result;
+    } catch (error) {
+      console.error('API Client: deleteUser error:', error);
+      throw error;
+    }
   }
 
   async assignUserStores(userId: string, storeIds: string[]) {
@@ -618,7 +700,7 @@ class ApiClient {
     return this.request(`/reports/sales${query ? `?${query}` : ''}`);
   }
 
-  async getInventoryReport(params?: { categoryId?: string; lowStockOnly?: boolean; dateFrom?: string; dateTo?: string; search?: string; [key: string]: any }) {
+  async getInventoryReport(params?: { categoryId?: string; lowStockOnly?: boolean; dateFrom?: string; dateTo?: string; search?: string;[key: string]: any }) {
     const searchParams = new URLSearchParams();
     if (params?.categoryId) searchParams.set('categoryId', params.categoryId);
     if (params?.lowStockOnly) searchParams.set('lowStockOnly', 'true');
@@ -701,7 +783,7 @@ class ApiClient {
 
   async syncOnlineStoreProducts(onlineStoreId: string, data?: { categoryId?: string }) {
     return this.request<{ success: boolean; synced: number; skipped: number; total: number; message: string }>(
-      `/online-stores/${onlineStoreId}/sync`, 
+      `/online-stores/${onlineStoreId}/sync`,
       { method: 'POST', body: data || {} }
     );
   }
@@ -822,7 +904,7 @@ class ApiClient {
   }
 
   // ==================== Unit Conversion ====================
-  
+
   // Product Units Configuration
   async getProductUnits(productId: string) {
     return this.request<{
@@ -925,7 +1007,7 @@ class ApiClient {
   }
 
   // ==================== Unit Conversion ====================
-  async getProductUnits(productId: string) {
+  async getAvailableProductUnits(productId: string) {
     return this.request<{
       success: boolean;
       baseUnit: {
@@ -981,6 +1063,133 @@ class ApiClient {
       body: data,
     });
   }
+
+  // Notifications
+  async getNotifications(params?: {
+    page?: number;
+    pageSize?: number;
+    unreadOnly?: boolean;
+    type?: string;
+  }) {
+    const queryParams = new URLSearchParams();
+    if (params?.page) queryParams.append('page', params.page.toString());
+    if (params?.pageSize) queryParams.append('pageSize', params.pageSize.toString());
+    if (params?.unreadOnly) queryParams.append('unreadOnly', 'true');
+    if (params?.type) queryParams.append('type', params.type);
+
+    return this.request<{
+      success: boolean;
+      data: Array<{
+        id: string;
+        storeId: string;
+        userId: string | null;
+        type: string;
+        title: string;
+        message: string;
+        data: any;
+        isRead: boolean;
+        priority: string;
+        actionUrl: string | null;
+        createdAt: string;
+        readAt: string | null;
+        expiresAt: string | null;
+      }>;
+      total: number;
+      page: number;
+      pageSize: number;
+      totalPages: number;
+    }>(`/in-app-notifications?${queryParams.toString()}`);
+  }
+
+  async getUnreadNotificationCount() {
+    return this.request<{
+      success: boolean;
+      count: number;
+    }>('/in-app-notifications/unread-count');
+  }
+
+  async markNotificationAsRead(id: string) {
+    return this.request<{ success: boolean }>(`/in-app-notifications/${id}/read`, {
+      method: 'PUT',
+    });
+  }
+
+  async markAllNotificationsAsRead() {
+    return this.request<{ success: boolean }>('/in-app-notifications/read-all', {
+      method: 'PUT',
+    });
+  }
+
+  async deleteNotification(id: string) {
+    return this.request<{ success: boolean }>(`/in-app-notifications/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // Refund
+  async createRefund(data: {
+    customerId: string;
+    amount: number;
+    paymentMethod: string;
+    notes?: string;
+  }) {
+    return this.request<{
+      success: boolean;
+      refund: any;
+      message: string;
+    }>('/payments/refund', {
+      method: 'POST',
+      body: data,
+    });
+  }
+
+  // ==================== Advanced Reports ====================
+  async getSalesTrendsReport(params: { dateFrom?: string; dateTo?: string; groupBy?: 'day' | 'week' | 'month' }) {
+    const searchParams = new URLSearchParams();
+    if (params.dateFrom) searchParams.set('dateFrom', params.dateFrom);
+    if (params.dateTo) searchParams.set('dateTo', params.dateTo);
+    if (params.groupBy) searchParams.set('groupBy', params.groupBy);
+    return this.request(`/reports/sales-trends?${searchParams.toString()}`);
+  }
+
+  async getProductPerformanceReport(params: { dateFrom?: string; dateTo?: string; limit?: number }) {
+    const searchParams = new URLSearchParams();
+    if (params.dateFrom) searchParams.set('dateFrom', params.dateFrom);
+    if (params.dateTo) searchParams.set('dateTo', params.dateTo);
+    if (params.limit) searchParams.set('limit', String(params.limit));
+    return this.request(`/reports/product-performance?${searchParams.toString()}`);
+  }
+
+  async getCustomerAnalyticsReport(params: { dateFrom?: string; dateTo?: string; limit?: number }) {
+    const searchParams = new URLSearchParams();
+    if (params.dateFrom) searchParams.set('dateFrom', params.dateFrom);
+    if (params.dateTo) searchParams.set('dateTo', params.dateTo);
+    if (params.limit) searchParams.set('limit', String(params.limit));
+    return this.request(`/reports/customer-analytics?${searchParams.toString()}`);
+  }
+
+  // ==================== Loyalty Points ====================
+  async getTierHistory(customerId: string, limit: number = 50) {
+    const searchParams = new URLSearchParams();
+    if (limit) searchParams.set('limit', String(limit));
+    return this.request<{
+      success: boolean;
+      data: Array<{
+        id: string;
+        type: string;
+        title: string;
+        message: string;
+        customerId: string;
+        customerName: string;
+        oldTier: string;
+        newTier: string;
+        lifetimePoints: number;
+        createdAt: string;
+      }>;
+      total: number;
+    }>(`/loyalty-points/tier-history/${customerId}?${searchParams.toString()}`);
+  }
+
 }
 
 export const apiClient = new ApiClient();

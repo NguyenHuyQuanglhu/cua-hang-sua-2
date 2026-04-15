@@ -52,8 +52,12 @@ class CategoriesSPRepository extends sp_base_repository_1.SPBaseRepository {
             description: input.description || null,
             parentId: input.parentId || null,
         };
-        await this.executeSP('sp_Categories_Create', params);
-        // Fetch and return the created category
+        // sp_Categories_Create returns the created category directly
+        const result = await this.executeSPSingle('sp_Categories_Create', params);
+        if (result) {
+            return this.mapToEntity(result);
+        }
+        // Fallback: fetch by id (case-insensitive comparison)
         const category = await this.getById(id, input.storeId);
         if (!category) {
             throw new Error('Failed to create category');
@@ -118,7 +122,8 @@ class CategoriesSPRepository extends sp_base_repository_1.SPBaseRepository {
      */
     async getById(id, storeId) {
         const categories = await this.getByStore(storeId);
-        return categories.find((c) => c.id === id) || null;
+        // Case-insensitive comparison since SQL Server returns UUIDs in uppercase
+        return categories.find((c) => c.id.toLowerCase() === id.toLowerCase()) || null;
     }
     /**
      * Find category by name within a store

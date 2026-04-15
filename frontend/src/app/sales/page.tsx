@@ -42,12 +42,6 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs"
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -88,41 +82,46 @@ import { Calendar } from "@/components/ui/calendar"
 import { deleteSaleTransaction, updateSaleStatus, getSales } from "./actions"
 import { useToast } from "@/hooks/use-toast"
 import { useRouter } from "next/navigation"
+import { useStore } from "@/contexts/store-context"
+import { StatusFilter } from "./components/StatusFilter"
+import { StatusBadge } from "./components/StatusBadge"
 
-type SaleStatus = 'all' | 'pending' | 'unprinted' | 'printed';
-type SortKey = 'invoiceNumber' | 'customer' | 'transactionDate' | 'status' | 'finalAmount';
+type SaleStatus = 'all' | 'pending' | 'processed';
+type SortKey = 'invoiceNumber' | 'customer' | 'projectName' | 'transactionDate' | 'status' | 'finalAmount';
 
 interface Sale {
   id: string;
   invoiceNumber: string;
   customerId?: string;
   customerName?: string;
+  projectName?: string;
   transactionDate: string;
-  status: 'pending' | 'unprinted' | 'printed';
+  status: 'pending' | 'processed';
   finalAmount: number;
   itemCount: number;
+  customerPayment?: number;
+  previousDebt?: number;
+  totalAmount?: number;
 }
 
-const getStatusVariant = (status: Sale['status']): "default" | "secondary" | "outline" => {
-  switch (status) {
-    case 'printed': return 'default';
-    case 'pending': return 'secondary';
-    case 'unprinted': return 'outline';
-    default: return 'outline';
-  }
-}
-
-const getStatusText = (status: Sale['status']) => {
-  switch (status) {
-    case 'printed': return 'Đã in';
-    case 'pending': return 'Chờ xử lý';
-    case 'unprinted': return 'Chưa in';
-    default: return 'Không xác định';
-  }
-}
+const normalizeSale = (raw: Record<string, unknown>): Sale => ({
+  id: String(raw.id ?? ''),
+  invoiceNumber: String(raw.invoiceNumber ?? ''),
+  customerId: raw.customerId ? String(raw.customerId) : undefined,
+  customerName: raw.customerName ? String(raw.customerName) : undefined,
+  projectName: raw.projectName ? String(raw.projectName) : undefined,
+  transactionDate: String(raw.transactionDate ?? new Date().toISOString()),
+  status: raw.status === 'pending' ? 'pending' : 'processed',
+  finalAmount: Number(raw.finalAmount ?? 0),
+  itemCount: Number(raw.itemCount ?? 0),
+  customerPayment: raw.customerPayment !== undefined ? Number(raw.customerPayment) : undefined,
+  previousDebt: raw.previousDebt !== undefined ? Number(raw.previousDebt) : undefined,
+  totalAmount: raw.totalAmount !== undefined ? Number(raw.totalAmount) : undefined,
+});
 
 
 export default function SalesPage() {
+  const { currentStore } = useStore();
   const [sales, setSales] = useState<Sale[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -133,12 +132,13 @@ export default function SalesPage() {
   const [statusFilter, setStatusFilter] = useState<SaleStatus>('all');
   const [customerFilter, setCustomerFilter] = useState<string>('all');
   const [isUpdatingStatus, startStatusTransition] = useTransition();
-  const [sortKey, setSortKey] = useState<SortKey>('invoiceNumber');
+  const [sortKey, setSortKey] = useState<SortKey>('transactionDate');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [customerPopoverOpen, setCustomerPopoverOpen] = useState(false);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [statusCounts, setStatusCounts] = useState({ pending: 0, processed: 0 });
   const { permissions, isLoading: isRoleLoading } = useUserRole();
 
   const { toast } = useToast();
@@ -169,9 +169,14 @@ export default function SalesPage() {
       });
 
       if (result.success) {
-        setSales(result.data || []);
+        setSales((result.data || []).map(normalizeSale));
         setTotal(result.total || 0);
         setTotalPages(result.totalPages || 1);
+        
+        // Calculate status counts from the data
+        const pending = (result.data || []).filter(s => s.status === 'pending').length;
+        const processed = (result.data || []).filter(s => s.status === 'processed').length;
+        setStatusCounts({ pending, processed });
       } else {
         toast({
           variant: "destructive",
@@ -189,6 +194,19 @@ export default function SalesPage() {
   useEffect(() => {
     fetchSales();
   }, [fetchSales]);
+
+  // Reload sales when store changes - CLEAR old data first
+  useEffect(() => {
+    if (currentStore) {
+      console.log('[Sales Page] Store changed to:', currentStore.name, currentStore.id);
+      // Clear old sales immediately to prevent stale data
+      setSales([]);
+      setTotal(0);
+      setPage(1);
+      // Then fetch new sales
+      fetchSales();
+    }
+  }, [currentStore?.id]);
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -236,6 +254,10 @@ export default function SalesPage() {
           valA = (a.customerName || '').toLowerCase();
           valB = (b.customerName || '').toLowerCase();
           break;
+        case 'projectName':
+          valA = (a.projectName || '').toLowerCase();
+          valB = (b.projectName || '').toLowerCase();
+          break;
         case 'transactionDate':
           valA = new Date(a.transactionDate).getTime();
           valB = new Date(b.transactionDate).getTime();
@@ -261,7 +283,12 @@ export default function SalesPage() {
   }, [sales, sortKey, sortDirection]);
 
   const totalRevenue = useMemo(() => {
-    return sortedSales.reduce((total, sale) => total + sale.finalAmount, 0);
+    return sortedSales.reduce((total, sale) => {
+      // For debt payment transactions, use customerPayment or previousDebt instead of finalAmount
+      const isDebtPayment = (sale.totalAmount === 0 || !sale.totalAmount) && (sale.previousDebt ?? 0) > 0;
+      const amount = isDebtPayment ? (sale.customerPayment || sale.previousDebt || 0) : sale.finalAmount;
+      return total + amount;
+    }, 0);
   }, [sortedSales]);
 
   const handleAddSale = () => {
@@ -289,9 +316,29 @@ export default function SalesPage() {
     setSaleToDelete(null);
   }
   
-  const handleStatusChange = (saleId: string, status: Sale['status']) => {
+  const handleStatusChange = (sale: Sale, status: Sale['status']) => {
+    // Validate: Only allow updating sales from current store
+    if (!currentStore) {
+      toast({
+        variant: "destructive",
+        title: "Lỗi",
+        description: "Không xác định được cửa hàng hiện tại",
+      });
+      return;
+    }
+
+    console.log('[Sales Page] Changing status:', { 
+      saleId: sale.id, 
+      invoiceNumber: sale.invoiceNumber,
+      status,
+      currentStore: currentStore.name 
+    });
+    
     startStatusTransition(async () => {
-      const result = await updateSaleStatus(saleId, status);
+      console.log('[Sales Page] Calling updateSaleStatus...');
+      const result = await updateSaleStatus(sale.id, status);
+      console.log('[Sales Page] Update result:', result);
+      
       if (result.success) {
         toast({
           title: "Thành công!",
@@ -299,29 +346,59 @@ export default function SalesPage() {
         });
         fetchSales();
       } else {
+        console.error('[Sales Page] Update failed:', result.error);
+        
+        // If sale not found, it's from another store - refresh data
+        if (result.error?.includes('not found')) {
+          console.warn('[Sales Page] Sale not found - refreshing data');
+          toast({
+            title: "Đang làm mới dữ liệu...",
+            description: "Đơn hàng không thuộc cửa hàng hiện tại. Đang cập nhật...",
+          });
+          
+          // Clear stale data and refetch
+          setSales([]);
+          setTotal(0);
+          router.refresh(); // Refresh server data without full reload
+          
+          // Refetch after a short delay
+          setTimeout(() => {
+            fetchSales();
+          }, 500);
+          return;
+        }
+        
         toast({
           variant: "destructive",
-          title: "Ôi! Đã có lỗi xảy ra.",
-          description: result.error,
+          title: "Không thể cập nhật",
+          description: result.error || "Đơn hàng này không thuộc cửa hàng hiện tại hoặc đã bị xóa",
         });
       }
     });
   };
 
   const handleExportExcel = () => {
-    const dataToExport = sortedSales.map((sale, index) => ({
-      'STT': index + 1,
-      'Mã đơn hàng': sale.invoiceNumber,
-      'Khách hàng': sale.customerName || 'Khách lẻ',
-      'Ngày': format(new Date(sale.transactionDate), 'dd/MM/yyyy'),
-      'Trạng thái': getStatusText(sale.status),
-      'Tổng cộng': sale.finalAmount,
-    }));
+    const dataToExport = sortedSales.map((sale, index) => {
+      const isDebtPayment = (sale.totalAmount === 0 || !sale.totalAmount) && (sale.previousDebt ?? 0) > 0;
+      const displayAmount = isDebtPayment ? (sale.customerPayment || sale.previousDebt || 0) : sale.finalAmount;
+      const statusLabel = isDebtPayment ? 'Trả nợ' : (sale.status === 'pending' ? 'Chưa xử lý' : 'Đã xử lý');
+      
+      return {
+        'STT': index + 1,
+        'Mã đơn hàng': sale.invoiceNumber,
+        'Khách hàng': sale.customerName || 'Khách lẻ',
+        'Công trình': sale.projectName || '-',
+        'Ngày': format(new Date(sale.transactionDate), 'dd/MM/yyyy'),
+        'Trạng thái': statusLabel,
+        'Tổng cộng': displayAmount,
+      };
+    });
 
     const totalRowData = {
       'STT': '',
       'Mã đơn hàng': 'Tổng cộng',
       'Khách hàng': '',
+      'Công trình': '',
       'Ngày': '',
       'Trạng thái': '',
       'Tổng cộng': totalRevenue,
@@ -335,6 +412,7 @@ export default function SalesPage() {
       { wch: 5 },
       { wch: 20 },
       { wch: 30 },
+      { wch: 24 },
       { wch: 15 },
       { wch: 15 },
       { wch: 20 },
@@ -374,15 +452,14 @@ export default function SalesPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      <Tabs defaultValue="all" onValueChange={(value) => setStatusFilter(value as SaleStatus)}>
-        <div className="flex items-center">
-          <TabsList>
-            <TabsTrigger value="all">Tất cả</TabsTrigger>
-            <TabsTrigger value="pending">Chờ xử lý</TabsTrigger>
-            <TabsTrigger value="unprinted">Chưa in</TabsTrigger>
-            <TabsTrigger value="printed">Đã in</TabsTrigger>
-          </TabsList>
-          <div className="ml-auto flex items-center gap-2">
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <StatusFilter
+            selectedStatus={statusFilter}
+            onStatusChange={setStatusFilter}
+            counts={statusCounts}
+          />
+          <div className="flex items-center gap-2">
             <Button size="sm" variant="outline" className="h-8 gap-1" onClick={handleExportExcel}>
               <File className="h-3.5 w-3.5" />
               <span className="sr-only sm:not-sr-only sm:whitespace-nowrap">
@@ -399,8 +476,7 @@ export default function SalesPage() {
             )}
           </div>
         </div>
-        <TabsContent value={statusFilter}>
-          <Card>
+        <Card>
             <CardHeader>
               <CardTitle>Đơn hàng</CardTitle>
               <CardDescription>
@@ -520,6 +596,7 @@ export default function SalesPage() {
                     <TableHead className="w-16">STT</TableHead>
                     <SortableHeader sortKey="invoiceNumber">Mã đơn hàng</SortableHeader>
                     <SortableHeader sortKey="customer">Khách hàng</SortableHeader>
+                    <SortableHeader sortKey="projectName" className="hidden lg:table-cell">Công trình</SortableHeader>
                     <SortableHeader sortKey="transactionDate" className="hidden md:table-cell">Ngày</SortableHeader>
                     <SortableHeader sortKey="status">Trạng thái</SortableHeader>
                     <SortableHeader sortKey="finalAmount" className="text-right">Tổng cộng</SortableHeader>
@@ -530,9 +607,14 @@ export default function SalesPage() {
                 </TableHeader>
                 <TableBody>
                   <TooltipProvider>
-                    {isLoading && <TableRow><TableCell colSpan={7} className="text-center h-24">Đang tải...</TableCell></TableRow>}
+                    {isLoading && <TableRow><TableCell colSpan={8} className="text-center h-24">Đang tải...</TableCell></TableRow>}
                     {!isLoading && sortedSales.map((sale, index) => {
                       const isReturnOrder = sale.finalAmount < 0;
+                      // Check if this is a debt payment transaction
+                      const isDebtPayment = (sale.totalAmount === 0 || !sale.totalAmount) && (sale.previousDebt ?? 0) > 0;
+                      // For debt payment, display the amount paid (customerPayment or previousDebt)
+                      const displayAmount = isDebtPayment ? (sale.customerPayment || sale.previousDebt || 0) : sale.finalAmount;
+                      
                       return (
                         <TableRow key={sale.id}>
                           <TableCell className="font-medium">{index + 1}</TableCell>
@@ -552,43 +634,36 @@ export default function SalesPage() {
                             </div>
                           </TableCell>
                           <TableCell>{sale.customerName || 'Khách lẻ'}</TableCell>
+                          <TableCell className="hidden lg:table-cell">{sale.projectName || '-'}</TableCell>
                           <TableCell className="hidden md:table-cell">
                             {new Date(sale.transactionDate).toLocaleDateString()}
                           </TableCell>
                           <TableCell>
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" size="sm" className="p-1 h-auto" disabled={isUpdatingStatus}>
-                                  <Badge variant={getStatusVariant(sale.status)}>
-                                    {getStatusText(sale.status)}
-                                    <ChevronDown className="h-3 w-3 ml-1" />
-                                  </Badge>
+                                <Button variant="ghost" size="sm" className="p-1 h-auto" disabled={isUpdatingStatus || isDebtPayment}>
+                                  <StatusBadge status={sale.status} size="sm" isDebtPayment={isDebtPayment} />
+                                  <ChevronDown className="h-3 w-3 ml-1" />
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="start">
                                 <DropdownMenuItem 
-                                  onClick={() => handleStatusChange(sale.id, 'pending')}
+                                  onClick={() => handleStatusChange(sale, 'pending')}
                                   disabled={sale.status === 'pending' || isUpdatingStatus}
                                 >
-                                  Chờ xử lý
+                                  Chưa xử lý
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
-                                  onClick={() => handleStatusChange(sale.id, 'unprinted')}
-                                  disabled={sale.status === 'unprinted' || isUpdatingStatus}
+                                  onClick={() => handleStatusChange(sale, 'processed')}
+                                  disabled={sale.status === 'processed' || isUpdatingStatus}
                                 >
-                                  Chưa in
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => handleStatusChange(sale.id, 'printed')}
-                                  disabled={sale.status === 'printed' || isUpdatingStatus}
-                                >
-                                  Đã in
+                                  Đã xử lý
                                 </DropdownMenuItem>
                               </DropdownMenuContent>
                             </DropdownMenu>
                           </TableCell>
                           <TableCell className="text-right">
-                            {formatCurrency(sale.finalAmount)}
+                            {formatCurrency(displayAmount)}
                           </TableCell>
                           <TableCell>
                             <DropdownMenu>
@@ -624,7 +699,7 @@ export default function SalesPage() {
                     })}
                     {!isLoading && !sortedSales.length && (
                       <TableRow>
-                        <TableCell colSpan={7} className="text-center h-24">
+                        <TableCell colSpan={8} className="text-center h-24">
                           Không có đơn hàng nào phù hợp.
                         </TableCell>
                       </TableRow>
@@ -658,8 +733,7 @@ export default function SalesPage() {
               </div>
             </CardFooter>
           </Card>
-        </TabsContent>
-      </Tabs>
-    </>
-  )
-}
+        </div>
+      </>
+    )
+  }

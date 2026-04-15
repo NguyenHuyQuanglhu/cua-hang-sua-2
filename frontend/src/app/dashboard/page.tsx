@@ -1,836 +1,390 @@
 'use client'
 
-import {
-  DollarSign,
+import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { 
+  TrendingUp, 
+  TrendingDown, 
+  DollarSign, 
+  ShoppingCart, 
+  Package, 
+  AlertTriangle,
   Users,
-  CreditCard,
-  Package,
-  Calendar as CalendarIcon,
-  File,
-  Boxes,
-  Search
+  ArrowUpRight,
+  ArrowDownRight
 } from "lucide-react"
-import Link from "next/link"
-import { useState, useMemo, useEffect, useCallback } from "react"
-import { DateRange } from "react-day-picker"
-import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, startOfYear, endOfYear } from "date-fns"
-import * as xlsx from 'xlsx';
-
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogTrigger
-} from "@/components/ui/dialog"
-import { Button } from "@/components/ui/button"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Calendar } from "@/components/ui/calendar"
-import { cn, formatCurrency } from "@/lib/utils"
-import { apiClient } from "@/lib/api-client"
-import { Customer, Sale, Payment, Product, SalesItem, Unit, Category } from "@/lib/types"
-import { RevenueChart } from "../reports/revenue/components/revenue-chart"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
-import { Input } from "@/components/ui/input"
-import { PaymentForm } from "../reports/debt/components/payment-form"
-import { useUserRole } from "@/hooks/use-user-role"
+import { formatCurrency } from "@/lib/utils"
 import { useStore } from "@/contexts/store-context"
+import { apiClient } from "@/lib/api-client"
+import { RevenueChart } from "./components/revenue-chart"
+import { TopProductsTable } from "./components/top-products-table"
+import { LowStockAlert } from "./components/low-stock-alert"
+import { TopProductsChart } from "./components/top-products-chart"
 
-export type MonthlyRevenue = {
-  month: string;
-  revenue: number;
-  salesCount: number;
+interface DashboardStats {
+  revenue: {
+    today: number;
+    thisMonth: number;
+    lastMonth: number;
+    percentChange: number;
+  };
+  profit: {
+    thisMonth: number;
+    lastMonth: number;
+    percentChange: number;
+  };
+  sales: {
+    today: number;
+    thisMonth: number;
+    percentChange: number;
+  };
+  inventory: {
+    totalProducts: number;
+    lowStockCount: number;
+    totalValue: number;
+  };
+  debt: {
+    customerDebt: number;
+    supplierDebt: number;
+  };
 }
 
-type SoldProductInfo = {
-  productId: string;
-  productName: string;
-  totalQuantity: number;
-  totalRevenue: number;
-  baseUnitName: string;
-};
-
-export type CustomerDebtInfo = {
-  customerId: string;
-  customerName: string;
-  customerPhone?: string;
-  totalSales: number;
-  totalPayments: number;
-  finalDebt: number;
-};
-
-
-export default function Dashboard() {
-  const [dateRange, setDateRange] = useState<DateRange | undefined>({
-    from: startOfMonth(new Date()),
-    to: endOfMonth(new Date()),
-  });
-  const [isInventoryDetailOpen, setIsInventoryDetailOpen] = useState(false);
-  const [isDebtDetailOpen, setIsDebtDetailOpen] = useState(false);
-  const [isSalesDetailOpen, setIsSalesDetailOpen] = useState(false);
-  const [debtSearchTerm, setDebtSearchTerm] = useState("");
-  const [salesSearchTerm, setSalesSearchTerm] = useState("");
-  const [customerForPayment, setCustomerForPayment] = useState<CustomerDebtInfo | undefined>(undefined);
-  const [isPaymentFormOpen, setIsPaymentFormOpen] = useState(false);
-  const { permissions, isLoading: isRoleLoading } = useUserRole();
+export default function DashboardPage() {
   const { currentStore } = useStore();
+  const router = useRouter();
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [timeRange, setTimeRange] = useState<'7d' | '30d' | '90d'>('30d');
+  const [lastFetchedStore, setLastFetchedStore] = useState<string | null>(null);
 
-  // State for data from SQL Server API
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [sales, setSales] = useState<Sale[]>([]);
-  const [payments, setPayments] = useState<Payment[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [units, setUnits] = useState<Unit[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [allSalesItems, setAllSalesItems] = useState<SalesItem[]>([]);
-  
-  const [customersLoading, setCustomersLoading] = useState(true);
-  const [salesLoading, setSalesLoading] = useState(true);
-  const [paymentsLoading, setPaymentsLoading] = useState(true);
-  const [productsLoading, setProductsLoading] = useState(true);
-  const [unitsLoading, setUnitsLoading] = useState(true);
-  const [categoriesLoading, setCategoriesLoading] = useState(true);
-  const [salesItemsLoading, setSalesItemsLoading] = useState(true);
-
-  // Fetch data from SQL Server API using apiClient
   useEffect(() => {
-    if (!currentStore) return;
+    if (!currentStore?.id) return;
+    
+    // Only fetch if store changed or timeRange changed
+    if (lastFetchedStore !== currentStore.id) {
+      setLastFetchedStore(currentStore.id);
+      fetchDashboardData();
+    }
+  }, [currentStore?.id]);
 
-    const fetchData = async () => {
-      try {
-        // Fetch customers
-        setCustomersLoading(true);
-        try {
-          const customersData = await apiClient.getCustomers();
-          setCustomers(((customersData as any).data || customersData || []) as Customer[]);
-        } catch (e) {
-          console.error('Error fetching customers:', e);
-        }
-        setCustomersLoading(false);
-
-        // Fetch sales
-        setSalesLoading(true);
-        try {
-          const salesData = await apiClient.getSales();
-          setSales((salesData.data || []) as Sale[]);
-        } catch (e) {
-          console.error('Error fetching sales:', e);
-        }
-        setSalesLoading(false);
-
-        // Fetch payments
-        setPaymentsLoading(true);
-        try {
-          const paymentsData = await apiClient.getPayments();
-          setPayments(paymentsData as Payment[]);
-        } catch (e) {
-          console.error('Error fetching payments:', e);
-        }
-        setPaymentsLoading(false);
-
-        // Fetch products
-        setProductsLoading(true);
-        try {
-          const productsData = await apiClient.getProducts();
-          setProducts(((productsData as any).data || productsData || []) as Product[]);
-        } catch (e) {
-          console.error('Error fetching products:', e);
-        }
-        setProductsLoading(false);
-
-        // Fetch units
-        setUnitsLoading(true);
-        try {
-          const unitsData = await apiClient.getUnits();
-          setUnits(((unitsData as any).data || unitsData || []) as Unit[]);
-        } catch (e) {
-          console.error('Error fetching units:', e);
-        }
-        setUnitsLoading(false);
-
-        // Fetch categories
-        setCategoriesLoading(true);
-        try {
-          const categoriesData = await apiClient.getCategories();
-          setCategories(((categoriesData as any).data || categoriesData || []) as Category[]);
-        } catch (e) {
-          console.error('Error fetching categories:', e);
-        }
-        setCategoriesLoading(false);
-
-      } catch (error) {
-        console.error('Error fetching dashboard data:', error);
-        setCustomersLoading(false);
-        setSalesLoading(false);
-        setPaymentsLoading(false);
-        setProductsLoading(false);
-        setUnitsLoading(false);
-        setCategoriesLoading(false);
-      }
-    };
-
-    fetchData();
-  }, [currentStore]);
-
-  // Fetch sales items after sales are loaded
   useEffect(() => {
-    if (salesLoading || !currentStore) {
-      return;
+    // Fetch when timeRange changes (but only if we have a store)
+    if (currentStore?.id && lastFetchedStore === currentStore.id) {
+      fetchDashboardData();
     }
+  }, [timeRange]);
 
-    const fetchSalesItems = async () => {
-      setSalesItemsLoading(true);
-      try {
-        const response = await apiClient.getAllSaleItems();
-        // Handle response format: { success: true, data: [...] }
-        const items = Array.isArray(response) ? response : ((response as any)?.data || []);
-        setAllSalesItems(items as SalesItem[]);
-      } catch (e) {
-        console.error('Error fetching sales items:', e);
-        setAllSalesItems([]);
-      }
-      setSalesItemsLoading(false);
-    };
+  const fetchDashboardData = async () => {
+    setIsLoading(true);
+    try {
+      // Fetch all data in parallel
+      const today = new Date();
+      const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+      const startOfLastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const endOfLastMonth = new Date(today.getFullYear(), today.getMonth(), 0);
 
-    fetchSalesItems();
-  }, [salesLoading, currentStore]);
-  
-  const productsMap = useMemo(() => new Map(products?.map(p => [p.id, p])), [products]);
-  const unitsMap = useMemo(() => new Map(units?.map(u => [u.id, u])), [units]);
-  const categoriesMap = useMemo(() => new Map(categories?.map(c => [c.id, c.name])), [categories]);
-  const customersMap = useMemo(() => new Map(customers?.map(c => [c.id, c.name])), [customers]);
+      const [
+        salesThisMonth,
+        salesLastMonth,
+        inventoryReport,
+        debtReport,
+        supplierDebtReport,
+        profitReport,
+        profitLastMonth
+      ] = await Promise.all([
+        apiClient.getSalesReport({ 
+          dateFrom: startOfMonth.toISOString().split('T')[0],
+          dateTo: today.toISOString().split('T')[0]
+        }),
+        apiClient.getSalesReport({ 
+          dateFrom: startOfLastMonth.toISOString().split('T')[0],
+          dateTo: endOfLastMonth.toISOString().split('T')[0]
+        }),
+        apiClient.getInventoryReport({ lowStockOnly: false }),
+        apiClient.getDebtReport({ hasDebtOnly: false }),
+        apiClient.getSupplierDebtReport(),
+        apiClient.getProfitReport({
+          dateFrom: startOfMonth.toISOString().split('T')[0],
+          dateTo: today.toISOString().split('T')[0]
+        }),
+        apiClient.getProfitReport({
+          dateFrom: startOfLastMonth.toISOString().split('T')[0],
+          dateTo: endOfLastMonth.toISOString().split('T')[0]
+        })
+      ]);
 
-  const filteredSales = useMemo(() => {
-    if (!sales) return [];
-    if (!dateRange || !dateRange.from) return sales;
+      // Calculate stats
+      const thisMonthRevenue = (salesThisMonth as any).summary?.totalRevenue || 0;
+      const lastMonthRevenue = (salesLastMonth as any).summary?.totalRevenue || 0;
+      const revenueChange = lastMonthRevenue > 0 
+        ? ((thisMonthRevenue - lastMonthRevenue) / lastMonthRevenue) * 100 
+        : 0;
 
-    const fromDate = dateRange.from;
-    const toDate = dateRange.to || fromDate;
+      const thisMonthProfit = (profitReport as any).summary?.totalProfit || 0;
+      const lastMonthProfit = (profitLastMonth as any).summary?.totalProfit || 0;
+      const profitChange = lastMonthProfit > 0
+        ? ((thisMonthProfit - lastMonthProfit) / lastMonthProfit) * 100
+        : 0;
 
-    return sales.filter(sale => {
-      const saleDate = new Date(sale.transactionDate);
-      return saleDate >= fromDate && saleDate <= toDate;
-    });
-  }, [sales, dateRange]);
+      const thisMonthSales = (salesThisMonth as any).summary?.totalOrders || 0;
+      const lastMonthSales = (salesLastMonth as any).summary?.totalOrders || 0;
+      const salesChange = lastMonthSales > 0
+        ? ((thisMonthSales - lastMonthSales) / lastMonthSales) * 100
+        : 0;
 
-  const filteredSalesForDialog = useMemo(() => {
-    if (!salesSearchTerm) return filteredSales;
-    const term = salesSearchTerm.toLowerCase();
-    return filteredSales.filter(sale => 
-      sale.invoiceNumber.toLowerCase().includes(term) ||
-      (customersMap.get(sale.customerId) || '').toLowerCase().includes(term)
-    );
-  }, [filteredSales, salesSearchTerm, customersMap]);
-  
-  const isLoading = customersLoading || salesLoading || paymentsLoading || productsLoading || unitsLoading || salesItemsLoading || categoriesLoading || isRoleLoading;
+      const inventoryData = (inventoryReport as any).data || [];
+      const lowStockProducts = inventoryData.filter((p: any) => 
+        p.closingStock <= (p.lowStockThreshold || 10)
+      );
 
-  const getUnitInfo = useCallback((unitId: string) => {
-    const unit = unitsMap.get(unitId);
-    if (!unit) return { baseUnit: undefined, conversionFactor: 1, name: '' };
-    
-    if (unit.baseUnitId && unit.conversionFactor) {
-      const baseUnit = unitsMap.get(unit.baseUnitId);
-      return { baseUnit, conversionFactor: unit.conversionFactor, name: unit.name };
-    }
-    
-    return { baseUnit: unit, conversionFactor: 1, name: unit.name };
-  }, [unitsMap]);
+      // Calculate total inventory value, but ignore negative stock values
+      const totalInventoryValue = inventoryData.reduce((sum: number, p: any) => {
+        const stockValue = (p.closingStock || 0) * (p.avgCost || 0);
+        return sum + (stockValue > 0 ? stockValue : 0);
+      }, 0);
 
-  const getStockInfo = useCallback((product: Product) => {
-    // Use stockQuantity directly from product instead of calculating from purchaseLots
-    const mainUnit = product.unitId ? unitsMap.get(product.unitId) : undefined;
-    const baseUnit = mainUnit?.baseUnitId ? unitsMap.get(mainUnit.baseUnitId) : mainUnit;
-    
-    const stock = product.stockQuantity || 0;
-    
-    const totalSoldInBaseUnit = allSalesItems
-      .filter(item => item.productId === product.id)
-      .reduce((acc, item) => acc + item.quantity, 0);
+      // Count products with valid inventory (non-negative)
+      const validProductsCount = inventoryData.filter((p: any) => 
+        p.closingStock !== null && p.closingStock !== undefined
+      ).length;
 
-    return { 
-      stock, 
-      sold: totalSoldInBaseUnit, 
-      stockInBaseUnit: stock, 
-      importedInBaseUnit: 0, 
-      baseUnit, 
-      mainUnit 
-    };
-  }, [allSalesItems, unitsMap]);
+      const customerDebt = (debtReport as any).totals?.totalDebt || 0;
+      const supplierDebt = (supplierDebtReport as any).data?.reduce((sum: number, s: any) => 
+        sum + (s.totalDebt || 0), 0
+      ) || 0;
 
-  const formatStockDisplay = (stock: number, mainUnit?: Unit, baseUnit?: Unit): string => {
-    if (!mainUnit) return stock.toString();
-
-    if (mainUnit.id !== baseUnit?.id && mainUnit.conversionFactor && baseUnit) {
-        const stockInBaseUnits = stock * mainUnit.conversionFactor;
-        const wholePart = Math.floor(stock);
-        const fractionalPartInBase = stockInBaseUnits % mainUnit.conversionFactor;
-        
-        if (fractionalPartInBase > 0.01) {
-            return `${wholePart.toLocaleString()} ${mainUnit.name}, ${fractionalPartInBase.toFixed(1).replace(/\.0$/, '')} ${baseUnit.name}`;
+      setStats({
+        revenue: {
+          today: 0, // Would need today's sales
+          thisMonth: thisMonthRevenue,
+          lastMonth: lastMonthRevenue,
+          percentChange: revenueChange
+        },
+        profit: {
+          thisMonth: thisMonthProfit,
+          lastMonth: lastMonthProfit,
+          percentChange: profitChange
+        },
+        sales: {
+          today: 0,
+          thisMonth: thisMonthSales,
+          percentChange: salesChange
+        },
+        inventory: {
+          totalProducts: validProductsCount,
+          lowStockCount: lowStockProducts.length,
+          totalValue: totalInventoryValue
+        },
+        debt: {
+          customerDebt,
+          supplierDebt
         }
-        return `${wholePart.toLocaleString()} ${mainUnit.name}`;
+      });
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+    } finally {
+      setIsLoading(false);
     }
-    
-    return `${stock.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${mainUnit.name}`;
   };
-
-  const inventoryData = useMemo(() => {
-    if (!products) return [];
-    return products.map(product => {
-      const { stock, mainUnit, baseUnit } = getStockInfo(product);
-      return {
-        product,
-        stockDisplay: formatStockDisplay(stock, mainUnit, baseUnit),
-        stock,
-      };
-    }).sort((a,b) => a.stock - b.stock);
-  }, [products, getStockInfo]);
-
-  const inventoryByCategory = useMemo(() => {
-    if (isLoading) return new Map<string, typeof inventoryData>();
-    const grouped = new Map<string, typeof inventoryData>();
-    inventoryData.forEach(item => {
-      const categoryId = item.product.categoryId;
-      const categoryItems = grouped.get(categoryId) || [];
-      categoryItems.push(item);
-      grouped.set(categoryId, categoryItems);
-    });
-    return grouped;
-  }, [inventoryData, isLoading]);
-
-  const totalRevenue = useMemo(() => filteredSales.reduce((acc, sale) => acc + sale.finalAmount, 0), [filteredSales]);
-  const totalSalesCount = filteredSales.length;
-
-  const allCustomerData = useMemo((): CustomerDebtInfo[] => {
-    if (!customers || !sales || !payments) return [];
-    return customers.map(customer => {
-        const customerSales = sales.filter(s => s.customerId === customer.id).reduce((sum, s) => sum + (s.finalAmount || 0), 0);
-        const customerPayments = payments.filter(p => p.customerId === customer.id).reduce((sum, p) => sum + p.amount, 0);
-        const debt = customerSales - customerPayments;
-        return { 
-          customerId: customer.id, 
-          customerName: customer.name, 
-          customerPhone: customer.phone, 
-          totalSales: customerSales,
-          totalPayments: customerPayments,
-          finalDebt: debt,
-        };
-    });
-  }, [customers, sales, payments]);
-
-  const customersWithDebt = useMemo(() => {
-    return allCustomerData.filter(c => c.finalDebt > 0).sort((a,b) => b.finalDebt - a.finalDebt);
-  }, [allCustomerData]);
-
-  const topCustomers = useMemo(() => {
-    return allCustomerData.sort((a,b) => b.totalSales - a.totalSales).slice(0, 5);
-  }, [allCustomerData]);
-
-  const totalDebt = useMemo(() => customersWithDebt.reduce((sum, c) => sum + c.finalDebt, 0), [customersWithDebt]);
-
-  const filteredCustomersWithDebt = useMemo(() => {
-    if (!debtSearchTerm) return customersWithDebt;
-    const term = debtSearchTerm.toLowerCase();
-    return customersWithDebt.filter(c => 
-      c.customerName.toLowerCase().includes(term) || 
-      (c.customerPhone && c.customerPhone.includes(term))
-    );
-  }, [customersWithDebt, debtSearchTerm]);
-  
-  const monthlyData = useMemo((): MonthlyRevenue[] => {
-    const monthlyTotals: { [key: string]: { revenue: number; salesCount: number } } = {};
-    filteredSales.forEach(sale => {
-      const month = format(new Date(sale.transactionDate), "yyyy-MM");
-      if (!monthlyTotals[month]) {
-        monthlyTotals[month] = { revenue: 0, salesCount: 0 };
-      }
-      monthlyTotals[month].revenue += sale.finalAmount;
-      monthlyTotals[month].salesCount += 1;
-    });
-
-    return Object.entries(monthlyTotals)
-      .map(([month, data]) => ({ ...data, month }))
-      .sort((a, b) => a.month.localeCompare(b.month));
-  }, [filteredSales]);
-
-  const soldProductsData = useMemo((): SoldProductInfo[] => {
-    const itemsInDateRange = allSalesItems.filter(item => {
-        const sale = sales?.find(s => s.id === item.salesTransactionId);
-        if (!sale || !dateRange?.from) {
-          return !dateRange;
-        }
-        const saleDate = new Date(sale.transactionDate);
-        const toDate = dateRange.to || dateRange.from;
-        return saleDate >= dateRange.from && saleDate <= toDate;
-    });
-
-    if (itemsInDateRange.length === 0) return [];
-
-    const productSalesMap = new Map<string, { totalQuantity: number; totalRevenue: number }>();
-
-    itemsInDateRange.forEach(item => {
-      const existing = productSalesMap.get(item.productId) || { totalQuantity: 0, totalRevenue: 0 };
-      existing.totalQuantity += item.quantity;
-      existing.totalRevenue += item.quantity * item.price;
-      productSalesMap.set(item.productId, existing);
-    });
-
-    const results: SoldProductInfo[] = [];
-    productSalesMap.forEach((data, productId) => {
-      const product = productsMap.get(productId);
-      if (product) {
-        const mainUnit = unitsMap.get(product.unitId);
-        const baseUnit = mainUnit?.baseUnitId ? unitsMap.get(mainUnit.baseUnitId) : mainUnit;
-        results.push({
-          productId,
-          productName: product.name,
-          totalQuantity: data.totalQuantity,
-          totalRevenue: data.totalRevenue,
-          baseUnitName: baseUnit?.name || 'N/A',
-        });
-      }
-    });
-
-    return results.sort((a,b) => b.totalRevenue - a.totalRevenue);
-  }, [allSalesItems, productsMap, unitsMap, sales, dateRange]);
-
-  const setDatePreset = (preset: 'this_week' | 'this_month' | 'this_year' | 'all') => {
-    const now = new Date();
-    if (preset === 'all') {
-      setDateRange(undefined);
-      return;
-    }
-    switch (preset) {
-      case 'this_week':
-        setDateRange({ from: startOfWeek(now, { weekStartsOn: 1 }), to: endOfWeek(now, { weekStartsOn: 1 }) });
-        break;
-      case 'this_month':
-        setDateRange({ from: startOfMonth(now), to: endOfMonth(now) });
-        break;
-      case 'this_year':
-        setDateRange({ from: startOfYear(now), to: endOfYear(now) });
-        break;
-    }
-  }
-
-  const handleOpenPaymentForm = (customer: CustomerDebtInfo) => {
-    setCustomerForPayment(customer);
-    setIsPaymentFormOpen(true);
-  };
-
-  const handleExportExcel = () => {
-    const wb = xlsx.utils.book_new();
-
-    const revenueData = monthlyData.map(d => ({ 'Tháng': d.month, 'Số đơn': d.salesCount, 'Doanh thu': d.revenue }));
-    const revenueTotal = { 'Tháng': 'Tổng', 'Số đơn': totalSalesCount, 'Doanh thu': totalRevenue };
-    const ws1 = xlsx.utils.json_to_sheet([...revenueData, revenueTotal]);
-    xlsx.utils.book_append_sheet(wb, ws1, "DoanhThu");
-
-    const productsData = soldProductsData.map(p => ({ 'Sản phẩm': p.productName, 'Số lượng bán': `${p.totalQuantity.toLocaleString()} ${p.baseUnitName}`, 'Doanh thu': p.totalRevenue }));
-    const ws2 = xlsx.utils.json_to_sheet(productsData);
-    xlsx.utils.book_append_sheet(wb, ws2, "SPBanChay");
-
-    xlsx.writeFile(wb, `Report_${dateRange?.from ? format(dateRange.from, 'yyyy-MM-dd') : 'all'}_${dateRange?.to ? format(dateRange.to, 'yyyy-MM-dd') : ''}.xlsx`);
-  }
 
   if (isLoading) {
-    return <p>Đang tải bảng điều khiển...</p>;
-  }
-
-  if (!permissions?.dashboard?.includes('view')) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Truy cập bị từ chối</CardTitle>
-          <CardDescription>
-            Bạn không có quyền xem bảng điều khiển.
-          </CardDescription>
-        </CardHeader>
-      </Card>
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
+          <p className="mt-4 text-muted-foreground">Đang tải dữ liệu...</p>
+        </div>
+      </div>
     );
   }
 
-
   return (
-    <>
-    {customerForPayment && (
-        <PaymentForm
-          isOpen={isPaymentFormOpen}
-          onOpenChange={setIsPaymentFormOpen}
-          customer={customerForPayment}
-        />
-      )}
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center gap-4">
-        <h1 className="text-2xl font-semibold">Phân tích kinh doanh</h1>
-        <div className="flex flex-wrap items-center gap-2 ml-auto">
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button id="date" variant={"outline"} className={cn("w-[260px] justify-start text-left font-normal", !dateRange && "text-muted-foreground")}>
-                <CalendarIcon className="mr-2 h-4 w-4" />
-                {dateRange?.from ? (dateRange.to ? (<>{format(dateRange.from, "dd/MM/yyyy")} - {format(dateRange.to, "dd/MM/yyyy")}</>) : format(dateRange.from, "dd/MM/yyyy")) : (<span>Tất cả thời gian</span>)}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="end">
-              <Calendar initialFocus mode="range" defaultMonth={dateRange?.from} selected={dateRange} onSelect={setDateRange} numberOfMonths={2} />
-              <div className="p-2 border-t flex justify-around">
-                <Button variant="ghost" size="sm" onClick={() => setDatePreset('this_week')}>Tuần này</Button>
-                <Button variant="ghost" size="sm" onClick={() => setDatePreset('this_month')}>Tháng này</Button>
-                <Button variant="ghost" size="sm" onClick={() => setDatePreset('this_year')}>Năm nay</Button>
-                <Button variant="ghost" size="sm" onClick={() => setDatePreset('all')}>Tất cả</Button>
-              </div>
-            </PopoverContent>
-          </Popover>
-          <Button onClick={handleExportExcel} variant="outline" size="sm">
-            <File className="mr-2 h-4 w-4" />
-            Xuất Excel
-          </Button>
+    <div className="space-y-8 pb-8">
+      {/* Header Section with Gradient */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-primary/10 via-primary/5 to-background p-8 border shadow-sm">
+        <div className="absolute inset-0 bg-grid-white/10 [mask-image:linear-gradient(0deg,white,rgba(255,255,255,0.5))]" />
+        <div className="relative flex items-center justify-between">
+          <div className="space-y-2">
+            <h1 className="text-4xl font-bold tracking-tight bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
+              Bảng điều khiển
+            </h1>
+            <p className="text-base text-muted-foreground flex items-center gap-2">
+              <span className="inline-block w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+              Tổng quan hoạt động kinh doanh của {currentStore?.name}
+            </p>
+          </div>
+          <Tabs value={timeRange} onValueChange={(v) => setTimeRange(v as any)}>
+            <TabsList className="bg-background/50 backdrop-blur-sm">
+              <TabsTrigger value="7d" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">7 ngày</TabsTrigger>
+              <TabsTrigger value="30d" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">30 ngày</TabsTrigger>
+              <TabsTrigger value="90d" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">90 ngày</TabsTrigger>
+            </TabsList>
+          </Tabs>
         </div>
       </div>
-      <div className="grid gap-4 md:grid-cols-2 md:gap-8 lg:grid-cols-4">
-        {permissions?.reports_revenue?.includes('view') && (
-            <Dialog open={isSalesDetailOpen} onOpenChange={setIsSalesDetailOpen}>
-            <DialogTrigger asChild>
-                <Card className="cursor-pointer hover:bg-muted/50">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                    <CardTitle className="text-sm font-medium">Tổng doanh thu</CardTitle>
-                    <DollarSign className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                    <div className="text-2xl font-bold text-green-600">{formatCurrency(totalRevenue)}</div>
-                    <p className="text-xs text-muted-foreground">
-                    Trong khoảng thời gian đã chọn
-                    </p>
-                </CardContent>
-                </Card>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-3xl">
-                <DialogHeader>
-                <DialogTitle>Chi tiết Doanh thu & Doanh số</DialogTitle>
-                <DialogDescription>
-                    Danh sách các đơn hàng trong khoảng thời gian đã chọn.
-                </DialogDescription>
-                </DialogHeader>
-                <div className="relative">
-                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                    type="search"
-                    placeholder="Tìm theo mã đơn hoặc tên khách hàng..."
-                    className="w-full rounded-lg bg-background pl-8"
-                    value={salesSearchTerm}
-                    onChange={(e) => setSalesSearchTerm(e.target.value)}
-                />
-                </div>
-                <ScrollArea className="max-h-[60vh] pr-4">
-                {isLoading ? (
-                    <p>Đang tải dữ liệu...</p>
-                ) : (
-                    <Table>
-                    <TableHeader>
-                        <TableRow>
-                        <TableHead>Mã đơn hàng</TableHead>
-                        <TableHead>Khách hàng</TableHead>
-                        <TableHead>Ngày</TableHead>
-                        <TableHead className="text-right">Số tiền</TableHead>
-                        </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                        {filteredSalesForDialog.length === 0 ? (
-                        <TableRow key="empty-sales">
-                            <TableCell colSpan={4} className="text-center h-24">Không có đơn hàng nào.</TableCell>
-                        </TableRow>
-                        ) : (
-                        filteredSalesForDialog.map((sale, index) => (
-                        <TableRow key={sale.id || `sale-${index}`}>
-                            <TableCell>
-                            <Link href={`/sales/${sale.id}`} className="font-medium hover:underline">
-                                {sale.invoiceNumber}
-                            </Link>
-                            </TableCell>
-                            <TableCell>{customersMap.get(sale.customerId) || 'N/A'}</TableCell>
-                            <TableCell>{format(new Date(sale.transactionDate), 'dd/MM/yyyy')}</TableCell>
-                            <TableCell className="text-right font-semibold">{formatCurrency(sale.finalAmount)}</TableCell>
-                        </TableRow>
-                        ))
-                        )}
-                    </TableBody>
-                    </Table>
-                )}
-                </ScrollArea>
-            </DialogContent>
-            </Dialog>
-        )}
-        {permissions?.reports_revenue?.includes('view') && (
-            <Card className="cursor-pointer hover:bg-muted/50" onClick={() => setIsSalesDetailOpen(true)}>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Tổng doanh số</CardTitle>
-                <CreditCard className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-                <div className="text-2xl font-bold">+{totalSalesCount}</div>
-                <p className="text-xs text-muted-foreground">
-                Số đơn hàng trong khoảng thời gian đã chọn
-                </p>
-            </CardContent>
-            </Card>
-        )}
-        {permissions?.reports_debt?.includes('view') && (
-            <Dialog open={isDebtDetailOpen} onOpenChange={setIsDebtDetailOpen}>
-                <DialogTrigger asChild>
-                    <Card className="cursor-pointer hover:bg-muted/50">
-                        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                            <CardTitle className="text-sm font-medium">Tổng nợ phải thu</CardTitle>
-                            <Users className="h-4 w-4 text-muted-foreground" />
-                        </CardHeader>
-                        <CardContent>
-                            <div className="text-2xl font-bold text-destructive">{formatCurrency(totalDebt)}</div>
-                            <p className="text-xs text-muted-foreground">
-                            Trên tổng số {customersWithDebt.length} khách hàng
-                            </p>
-                        </CardContent>
-                    </Card>
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-2xl">
-                    <DialogHeader>
-                    <DialogTitle>Chi tiết nợ phải thu</DialogTitle>
-                    <DialogDescription>
-                        Danh sách các khách hàng đang có công nợ. Nhấp vào một khách hàng để thanh toán.
-                    </DialogDescription>
-                    </DialogHeader>
-                    <div className="relative">
-                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                    <Input
-                        type="search"
-                        placeholder="Tìm theo tên hoặc SĐT..."
-                        className="w-full rounded-lg bg-background pl-8"
-                        value={debtSearchTerm}
-                        onChange={(e) => setDebtSearchTerm(e.target.value)}
-                    />
-                    </div>
-                    <ScrollArea className="max-h-[60vh] pr-4">
-                    {isLoading ? (
-                        <p>Đang tải dữ liệu công nợ...</p>
-                    ) : (
-                        <Table>
-                        <TableHeader>
-                            <TableRow>
-                            <TableHead>Khách hàng</TableHead>
-                            <TableHead>SĐT</TableHead>
-                            <TableHead className="text-right">Số nợ</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {filteredCustomersWithDebt.length === 0 ? (
-                            <TableRow key="empty-debt">
-                                <TableCell colSpan={3} className="text-center h-24">Không có khách hàng nào đang nợ.</TableCell>
-                            </TableRow>
-                            ) : (
-                            filteredCustomersWithDebt.map((customer, index) => (
-                            <TableRow key={customer.customerId || `debt-${index}`} className="cursor-pointer hover:bg-muted/50" onClick={() => handleOpenPaymentForm(customer)}>
-                                <TableCell>
-                                <Link href={`/customers/${customer.customerId}`} className="font-medium hover:underline" onClick={(e) => e.stopPropagation()}>
-                                    {customer.customerName}
-                                </Link>
-                                </TableCell>
-                                <TableCell>{customer.customerPhone || 'N/A'}</TableCell>
-                                <TableCell className="text-right font-semibold text-destructive">{formatCurrency(customer.finalDebt)}</TableCell>
-                            </TableRow>
-                            ))
-                            )}
-                        </TableBody>
-                        </Table>
-                    )}
-                    </ScrollArea>
-                </DialogContent>
-            </Dialog>
-        )}
-        {permissions?.reports_inventory?.includes('view') && (
-            <Dialog open={isInventoryDetailOpen} onOpenChange={setIsInventoryDetailOpen}>
-            <DialogTrigger asChild>
-                <Card className="cursor-pointer hover:bg-muted/50">
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                    <CardTitle className="text-sm font-medium">Sản phẩm trong kho</CardTitle>
-                    <Boxes className="h-4 w-4 text-muted-foreground" />
-                </CardHeader>
-                <CardContent>
-                    <div className="text-2xl font-bold">{products?.length || 0}</div>
-                    <p className="text-xs text-muted-foreground">
-                    Tổng số loại sản phẩm đang quản lý
-                    </p>
-                </CardContent>
-                </Card>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-2xl">
-                <DialogHeader>
-                <DialogTitle>Chi tiết tồn kho</DialogTitle>
-                <DialogDescription>
-                    Danh sách sản phẩm trong kho được nhóm theo danh mục.
-                </DialogDescription>
-                </DialogHeader>
-                <ScrollArea className="max-h-[60vh] pr-4">
-                {isLoading ? (
-                    <p>Đang tải dữ liệu tồn kho...</p>
-                ) : (
-                    <Accordion type="multiple" className="w-full" defaultValue={Array.from(inventoryByCategory.keys())}>
-                    {categories?.filter(c => inventoryByCategory.has(c.id)).map(category => (
-                        <AccordionItem value={category.id} key={category.id}>
-                        <AccordionTrigger>{category.name} ({inventoryByCategory.get(category.id)?.length} sản phẩm)</AccordionTrigger>
-                        <AccordionContent>
-                            <Table>
-                            <TableHeader>
-                                <TableRow>
-                                <TableHead>Sản phẩm</TableHead>
-                                <TableHead className="text-right">Tồn kho</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {(inventoryByCategory.get(category.id) || []).length === 0 ? (
-                                <TableRow key="empty-inventory">
-                                    <TableCell colSpan={2} className="text-center h-12">Không có sản phẩm.</TableCell>
-                                </TableRow>
-                                ) : (
-                                (inventoryByCategory.get(category.id) || []).map(({ product, stockDisplay }, index) => (
-                                <TableRow key={product.id || `product-${index}`}>
-                                    <TableCell>
-                                    <Link href={`/products?q=${product.name}`} className="font-medium hover:underline">
-                                        {product.name}
-                                    </Link>
-                                    </TableCell>
-                                    <TableCell className="text-right">{stockDisplay}</TableCell>
-                                </TableRow>
-                                ))
-                                )}
-                            </TableBody>
-                            </Table>
-                        </AccordionContent>
-                        </AccordionItem>
-                    ))}
-                    </Accordion>
-                )}
-                </ScrollArea>
-            </DialogContent>
-            </Dialog>
-        )}
-      </div>
-      <div className="grid gap-4 md:gap-8 lg:grid-cols-2">
-        {permissions?.reports_revenue?.includes('view') && (
-            <Card className="lg:col-span-1">
-            <CardHeader>
-                <CardTitle>Biểu đồ Doanh thu</CardTitle>
-            </CardHeader>
-            <CardContent className="pl-2">
-                <RevenueChart data={monthlyData} />
-            </CardContent>
-            </Card>
-        )}
-        {permissions?.customers?.includes('view') && (
-            <Card className="lg:col-span-1">
-            <CardHeader>
-                <CardTitle>Khách hàng hàng đầu</CardTitle>
-                <CardDescription>
-                Top 5 khách hàng mua nhiều nhất.
-                </CardDescription>
-            </CardHeader>
-            <CardContent>
-                <Table>
-                <TableHeader>
-                    <TableRow>
-                    <TableHead className="w-12">STT</TableHead>
-                    <TableHead>Khách hàng</TableHead>
-                    <TableHead className="text-right">Đã mua</TableHead>
-                    <TableHead className="text-right">Tiền nợ</TableHead>
-                    </TableRow>
-                </TableHeader>
-                <TableBody>
-                    {isLoading ? (
-                      <TableRow key="loading"><TableCell colSpan={4} className="h-24 text-center">Đang tải...</TableCell></TableRow>
-                    ) : topCustomers.length === 0 ? (
-                      <TableRow key="empty"><TableCell colSpan={4} className="h-24 text-center">Không có dữ liệu.</TableCell></TableRow>
-                    ) : (
-                      topCustomers.map((customer, index) => (
-                    <TableRow key={customer.customerId || `customer-${index}`}>
-                        <TableCell className="font-medium">{index + 1}</TableCell>
-                        <TableCell>
-                        <Link href={`/customers/${customer.customerId}`} className="font-medium hover:underline">
-                            {customer.customerName}
-                        </Link>
-                        </TableCell>
-                        <TableCell className="text-right">{formatCurrency(customer.totalSales)}</TableCell>
-                        <TableCell className="text-right">
-                        <Button 
-                            variant="link" 
-                            className={`h-auto p-0 ${customer.finalDebt > 0 ? 'text-destructive' : ''}`}
-                            onClick={() => customer.finalDebt > 0 && handleOpenPaymentForm(customer)}
-                            disabled={customer.finalDebt <= 0}
-                        >
-                            {formatCurrency(customer.finalDebt)}
-                        </Button>
-                        </TableCell>
-                    </TableRow>
-                    ))
-                    )}
-                </TableBody>
-                </Table>
-            </CardContent>
-            </Card>
-        )}
-      </div>
-       {permissions?.reports_sold_products?.includes('view') && (
-        <Card>
-            <CardHeader>
-            <CardTitle>Sản phẩm bán chạy</CardTitle>
-            <CardDescription>
-                Top sản phẩm theo doanh thu trong khoảng thời gian đã chọn.
-            </CardDescription>
-            </CardHeader>
-            <CardContent>
-            <Table>
-                <TableHeader>
-                <TableRow>
-                    <TableHead>Sản phẩm</TableHead>
-                    <TableHead className="text-right">Số lượng bán</TableHead>
-                    <TableHead className="text-right">Doanh thu</TableHead>
-                </TableRow>
-                </TableHeader>
-                <TableBody>
-                {isLoading ? (
-                  <TableRow key="loading"><TableCell colSpan={3} className="h-24 text-center">Đang tải...</TableCell></TableRow>
-                ) : soldProductsData.length === 0 ? (
-                  <TableRow key="empty"><TableCell colSpan={3} className="h-24 text-center">Không có dữ liệu.</TableCell></TableRow>
-                ) : (
-                  soldProductsData.slice(0, 5).map((p, index) => (
-                    <TableRow key={p.productId || `sold-${index}`}>
-                    <TableCell>
-                        <div className="font-medium">{p.productName}</div>
-                    </TableCell>
-                    <TableCell className="text-right">{p.totalQuantity.toLocaleString()} {p.baseUnitName}</TableCell>
-                    <TableCell className="text-right">{formatCurrency(p.totalRevenue)}</TableCell>
-                    </TableRow>
-                  ))
-                )}
-                </TableBody>
-            </Table>
-            </CardContent>
+
+      {/* Stats Cards with Enhanced Design */}
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+        {/* Revenue Card */}
+        <Card className="group relative overflow-hidden cursor-pointer border-0 shadow-lg hover:shadow-2xl transition-all duration-300 hover:-translate-y-1 bg-gradient-to-br from-blue-500/10 via-blue-500/5 to-background" onClick={() => router.push('/reports/income-statement')}>
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <CardHeader className="relative flex flex-row items-center justify-between space-y-0 pb-3">
+            <CardTitle className="text-sm font-semibold text-muted-foreground">Doanh thu tháng này</CardTitle>
+            <div className="p-2 rounded-lg bg-blue-500/10 group-hover:bg-blue-500/20 transition-colors">
+              <DollarSign className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+            </div>
+          </CardHeader>
+          <CardContent className="relative">
+            <div className="text-3xl font-bold tracking-tight">{formatCurrency(stats?.revenue.thisMonth || 0)}</div>
+            <div className="flex items-center gap-2 mt-3">
+              {stats && stats.revenue.percentChange >= 0 ? (
+                <>
+                  <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-green-500/10">
+                    <ArrowUpRight className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+                    <span className="text-xs font-semibold text-green-600 dark:text-green-400">+{stats.revenue.percentChange.toFixed(1)}%</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-red-500/10">
+                    <ArrowDownRight className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
+                    <span className="text-xs font-semibold text-red-600 dark:text-red-400">{stats?.revenue.percentChange.toFixed(1)}%</span>
+                  </div>
+                </>
+              )}
+              <span className="text-xs text-muted-foreground">so với tháng trước</span>
+            </div>
+          </CardContent>
         </Card>
-       )}
+
+        {/* Profit Card */}
+        <Card className="group relative overflow-hidden cursor-pointer border-0 shadow-lg hover:shadow-2xl transition-all duration-300 hover:-translate-y-1 bg-gradient-to-br from-green-500/10 via-green-500/5 to-background" onClick={() => router.push('/reports/profit')}>
+          <div className="absolute inset-0 bg-gradient-to-br from-green-500/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <CardHeader className="relative flex flex-row items-center justify-between space-y-0 pb-3">
+            <CardTitle className="text-sm font-semibold text-muted-foreground">Lợi nhuận tháng này</CardTitle>
+            <div className="p-2 rounded-lg bg-green-500/10 group-hover:bg-green-500/20 transition-colors">
+              <TrendingUp className="h-5 w-5 text-green-600 dark:text-green-400" />
+            </div>
+          </CardHeader>
+          <CardContent className="relative">
+            <div className="text-3xl font-bold tracking-tight">{formatCurrency(stats?.profit.thisMonth || 0)}</div>
+            <div className="flex items-center gap-2 mt-3">
+              {stats && stats.profit.percentChange >= 0 ? (
+                <>
+                  <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-green-500/10">
+                    <ArrowUpRight className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+                    <span className="text-xs font-semibold text-green-600 dark:text-green-400">+{stats.profit.percentChange.toFixed(1)}%</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-red-500/10">
+                    <ArrowDownRight className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
+                    <span className="text-xs font-semibold text-red-600 dark:text-red-400">{stats?.profit.percentChange.toFixed(1)}%</span>
+                  </div>
+                </>
+              )}
+              <span className="text-xs text-muted-foreground">so với tháng trước</span>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Sales Card */}
+        <Card className="group relative overflow-hidden cursor-pointer border-0 shadow-lg hover:shadow-2xl transition-all duration-300 hover:-translate-y-1 bg-gradient-to-br from-purple-500/10 via-purple-500/5 to-background" onClick={() => router.push('/sales')}>
+          <div className="absolute inset-0 bg-gradient-to-br from-purple-500/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <CardHeader className="relative flex flex-row items-center justify-between space-y-0 pb-3">
+            <CardTitle className="text-sm font-semibold text-muted-foreground">Đơn hàng tháng này</CardTitle>
+            <div className="p-2 rounded-lg bg-purple-500/10 group-hover:bg-purple-500/20 transition-colors">
+              <ShoppingCart className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+            </div>
+          </CardHeader>
+          <CardContent className="relative">
+            <div className="text-3xl font-bold tracking-tight">{stats?.sales.thisMonth || 0}</div>
+            <div className="flex items-center gap-2 mt-3">
+              {stats && stats.sales.percentChange >= 0 ? (
+                <>
+                  <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-green-500/10">
+                    <ArrowUpRight className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+                    <span className="text-xs font-semibold text-green-600 dark:text-green-400">+{stats.sales.percentChange.toFixed(1)}%</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-red-500/10">
+                    <ArrowDownRight className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
+                    <span className="text-xs font-semibold text-red-600 dark:text-red-400">{stats?.sales.percentChange.toFixed(1)}%</span>
+                  </div>
+                </>
+              )}
+              <span className="text-xs text-muted-foreground">so với tháng trước</span>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Inventory Card */}
+        <Card className="group relative overflow-hidden cursor-pointer border-0 shadow-lg hover:shadow-2xl transition-all duration-300 hover:-translate-y-1 bg-gradient-to-br from-amber-500/10 via-amber-500/5 to-background" onClick={() => router.push('/reports/inventory')}>
+          <div className="absolute inset-0 bg-gradient-to-br from-amber-500/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+          <CardHeader className="relative flex flex-row items-center justify-between space-y-0 pb-3">
+            <CardTitle className="text-sm font-semibold text-muted-foreground">Tồn kho</CardTitle>
+            <div className="p-2 rounded-lg bg-amber-500/10 group-hover:bg-amber-500/20 transition-colors">
+              <Package className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+            </div>
+          </CardHeader>
+          <CardContent className="relative">
+            <div className="text-3xl font-bold tracking-tight">{stats?.inventory.totalProducts || 0}</div>
+            <div className="flex items-center gap-2 mt-3">
+              {stats && stats.inventory.lowStockCount > 0 ? (
+                <>
+                  <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500/10">
+                    <AlertTriangle className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                    <span className="text-xs font-semibold text-amber-600 dark:text-amber-400">{stats.inventory.lowStockCount} sắp hết</span>
+                  </div>
+                </>
+              ) : (
+                <div className="flex items-center gap-1 px-2 py-1 rounded-full bg-green-500/10">
+                  <span className="text-xs font-semibold text-green-600 dark:text-green-400">Tồn kho ổn định</span>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Charts and Tables with Enhanced Design */}
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-7">
+        <Card className="col-span-4 border-0 shadow-lg overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500" />
+          <CardHeader className="bg-gradient-to-br from-muted/50 to-background">
+            <CardTitle className="text-xl font-bold">Doanh thu</CardTitle>
+            <CardDescription className="text-sm">Biểu đồ doanh thu theo thời gian</CardDescription>
+          </CardHeader>
+          <CardContent className="pl-2 pt-6">
+            <RevenueChart timeRange={timeRange} />
+          </CardContent>
+        </Card>
+
+        <Card className="col-span-3 border-0 shadow-lg overflow-hidden">
+          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-amber-500 via-orange-500 to-red-500" />
+          <CardHeader className="bg-gradient-to-br from-muted/50 to-background">
+            <CardTitle className="text-xl font-bold">Top sản phẩm bán chạy</CardTitle>
+            <CardDescription className="text-sm">Sản phẩm có doanh số cao nhất</CardDescription>
+          </CardHeader>
+          <CardContent className="pt-6">
+            <TopProductsTable timeRange={timeRange} />
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-6 md:grid-cols-2">
+        <div className="transform transition-all duration-300 hover:scale-[1.02] h-full">
+          <TopProductsChart timeRange={timeRange} />
+        </div>
+        <div className="transform transition-all duration-300 hover:scale-[1.02] h-full">
+          <LowStockAlert />
+        </div>
+      </div>
     </div>
-    </>
   )
 }

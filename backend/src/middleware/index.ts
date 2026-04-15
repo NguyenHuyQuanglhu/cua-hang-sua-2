@@ -24,3 +24,30 @@ export {
   permissions,
   type PermissionCheckOptions,
 } from './permission';
+
+// Status validation middleware
+export {
+  validateAndNormalizeStatus,
+  validateStatusQuery,
+} from './validateStatus';
+
+// Error handling middleware
+export {
+  errorHandler,
+  asyncHandler,
+  notFoundHandler,
+  handleDatabaseOperation,
+  handleMigrationOperation,
+  createValidationError,
+  AppError,
+  DatabaseError,
+  DatabaseConnectionError,
+  DatabaseTimeoutError,
+  DatabaseConstraintError,
+  MigrationError,
+  ValidationError,
+  NotFoundError,
+  UnauthorizedError,
+  ForbiddenError,
+  ConflictError,
+} from './errorHandler';

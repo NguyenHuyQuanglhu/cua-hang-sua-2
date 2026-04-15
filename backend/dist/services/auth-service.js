@@ -115,6 +115,7 @@ class AuthService {
                     tenantId: tenantUser.tenantId,
                     email: tenantDbUser.email,
                     displayName: tenantDbUser.displayName,
+                    photoURL: tenantDbUser.photoURL,
                     role: tenantDbUser.role,
                     permissions: effectivePermissions,
                 },
@@ -142,7 +143,7 @@ class AuthService {
         const result = await pool.request()
             .input('email', mssql_1.default.NVarChar, email)
             .query(`
-        SELECT id, email, display_name, role, permissions, status
+        SELECT id, email, display_name, role, permissions, status, photo_url
         FROM Users
         WHERE email = @email
       `);
@@ -157,6 +158,7 @@ class AuthService {
             role: row.role,
             permissions: row.permissions ? JSON.parse(row.permissions) : undefined,
             status: row.status,
+            photoURL: row.photo_url || undefined,
         };
     }
     /**
@@ -302,7 +304,7 @@ class AuthService {
             const userResult = await pool.request()
                 .input('userId', mssql_1.default.UniqueIdentifier, userId)
                 .query(`
-          SELECT id, email, display_name, role, permissions, status
+          SELECT id, email, display_name, role, permissions, status, photo_url
           FROM Users
           WHERE id = @userId AND status = 'active'
         `);
@@ -317,6 +319,7 @@ class AuthService {
                 role: row.role,
                 permissions: row.permissions ? JSON.parse(row.permissions) : undefined,
                 status: row.status,
+                photoURL: row.photo_url || undefined,
             };
             // Get stores
             const stores = await this.getUserStores(pool, userId, user.role);
@@ -340,6 +343,7 @@ class AuthService {
                     tenantId,
                     email: user.email,
                     displayName: user.displayName,
+                    photoURL: user.photoURL,
                     role: user.role,
                     permissions: effectivePermissions,
                 },

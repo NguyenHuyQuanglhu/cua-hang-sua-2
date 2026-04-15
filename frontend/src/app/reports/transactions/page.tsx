@@ -7,7 +7,7 @@ import Link from "next/link"
 import { Search, ArrowUp, ArrowDown, File, Calendar as CalendarIcon, ChevronDown, ChevronRight, Undo2 } from "lucide-react"
 import * as xlsx from 'xlsx';
 import { DateRange } from "react-day-picker"
-import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, startOfYear, endOfYear, startOfQuarter, endOfQuarter } from "date-fns"
+import { format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, startOfYear, endOfYear, startOfQuarter, endOfQuarter, startOfDay, endOfDay } from "date-fns"
 import { apiClient } from "@/lib/api-client"
 
 import {
@@ -57,6 +57,11 @@ export type CustomerTransactionHistoryInfo = {
 type SortKey = 'customerName' | 'openingBalance' | 'incurredAmount' | 'paidAmount' | 'closingBalance';
 const WALK_IN_CUSTOMER_ID = 'walk-in-customer';
 
+const toAmount = (value: unknown): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
 export default function TransactionHistoryPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>('closingBalance');
@@ -79,21 +84,77 @@ export default function TransactionHistoryPage() {
   useEffect(() => {
     if (!currentStore) return;
 
+    const fetchAllCustomers = async (): Promise<Customer[]> => {
+      const pageSize = 200;
+      const allCustomers: Customer[] = [];
+      let page = 1;
+      let totalPages = 1;
+
+      do {
+        const response = await apiClient.request<{ data?: Customer[]; totalPages?: number }>(
+          `/customers?page=${page}&pageSize=${pageSize}`
+        );
+
+        const pageData = Array.isArray(response) ? response : response?.data || [];
+        allCustomers.push(...pageData);
+
+        const nextTotalPages = Number((response as any)?.totalPages || 1);
+        totalPages = Number.isFinite(nextTotalPages) && nextTotalPages > 0 ? nextTotalPages : 1;
+        page += 1;
+      } while (page <= totalPages);
+
+      return allCustomers;
+    };
+
+    const fetchAllSales = async (): Promise<Sale[]> => {
+      const pageSize = 200;
+      const allSales: Sale[] = [];
+      let page = 1;
+      let totalPages = 1;
+
+      do {
+        const response = await apiClient.getSales({ page, pageSize });
+        const pageData = Array.isArray(response) ? response : (response as any)?.data || [];
+        allSales.push(...pageData);
+
+        const nextTotalPages = Number((response as any)?.totalPages || 1);
+        totalPages = Number.isFinite(nextTotalPages) && nextTotalPages > 0 ? nextTotalPages : 1;
+        page += 1;
+      } while (page <= totalPages);
+
+      return allSales;
+    };
+
     const fetchData = async () => {
       try {
         setCustomersLoading(true);
-        const customersData = await apiClient.getCustomers();
-        // Handle both array and { data: array } response
+        setSalesLoading(true);
+        setPaymentsLoading(true);
+
+        const [customersResult, salesResult, paymentsResult] = await Promise.allSettled([
+          fetchAllCustomers(),
+          fetchAllSales(),
+          apiClient.getPayments(),
+        ]);
+
+        const customersData = customersResult.status === 'fulfilled' ? customersResult.value : [];
+        const salesData = salesResult.status === 'fulfilled' ? salesResult.value : [];
+        const paymentsData = paymentsResult.status === 'fulfilled' ? paymentsResult.value : [];
+
+        if (customersResult.status === 'rejected') {
+          console.error('Failed to fetch customers for transaction history:', customersResult.reason);
+        }
+        if (salesResult.status === 'rejected') {
+          console.error('Failed to fetch sales for transaction history:', salesResult.reason);
+        }
+        if (paymentsResult.status === 'rejected') {
+          console.error('Failed to fetch payments for transaction history:', paymentsResult.reason);
+        }
+
         setCustomers(Array.isArray(customersData) ? customersData : (customersData as any).data || []);
         setCustomersLoading(false);
-
-        setSalesLoading(true);
-        const salesData = await apiClient.getSales();
         setSales(Array.isArray(salesData) ? salesData : (salesData as any).data || []);
         setSalesLoading(false);
-
-        setPaymentsLoading(true);
-        const paymentsData = await apiClient.getPayments();
         setPayments(Array.isArray(paymentsData) ? paymentsData : (paymentsData as any).data || []);
         setPaymentsLoading(false);
       } catch (error) {
@@ -108,30 +169,99 @@ export default function TransactionHistoryPage() {
   }, [currentStore]);
 
   const transactionHistoryData = useMemo((): CustomerTransactionHistoryInfo[] => {
-    if (!customers || !sales || !payments || !dateRange?.from) return [];
+    if (!customers || !sales || !payments) return [];
 
-    const fromDate = dateRange.from;
-    const toDate = dateRange.to || fromDate;
+    const fromDate = dateRange?.from ? startOfDay(dateRange.from) : new Date(0);
+    const toDate = dateRange?.from
+      ? endOfDay(dateRange.to || dateRange.from)
+      : new Date(8640000000000000);
 
-    const allCustomerEntities = [
-        ...customers,
-        { id: WALK_IN_CUSTOMER_ID, name: 'Khách lẻ' } as Customer
-    ];
+    // Get all unique customer IDs from sales and payments
+    const customerIdsInTransactions = new Set<string>();
+    sales.forEach(s => {
+      if (s.customerId) customerIdsInTransactions.add(s.customerId);
+    });
+    payments.forEach(p => {
+      if (p.customerId) customerIdsInTransactions.add(p.customerId);
+    });
+
+    // Create customer entities including walk-in
+    const allCustomerEntities: Customer[] = [...customers];
+
+    customerIdsInTransactions.forEach((customerId) => {
+      if (!allCustomerEntities.some((customer) => customer.id === customerId)) {
+        allCustomerEntities.push({
+          id: customerId,
+          name: 'Khách hàng',
+          phone: '',
+          email: '',
+          address: '',
+          customerType: 'personal',
+          creditLimit: 0,
+          status: 'active',
+          createdAt: '',
+          updatedAt: '',
+        } as Customer);
+      }
+    });
+    
+    // Add walk-in customer if there are sales without customerId or with walk-in ID
+    const hasWalkInSales = sales.some(s => !s.customerId || s.customerId === WALK_IN_CUSTOMER_ID);
+    if (hasWalkInSales) {
+      allCustomerEntities.push({ 
+        id: WALK_IN_CUSTOMER_ID, 
+        name: 'Khách lẻ',
+        phone: '',
+        email: '',
+        address: '',
+        customerType: 'personal',
+        creditLimit: 0,
+        createdAt: '',
+        updatedAt: '',
+      } as Customer);
+    }
 
     return allCustomerEntities.map(customer => {
+      // Match sales and payments for this customer
+      // For walk-in customer, match sales without customerId or with walk-in ID
+      const matchSale = (s: Sale) => {
+        if (customer.id === WALK_IN_CUSTOMER_ID) {
+          return !s.customerId || s.customerId === WALK_IN_CUSTOMER_ID;
+        }
+        return s.customerId === customer.id;
+      };
+      
+      const matchPayment = (p: Payment) => p.customerId === customer.id;
+
+      const getSaleDebtIncurred = (sale: Sale): number => {
+        if (customer.id === WALK_IN_CUSTOMER_ID || !sale.customerId) {
+          return 0;
+        }
+
+        const finalAmount = toAmount((sale as any).finalAmount);
+        const paymentAtCheckoutRaw = (sale as any).customerPayment;
+        const paymentAtCheckout = paymentAtCheckoutRaw === undefined || paymentAtCheckoutRaw === null
+          ? finalAmount
+          : toAmount(paymentAtCheckoutRaw);
+
+        return Math.max(0, finalAmount - paymentAtCheckout);
+      };
+
       // Opening Balance
-      const salesBefore = sales.filter(s => s.customerId === customer.id && new Date(s.transactionDate) < fromDate);
-      const paymentsBefore = payments.filter(p => p.customerId === customer.id && new Date(p.paymentDate) < fromDate);
-      const openingBalance = salesBefore.reduce((sum, s) => sum + (s.finalAmount || 0), 0) - paymentsBefore.reduce((sum, p) => sum + p.amount, 0);
+      const salesBefore = sales.filter(s => matchSale(s) && new Date(s.transactionDate) < fromDate);
+      const paymentsBefore = payments.filter(p => matchPayment(p) && new Date(p.paymentDate) < fromDate);
+      const openingDebt = salesBefore.reduce((sum, s) => sum + getSaleDebtIncurred(s), 0);
+      const openingPaid = paymentsBefore.reduce((sum, p) => sum + toAmount(p.amount), 0);
+      const openingBalance = Math.max(0, openingDebt - openingPaid);
 
       // Transactions during the period
-      const salesDuring = sales.filter(s => s.customerId === customer.id && new Date(s.transactionDate) >= fromDate && new Date(s.transactionDate) <= toDate);
-      const paymentsDuring = payments.filter(p => p.customerId === customer.id && new Date(p.paymentDate) >= fromDate && new Date(p.paymentDate) <= toDate);
+      const salesDuring = sales.filter(s => matchSale(s) && new Date(s.transactionDate) >= fromDate && new Date(s.transactionDate) <= toDate);
+      const paymentsDuring = payments.filter(p => matchPayment(p) && new Date(p.paymentDate) >= fromDate && new Date(p.paymentDate) <= toDate);
       
-      const incurredAmount = salesDuring.reduce((sum, s) => sum + (s.finalAmount || 0), 0);
-      const paidAmount = paymentsDuring.reduce((sum, p) => sum + p.amount, 0);
+      const incurredAmount = salesDuring.reduce((sum, s) => sum + getSaleDebtIncurred(s), 0);
+      const paidAmount = paymentsDuring.reduce((sum, p) => sum + toAmount(p.amount), 0);
 
-      const closingBalance = openingBalance + incurredAmount - paidAmount;
+      const closingBalance = Math.max(0, openingBalance + incurredAmount - paidAmount);
       
       const transactionsDuring = [...salesDuring, ...paymentsDuring].sort((a, b) => {
           const dateA = new Date('transactionDate' in a ? a.transactionDate : a.paymentDate);
@@ -172,7 +302,9 @@ export default function TransactionHistoryPage() {
         if (typeof valA === 'string' && typeof valB === 'string') {
           return sortDirection === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
         }
-        return sortDirection === 'asc' ? valA - valB : valB - valA;
+        const numA = Number(valA || 0);
+        const numB = Number(valB || 0);
+        return sortDirection === 'asc' ? numA - numB : numB - numA;
       });
     return sortableItems;
   }, [filteredData, sortKey, sortDirection]);

@@ -71,8 +71,12 @@ class ProductsSPRepository extends sp_base_repository_1.SPBaseRepository {
             status: input.status || 'active',
             images: input.images || null,
         };
-        await this.executeSP('sp_Products_Create', params);
-        // Fetch and return the created product
+        // sp_Products_Create returns the created product directly
+        const result = await this.executeSPSingle('sp_Products_Create', params);
+        if (result) {
+            return this.mapToEntity(result);
+        }
+        // Fallback: fetch by id
         const product = await this.getById(id, input.storeId);
         if (!product) {
             throw new Error('Failed to create product');
@@ -102,11 +106,12 @@ class ProductsSPRepository extends sp_base_repository_1.SPBaseRepository {
             status: data.status,
             images: data.images,
         };
+        // sp_Products_Update returns the updated product, not AffectedRows
         const result = await this.executeSPSingle('sp_Products_Update', params);
-        if (!result || result.AffectedRows === 0) {
+        if (!result) {
             return null;
         }
-        return this.getById(id, storeId);
+        return this.mapToEntity(result);
     }
     /**
      * Delete (soft delete) a product using sp_Products_Delete

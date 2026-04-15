@@ -13,6 +13,45 @@ exports.SPBaseRepository = void 0;
 const mssql_1 = __importDefault(require("mssql"));
 const connection_1 = require("../db/connection");
 const transaction_1 = require("../db/transaction");
+// UUID regex pattern for detecting UUID strings
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * Check if a value is a valid UUID string
+ */
+function isUUID(value) {
+    return typeof value === 'string' && UUID_REGEX.test(value);
+}
+/**
+ * Bind a parameter with proper SQL type detection
+ */
+function bindParameter(request, key, value) {
+    if (value === null || value === undefined) {
+        request.input(key, value);
+    }
+    else if (isUUID(value)) {
+        // Explicitly bind UUID strings as UniqueIdentifier
+        request.input(key, mssql_1.default.UniqueIdentifier, value);
+    }
+    else if (typeof value === 'number') {
+        // Check if it's a decimal/float or integer
+        if (Number.isInteger(value)) {
+            request.input(key, mssql_1.default.Int, value);
+        }
+        else {
+            request.input(key, mssql_1.default.Decimal(18, 6), value);
+        }
+    }
+    else if (typeof value === 'boolean') {
+        request.input(key, mssql_1.default.Bit, value);
+    }
+    else if (value instanceof Date) {
+        request.input(key, mssql_1.default.DateTime2, value);
+    }
+    else {
+        // Default: let mssql infer the type
+        request.input(key, value);
+    }
+}
 /**
  * Base repository class for stored procedure operations
  * Provides executeSP and executeSPSingle methods with proper SQL Server parameter binding
@@ -33,7 +72,7 @@ class SPBaseRepository {
         if (params) {
             for (const [key, value] of Object.entries(params)) {
                 if (value !== undefined) {
-                    request.input(key, value);
+                    bindParameter(request, key, value);
                 }
             }
         }
@@ -66,7 +105,7 @@ class SPBaseRepository {
         if (params) {
             for (const [key, value] of Object.entries(params)) {
                 if (value !== undefined) {
-                    request.input(key, value);
+                    bindParameter(request, key, value);
                 }
             }
         }
@@ -92,7 +131,7 @@ class SPBaseRepository {
         if (params) {
             for (const [key, value] of Object.entries(params)) {
                 if (value !== undefined) {
-                    request.input(key, value);
+                    bindParameter(request, key, value);
                 }
             }
         }

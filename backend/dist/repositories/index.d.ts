@@ -22,7 +22,6 @@ export { CustomerRepository, customerRepository, type Customer, type CustomerWit
 export { PurchaseOrderRepository, purchaseOrderRepository, type PurchaseOrder, type PurchaseOrderItem, type PurchaseLot as PurchaseOrderLot, type PurchaseOrderWithDetails, type PurchaseOrderItemWithProduct, type CreatePurchaseOrderInput, type CreatePurchaseOrderItemInput, } from './purchase-order-repository';
 export { SalesRepository, salesRepository, type Sale, type SalesItem, } from './sales-repository';
 export { SalesSPRepository, salesSPRepository, type SaleWithCustomer, type SalesItemWithDetails, type SaleWithItems, type CreateSaleSPInput, type CreateSalesItemSPInput, type GetSalesByStoreFilters, } from './sales-sp-repository';
-export { PaymentRepository, paymentRepository, type Payment, } from './payment-repository';
 export { SupplierPaymentRepository, supplierPaymentRepository, type SupplierPayment, type SupplierPaymentWithSupplier, } from './supplier-payment-repository';
 export { CashTransactionRepository, cashTransactionRepository, type CashTransaction, type CashFlowSummary, } from './cash-transaction-repository';
 export { ShiftRepository, shiftRepository, type Shift, type ShiftWithSummary, type CreateShiftInput, type CloseShiftInput, } from './shift-repository';

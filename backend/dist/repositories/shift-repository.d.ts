@@ -19,6 +19,7 @@ export interface Shift {
     cashDifference?: number;
     totalRevenue: number;
     salesCount: number;
+    notes?: string;
 }
 /**
  * Shift with summary info

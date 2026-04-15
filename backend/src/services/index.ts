@@ -99,3 +99,8 @@ export {
   type CreateSaleInput,
   type CreateSaleResult,
 } from './sales-service';
+
+// Status Mapper service
+export {
+  StatusMapper,
+} from './statusMapper';

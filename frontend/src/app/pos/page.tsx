@@ -17,13 +17,16 @@ import {
   QrCode,
   Banknote,
   RefreshCw,
+  Clock,
 } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useReactToPrint } from 'react-to-print';
 
 import { useStore } from '@/contexts/store-context'
+import { getPostShiftRedirectPath } from '@/lib/navigation'
 import {
+  Contractor,
   Customer,
   Payment,
   Product,
@@ -32,11 +35,13 @@ import {
   ThemeSettings,
   Unit,
   Shift,
+  UserRole,
 } from '@/lib/types'
 import { upsertSaleTransaction, updateSaleStatus } from '@/app/sales/actions'
 import {
   getProducts,
   getProductByBarcode,
+  getContractors,
   getCustomers,
   getUnits,
   getStoreSettings,
@@ -48,6 +53,7 @@ import { useToast } from '@/hooks/use-toast'
 import { cn, formatCurrency } from '@/lib/utils'
 import { useUserRole } from '@/hooks/use-user-role'
 import { apiClient } from '@/lib/api-client'
+import { safeStorage } from '@/lib/error-handling'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -102,7 +108,7 @@ import { InvoicePrintDialog } from '@/components/invoice-print-dialog'
 import { VoucherInput } from './components/voucher-input'
 import { PaymentMethodSelector, PaymentMethod } from './components/payment-method-selector'
 import { QRPaymentDialog } from './components/qr-payment-dialog'
-import { PaymentGatewayDialog } from './components/payment-gateway-dialog'
+import { PrintInvoiceCheckbox, loadPrintPreference } from './components/PrintInvoiceCheckbox'
 
 // Extended product type with stock info from SQL Server
 interface ProductWithStock extends Product {
@@ -133,8 +139,9 @@ type CartItem = {
 }
 
 const WALK_IN_CUSTOMER_ID = 'walk-in-customer'
+const NO_CUSTOMER_LABEL = 'Không chọn khách hàng'
 
-const FormattedNumberInput = ({ value, onChange, ...props }: { value: number; onChange: (value: number) => void; [key: string]: any }) => {
+const FormattedNumberInput = ({ value, onChange, ...props }: { value: number; onChange: (value: number) => void;[key: string]: any }) => {
   const [displayValue, setDisplayValue] = useState(value?.toLocaleString('en-US') || '');
 
   useEffect(() => {
@@ -158,7 +165,7 @@ const FormattedNumberInput = ({ value, onChange, ...props }: { value: number; on
 };
 
 export default function POSPage() {
-  const { user, isLoading: isStoreLoading } = useStore()
+  const { user, isLoading: isStoreLoading, currentStore } = useStore()
   const router = useRouter()
   const { toast } = useToast()
   const { toggleSidebar } = useSidebar();
@@ -167,10 +174,11 @@ export default function POSPage() {
   // Data state
   const [products, setProducts] = useState<ProductWithStock[]>([])
   const [customers, setCustomers] = useState<CustomerWithDebt[]>([])
+  const [contractors, setContractors] = useState<Contractor[]>([])
   const [units, setUnits] = useState<Unit[]>([])
   const [settings, setSettings] = useState<ThemeSettings | null>(null)
   const [activeShift, setActiveShift] = useState<Shift | null>(null)
-  
+
   // Loading states
   const [productsLoading, setProductsLoading] = useState(true)
   const [customersLoading, setCustomersLoading] = useState(true)
@@ -180,15 +188,22 @@ export default function POSPage() {
 
   // Cart and UI state
   const [cart, setCart] = useState<CartItem[]>([])
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string>(WALK_IN_CUSTOMER_ID)
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string>('')
+  const [selectedContractorId, setSelectedContractorId] = useState<string>('')
   const [customerSearchOpen, setCustomerSearchOpen] = useState(false)
   const [productSearchOpen, setProductSearchOpen] = useState(false)
   const [barcode, setBarcode] = useState('')
+  const [projectName, setProjectName] = useState('')
+  const [projectOptions, setProjectOptions] = useState<string[]>([])
+  const [projectDropdownOpen, setProjectDropdownOpen] = useState(false)
+  const [projectSearch, setProjectSearch] = useState('')
   const [customerPayment, setCustomerPayment] = useState(0)
+  const [includeDebtPayment, setIncludeDebtPayment] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const barcodeInputRef = useRef<HTMLInputElement>(null)
   const [discountType, setDiscountType] = useState<'percentage' | 'amount'>('amount');
   const [discountValue, setDiscountValue] = useState(0);
+  const [printInvoice, setPrintInvoice] = useState(() => loadPrintPreference());
   const [appliedVoucher, setAppliedVoucher] = useState<any>(null);
   const [voucherDiscount, setVoucherDiscount] = useState(0);
   const [pointsUsed, setPointsUsed] = useState(0);
@@ -197,78 +212,123 @@ export default function POSPage() {
   const [isCustomerFormOpen, setIsCustomerFormOpen] = useState(false);
   const [showPaymentMethodDialog, setShowPaymentMethodDialog] = useState(false);
   const [showQRPaymentDialog, setShowQRPaymentDialog] = useState(false);
-  const [showPaymentGatewayDialog, setShowPaymentGatewayDialog] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<PaymentMethod | null>(null);
+  const [lastSaleId, setLastSaleId] = useState<string | null>(null);
+  const cartStorageKey = useMemo(
+    () => (currentStore?.id ? `pos-cart-${currentStore.id}` : 'pos-cart'),
+    [currentStore?.id]
+  );
 
-  // Load cart from localStorage on mount
+  // Load cart from localStorage on mount with error handling
   useEffect(() => {
-    const savedCart = localStorage.getItem('pos-cart');
-    const savedCustomerId = localStorage.getItem('pos-customer-id');
-    const savedDiscountType = localStorage.getItem('pos-discount-type');
-    const savedDiscountValue = localStorage.getItem('pos-discount-value');
-    const savedPointsUsed = localStorage.getItem('pos-points-used');
-    
+    const savedCart = safeStorage.getItem(cartStorageKey);
+    const savedCustomerId = safeStorage.getItem('pos-customer-id');
+    const savedContractorId = safeStorage.getItem('pos-contractor-id');
+    const savedDiscountType = safeStorage.getItem('pos-discount-type');
+    const savedDiscountValue = safeStorage.getItem('pos-discount-value');
+    const savedPointsUsed = safeStorage.getItem('pos-points-used');
+    const savedProjectName = safeStorage.getItem('pos-project-name');
+
     if (savedCart) {
       try {
         setCart(JSON.parse(savedCart));
       } catch (e) {
         console.error('Failed to parse saved cart:', e);
       }
+    } else {
+      setCart([]);
     }
-    if (savedCustomerId) setSelectedCustomerId(savedCustomerId);
+    if (savedCart && savedCustomerId && savedCustomerId !== WALK_IN_CUSTOMER_ID) {
+      setSelectedCustomerId(savedCustomerId);
+    } else {
+      setSelectedCustomerId('');
+    }
+    if (savedCart && savedContractorId) {
+      setSelectedContractorId(savedContractorId);
+    } else {
+      setSelectedContractorId('');
+    }
     if (savedDiscountType) setDiscountType(savedDiscountType as 'percentage' | 'amount');
     if (savedDiscountValue) setDiscountValue(Number(savedDiscountValue));
     if (savedPointsUsed) setPointsUsed(Number(savedPointsUsed));
-  }, []);
+    if (savedProjectName) setProjectName(savedProjectName);
+  }, [cartStorageKey]);
 
   // Update cart items with latest stock info when products data changes
   useEffect(() => {
-    if (cart.length > 0 && products.length > 0 && productsMap.size > 0) {
-      setCart(prevCart => prevCart.map(item => {
-        const product = productsMap.get(item.productId);
-        if (!product) return item;
+    if (cart.length > 0 && products.length > 0) {
+      const tempProductsMap = new Map(products.map((p) => [p.id, p]));
+
+      let removedCount = 0;
+      setCart(prevCart => prevCart.flatMap(item => {
+        const product = tempProductsMap.get(item.productId);
+        if (!product) {
+          console.log('[Update cart] Product not found:', item.productId);
+          removedCount += 1;
+          return [];
+        }
+
+        // Get stock from product
+        const stockInBaseUnit = (product as any).stockQuantity || (product as any).currentStock || 0;
+        console.log('[Update cart]', product.name, 'updating stock to:', stockInBaseUnit, 'from product:', product);
         
-        const stockInBaseUnit = getStockInBaseUnit(product.id);
-        return {
+        return [{
           ...item,
           stockInfo: {
             ...item.stockInfo,
             stockInBaseUnit: stockInBaseUnit,
           }
-        };
+        }];
       }));
-    }
-  }, [products]);
 
-  // Save cart to localStorage whenever it changes
+      if (removedCount > 0) {
+        toast({
+          variant: 'destructive',
+          title: 'Đã làm mới giỏ hàng',
+          description: `${removedCount} sản phẩm không thuộc cửa hàng hiện tại đã được gỡ khỏi giỏ.`,
+        });
+      }
+    }
+  }, [products, cart.length, toast]);
+
+  // Save cart to localStorage whenever it changes with error handling
   useEffect(() => {
     if (cart.length > 0) {
-      localStorage.setItem('pos-cart', JSON.stringify(cart));
+      safeStorage.setItem(cartStorageKey, JSON.stringify(cart));
     } else {
-      localStorage.removeItem('pos-cart');
+      safeStorage.removeItem(cartStorageKey);
     }
-  }, [cart]);
+  }, [cart, cartStorageKey]);
 
-  // Save other state to localStorage
+  // Save other state to localStorage with error handling
   useEffect(() => {
-    localStorage.setItem('pos-customer-id', selectedCustomerId);
+    safeStorage.setItem('pos-customer-id', selectedCustomerId);
   }, [selectedCustomerId]);
 
   useEffect(() => {
-    localStorage.setItem('pos-discount-type', discountType);
+    safeStorage.setItem('pos-contractor-id', selectedContractorId);
+  }, [selectedContractorId]);
+
+  useEffect(() => {
+    safeStorage.setItem('pos-discount-type', discountType);
   }, [discountType]);
 
   useEffect(() => {
-    localStorage.setItem('pos-discount-value', String(discountValue));
+    safeStorage.setItem('pos-discount-value', String(discountValue));
   }, [discountValue]);
 
   useEffect(() => {
-    localStorage.setItem('pos-points-used', String(pointsUsed));
+    safeStorage.setItem('pos-points-used', String(pointsUsed));
   }, [pointsUsed]);
-  
+
+  useEffect(() => {
+    safeStorage.setItem('pos-project-name', projectName);
+  }, [projectName]);
+
   // Invoice print dialog state
   const [showInvoiceDialog, setShowInvoiceDialog] = useState(false);
   const [lastSaleData, setLastSaleData] = useState<{
+    saleId: string;
     invoiceNumber: string;
     transactionDate: Date;
     items: CartItem[];
@@ -279,13 +339,24 @@ export default function POSPage() {
     customerPayment: number;
     customerName?: string;
     customerPhone?: string;
+    contractorName?: string;
+    projectName?: string;
   } | null>(null);
 
   // Fetch products from SQL Server
   const fetchProducts = useCallback(async () => {
     setProductsLoading(true);
     try {
-      const result = await getProducts({ pageSize: 1000 }); // Get all active products
+      // First, sync inventory to ensure ProductInventory is up-to-date
+      try {
+        await apiClient.request('/sync-data/inventory', { method: 'POST' });
+        console.log('[fetchProducts] Inventory synced successfully');
+      } catch (syncError) {
+        console.warn('[fetchProducts] Inventory sync failed (non-critical):', syncError);
+        // Continue even if sync fails
+      }
+
+      const result = await getProducts({ pageSize: 1000, storeId: currentStore?.id }); // Get products of current store only
       if (result.success && result.data) {
         console.log('[fetchProducts] First 3 products:', result.data.slice(0, 3));
         setProducts(result.data as unknown as ProductWithStock[]);
@@ -301,7 +372,7 @@ export default function POSPage() {
     } finally {
       setProductsLoading(false);
     }
-  }, [toast]);
+  }, [toast, currentStore?.id]);
 
   // Fetch customers from SQL Server
   const fetchCustomers = useCallback(async () => {
@@ -323,6 +394,20 @@ export default function POSPage() {
       setCustomersLoading(false);
     }
   }, [toast]);
+
+  const fetchContractors = useCallback(async () => {
+    try {
+      const result = await getContractors();
+      if (result.success && result.data) {
+        setContractors(result.data);
+      } else {
+        setContractors([]);
+      }
+    } catch (error) {
+      console.error('Error fetching contractors:', error);
+      setContractors([]);
+    }
+  }, []);
 
   // Fetch units from SQL Server
   const fetchUnits = useCallback(async () => {
@@ -376,16 +461,51 @@ export default function POSPage() {
     }
   }, [user?.id]);
 
+  const fetchProjectNames = useCallback(async () => {
+    try {
+      if (!selectedCustomerId || selectedCustomerId === WALK_IN_CUSTOMER_ID) {
+        setProjectOptions([]);
+        return;
+      }
+
+      const customerResponse = await apiClient.request<{
+        success: boolean;
+        data?: Array<{ projectName?: string }>;
+      }>(`/customers/${selectedCustomerId}/discounts/projects`);
+
+      if (customerResponse?.success && Array.isArray(customerResponse.data)) {
+        const customerNames = customerResponse.data
+          .map((item) => String(item.projectName || '').trim())
+          .filter(Boolean);
+
+        setProjectOptions([...new Set(customerNames)]);
+        return;
+      }
+
+      setProjectOptions([]);
+    } catch (error) {
+      console.error('Error fetching project names:', error);
+      setProjectOptions([]);
+    }
+  }, [selectedCustomerId]);
+
   // Initial data fetch
   useEffect(() => {
     if (user) {
       fetchProducts();
       fetchCustomers();
+      fetchContractors();
       fetchUnits();
       fetchSettings();
       fetchActiveShift();
     }
-  }, [user, fetchProducts, fetchCustomers, fetchUnits, fetchSettings, fetchActiveShift]);
+  }, [user, fetchProducts, fetchCustomers, fetchContractors, fetchUnits, fetchSettings, fetchActiveShift]);
+
+  useEffect(() => {
+    if (user) {
+      fetchProjectNames();
+    }
+  }, [user, fetchProjectNames]);
 
   // Memos for data mapping
   const unitsMap = useMemo(() => new Map(units?.map((u) => [u.id, u])), [units])
@@ -399,7 +519,7 @@ export default function POSPage() {
     })
     return map
   }, [products])
-  
+
   const walkInCustomer: CustomerWithDebt = {
     id: WALK_IN_CUSTOMER_ID,
     name: 'Khách lẻ',
@@ -410,9 +530,36 @@ export default function POSPage() {
     status: 'active',
     currentDebt: 0,
   }
-  
+
   const allCustomers = useMemo(() => (customers ? [walkInCustomer, ...customers] : [walkInCustomer]), [customers])
   const selectedCustomer = useMemo(() => allCustomers.find(c => c.id === selectedCustomerId), [allCustomers, selectedCustomerId]);
+  const selectedCustomerIdForApi = selectedCustomerId && selectedCustomerId !== WALK_IN_CUSTOMER_ID ? selectedCustomerId : undefined;
+  const selectedContractorIdForApi = useMemo(() => {
+    const normalized = String(selectedContractorId || '').trim();
+    return normalized ? normalized : undefined;
+  }, [selectedContractorId]);
+  const normalizedProjectName = useMemo(() => String(projectName || '').trim(), [projectName]);
+  const isCustomerUnselected = !selectedCustomerId || selectedCustomerId === WALK_IN_CUSTOMER_ID;
+  const filteredProjectOptions = useMemo(() => {
+    const keyword = String(projectSearch || '').trim().toLowerCase();
+    const options = projectOptions.map((name) => String(name || '').trim()).filter(Boolean);
+    if (!keyword) {
+      return options;
+    }
+    return options.filter((name) => name.toLowerCase().includes(keyword));
+  }, [projectOptions, projectSearch]);
+  const hasExactProjectOption = useMemo(() => {
+    if (!normalizedProjectName) {
+      return false;
+    }
+    const needle = normalizedProjectName.toLowerCase();
+    return projectOptions.some((name) => String(name || '').trim().toLowerCase() === needle);
+  }, [projectOptions, normalizedProjectName]);
+  const hasSelectedContractor = useMemo(
+    () => contractors.some((contractor) => contractor.id === selectedContractorId),
+    [contractors, selectedContractorId]
+  );
+  const contractorSelectValue = hasSelectedContractor ? selectedContractorId : 'none';
 
   // Unit info helper
   const getUnitInfo = useCallback((unitId: string): { baseUnit?: Unit; conversionFactor: number; name: string } => {
@@ -436,7 +583,11 @@ export default function POSPage() {
     }
     // API returns 'stockQuantity', not 'currentStock'
     const stock = (product as any).stockQuantity || (product as ProductWithStock).currentStock || 0
-    console.log('[getStockInBaseUnit]', product.name, 'stock:', stock)
+    console.log('[getStockInBaseUnit]', product.name, 'stock:', stock, 'raw product:', {
+      stockQuantity: (product as any).stockQuantity,
+      currentStock: (product as ProductWithStock).currentStock,
+      allKeys: Object.keys(product)
+    })
     return stock
   }, [productsMap])
 
@@ -449,7 +600,7 @@ export default function POSPage() {
       const currentItem = newCart[existingItemIndex]
       const stockInBaseUnit = getStockInBaseUnit(product.id)
       const maxQuantity = Math.floor(stockInBaseUnit / (currentItem.stockInfo?.conversionFactor || 1))
-      
+
       // Only increment if we haven't reached max stock (allow 0 stock for pre-orders)
       if (stockInBaseUnit === 0 || currentItem.quantity < maxQuantity) {
         newCart[existingItemIndex].quantity += 1
@@ -511,7 +662,7 @@ export default function POSPage() {
           },
         },
       ])
-      
+
       // Show warning if stock is 0
       if (stockInBaseUnit === 0) {
         toast({
@@ -545,12 +696,12 @@ export default function POSPage() {
   const updateCartItem = (productId: string, newQuantity: number) => {
     const newCart = cart.map((item) => {
       if (item.productId !== productId) return item;
-      
+
       // Check stock limit
       const stockInBaseUnit = item.stockInfo?.stockInBaseUnit || 0;
       const conversionFactor = item.stockInfo?.conversionFactor || 1;
       const maxQuantity = Math.floor(stockInBaseUnit / conversionFactor);
-      
+
       // Allow 0 stock for pre-orders, but show warning
       if (stockInBaseUnit === 0 && newQuantity > 0) {
         toast({
@@ -559,10 +710,10 @@ export default function POSPage() {
         })
         return { ...item, quantity: newQuantity };
       }
-      
+
       // Limit quantity to available stock
       const limitedQuantity = Math.min(Math.max(0, newQuantity), maxQuantity);
-      
+
       // Show toast if user tried to exceed stock
       if (newQuantity > maxQuantity && maxQuantity > 0) {
         toast({
@@ -571,7 +722,7 @@ export default function POSPage() {
           description: `Chỉ còn ${maxQuantity} ${item.saleUnitName || 'đơn vị'} trong kho`,
         })
       }
-      
+
       return { ...item, quantity: limitedQuantity };
     })
     setCart(newCart.filter((item) => item.quantity > 0))
@@ -592,7 +743,7 @@ export default function POSPage() {
       }
 
       // If not found locally, try SQL Server API
-      const result = await getProductByBarcode(barcode)
+      const result = await getProductByBarcode(barcode, currentStore?.id)
       if (result.success && result.product) {
         const product = result.product as unknown as ProductWithStock
         // Add to local products cache
@@ -619,7 +770,7 @@ export default function POSPage() {
       const quantityInBase = item.quantity * item.stockInfo.conversionFactor
       return acc + quantityInBase * item.price
     }, 0),
-  [cart])
+    [cart])
 
   const { tierDiscountPercentage, tierDiscountAmount } = useMemo(() => {
     if (!selectedCustomer || !settings?.loyalty?.enabled) {
@@ -635,11 +786,11 @@ export default function POSPage() {
     };
   }, [selectedCustomer, totalAmount, settings]);
 
-  const calculatedDiscount = useMemo(() => 
+  const calculatedDiscount = useMemo(() =>
     discountType === 'percentage' ? (totalAmount * discountValue) / 100 : discountValue,
     [totalAmount, discountType, discountValue]
   );
-  
+
   // Voucher handlers
   const handleVoucherApplied = useCallback((voucher: any, discount: number) => {
     setAppliedVoucher(voucher);
@@ -650,7 +801,7 @@ export default function POSPage() {
     setAppliedVoucher(null);
     setVoucherDiscount(0);
   }, []);
-  
+
   const pointsToVndRate = settings?.loyalty?.pointsToVndRate || 0;
   const pointsDiscount = pointsUsed * pointsToVndRate;
 
@@ -677,10 +828,10 @@ export default function POSPage() {
           method: 'POST',
           body: {
             items,
-            customerId: selectedCustomerId !== WALK_IN_CUSTOMER_ID ? selectedCustomerId : undefined,
+            customerId: selectedCustomerIdForApi,
             subtotal: totalAmount,
           },
-        });
+        }) as any;
 
         if (response.success) {
           setAutoPromotionDiscount(response.totalDiscount || 0);
@@ -692,7 +843,7 @@ export default function POSPage() {
     };
 
     calculateAutoPromotions();
-  }, [cart, totalAmount, selectedCustomerId]);
+  }, [cart, totalAmount, selectedCustomerIdForApi]);
 
   // Calculate points that will be earned from this purchase
   const pointsPerAmount = settings?.loyalty?.pointsPerAmount || 0;
@@ -718,26 +869,53 @@ export default function POSPage() {
     return selectedCustomer?.currentDebt || 0;
   }, [selectedCustomerId, selectedCustomer]);
 
-  const totalPayable = finalAmount + previousDebt;
+  // Calculate total payable based on whether debt payment is included
+  const totalPayable = includeDebtPayment ? finalAmount + previousDebt : finalAmount;
   const remainingDebt = totalPayable - customerPayment;
-  const changeAmount = customerPayment - finalAmount;
+  const changeAmount = customerPayment - totalPayable;
 
-  // Auto-fill customer payment
+  // Check if customer exceeds credit limit
+  const exceedsCreditLimit = useMemo(() => {
+    if (!selectedCustomer || selectedCustomerId === WALK_IN_CUSTOMER_ID) return false;
+    const creditLimit = selectedCustomer.creditLimit || 0;
+    if (creditLimit === 0) return false; // No limit set
+    return remainingDebt > creditLimit;
+  }, [selectedCustomer, selectedCustomerId, remainingDebt]);
+
+  // Auto-fill customer payment based on total payable
   useEffect(() => {
-    if (finalAmount > 0) {
-      setCustomerPayment(finalAmount);
+    if (totalPayable > 0) {
+      setCustomerPayment(totalPayable);
     } else {
       setCustomerPayment(0);
     }
-  }, [finalAmount]);
+  }, [totalPayable]);
 
   // Form Submission - Create sale via SQL Server API
   const handleCreateSale = async () => {
-    if (cart.length === 0) {
+    // Allow payment if either has items OR paying debt
+    if (cart.length === 0 && !includeDebtPayment) {
       toast({
         variant: 'destructive',
         title: 'Đơn hàng trống',
-        description: 'Vui lòng thêm sản phẩm vào đơn hàng.',
+        description: 'Vui lòng thêm sản phẩm vào đơn hàng hoặc chọn thanh toán nợ.',
+      })
+      return
+    }
+
+    // If only paying debt (no items), process debt payment directly
+    if (cart.length === 0 && includeDebtPayment && previousDebt > 0) {
+      await processDebtPaymentOnly();
+      return;
+    }
+
+    // Check credit limit
+    if (exceedsCreditLimit) {
+      const creditLimit = selectedCustomer?.creditLimit || 0;
+      toast({
+        variant: 'destructive',
+        title: 'Vượt quá hạn mức tín dụng',
+        description: `Khách hàng "${selectedCustomer?.name}" có hạn mức ${formatCurrency(creditLimit)}. Nợ hiện tại sẽ là ${formatCurrency(remainingDebt)}. Vui lòng thu thêm tiền hoặc liên hệ quản lý để tăng hạn mức.`,
       })
       return
     }
@@ -748,34 +926,152 @@ export default function POSPage() {
 
   const handlePaymentMethodSelected = (method: PaymentMethod) => {
     setSelectedPaymentMethod(method);
-    
+
+    // Check if this is debt-only payment
+    const isDebtOnly = cart.length === 0 && includeDebtPayment;
+
     if (method === 'qr') {
       // Show QR payment dialog
       setShowQRPaymentDialog(true);
-    } else if (method === 'gateway') {
-      // Show payment gateway dialog (VNPay, MoMo, ZaloPay, Installment)
-      setShowPaymentGatewayDialog(true);
     } else if (method === 'cash') {
-      // Process cash payment directly
-      processSale('cash');
+      // Process payment directly
+      if (isDebtOnly) {
+        processDebtPaymentOnly('cash');
+      } else {
+        processSale('cash');
+      }
     } else {
-      // For card and transfer, process directly for now
-      processSale(method);
+      // For card and transfer, process directly
+      if (isDebtOnly) {
+        processDebtPaymentOnly(method);
+      } else {
+        processSale(method);
+      }
     }
   }
+
+  // Process debt payment only (no sale items) - Create a sale record for tracking
+  const processDebtPaymentOnly = async (paymentMethod: PaymentMethod = 'cash') => {
+    if (!selectedCustomerId || selectedCustomerId === WALK_IN_CUSTOMER_ID) {
+      toast({
+        variant: 'destructive',
+        title: 'Lỗi',
+        description: 'Vui lòng chọn khách hàng để thanh toán nợ.',
+      });
+      return;
+    }
+
+    if (previousDebt <= 0) {
+      toast({
+        variant: 'destructive',
+        title: 'Lỗi',
+        description: 'Khách hàng không có nợ cần thanh toán.',
+      });
+      return;
+    }
+
+    if (customerPayment < previousDebt) {
+      toast({
+        variant: 'destructive',
+        title: 'Số tiền không đủ',
+        description: `Vui lòng nhập số tiền ít nhất ${formatCurrency(previousDebt)}`,
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      // Create a sale record with no items (debt payment only)
+      const saleData: Partial<Sale> & { isChangeReturned?: boolean; items?: any[] } = {
+        customerId: selectedCustomerId,
+        contractorId: selectedContractorIdForApi,
+        projectName: projectName.trim() || undefined,
+        shiftId: activeShift?.id,
+        transactionDate: new Date().toISOString(),
+        totalAmount: 0, // No products
+        discount: 0,
+        discountType: 'amount',
+        discountValue: 0,
+        vatAmount: 0,
+        finalAmount: 0, // No products
+        customerPayment: customerPayment,
+        previousDebt: previousDebt, // The debt being paid
+        remainingDebt: 0, // After payment, debt should be 0
+        paymentMethod: paymentMethod,
+        status: 'printed', // Mark as finalized for debt payment
+        isChangeReturned: customerPayment > previousDebt ? true : false,
+        items: [], // Empty items array
+      };
+
+      const result = await upsertSaleTransaction(saleData as Record<string, unknown>);
+
+      if (result.success && result.saleData) {
+        const invoiceNumber = result.saleData.invoiceNumber as string;
+        console.log('[POS] Debt payment sale created:', invoiceNumber);
+
+        toast({
+          title: '💰 Thanh toán nợ thành công!',
+          description: (
+            <div className="space-y-1">
+              <p>Mã giao dịch: <strong>{invoiceNumber}</strong></p>
+              <p>Đã thanh toán: <strong>{formatCurrency(previousDebt)}</strong></p>
+              <p className="text-xs text-muted-foreground">
+                Phương thức: {paymentMethod === 'cash' ? 'Tiền mặt' :
+                  paymentMethod === 'card' ? 'Thẻ' :
+                    paymentMethod === 'transfer' ? 'Chuyển khoản' :
+                      paymentMethod === 'qr' ? 'QR Code' : 'Khác'}
+              </p>
+              {customerPayment > previousDebt && (
+                <p className="text-xs text-green-600">
+                  Tiền thối lại: {formatCurrency(customerPayment - previousDebt)}
+                </p>
+              )}
+            </div>
+          ),
+        });
+
+        // Reset state
+        setCustomerPayment(0);
+        setIncludeDebtPayment(false);
+        setSelectedCustomerId('');
+        setSelectedContractorId('');
+        setProjectName('');
+        setSelectedPaymentMethod(null);
+        safeStorage.removeItem('pos-project-name');
+
+        // Refresh customer data to update debt
+        await fetchCustomers();
+        await fetchProjectNames();
+      } else {
+        throw new Error(result.error || 'Không thể tạo giao dịch thanh toán nợ');
+      }
+    } catch (error) {
+      console.error('[POS] Error recording debt payment:', error);
+      toast({
+        variant: 'destructive',
+        title: 'Lỗi thanh toán',
+        description: error instanceof Error ? error.message : 'Không thể ghi nhận thanh toán nợ. Vui lòng thử lại.',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const processSale = async (paymentMethod: PaymentMethod = 'cash') => {
 
     setIsSubmitting(true)
     const itemsData = cart.map((item) => ({
       productId: item.productId,
-      quantity: item.quantity * item.stockInfo.conversionFactor, // Store in base unit
+      quantity: item.quantity, // Send quantity in selected sale unit (backend validates by unitId)
       price: item.price,
       unitId: item.saleUnitId, // Include the selected unit ID
     }))
 
     const saleData: Partial<Sale> & { isChangeReturned?: boolean; items?: typeof itemsData } = {
-      customerId: selectedCustomerId === WALK_IN_CUSTOMER_ID ? undefined : selectedCustomerId,
+      customerId: selectedCustomerIdForApi,
+      contractorId: selectedContractorIdForApi,
+      projectName: projectName.trim() || undefined,
       shiftId: activeShift?.id,
       transactionDate: new Date().toISOString(),
       totalAmount: totalAmount,
@@ -789,10 +1085,10 @@ export default function POSPage() {
       vatAmount: vatAmount,
       finalAmount: finalAmount,
       customerPayment: customerPayment,
-      previousDebt: previousDebt, 
+      previousDebt: includeDebtPayment ? previousDebt : 0, // Only include debt if checkbox is checked
       remainingDebt: remainingDebt,
       paymentMethod: paymentMethod,
-      status: settings?.invoiceFormat === 'none' ? 'printed' : 'unprinted',
+      status: 'printed', // Mark as finalized after payment
       isChangeReturned: isChangeReturned,
       items: itemsData,
     }
@@ -801,10 +1097,59 @@ export default function POSPage() {
 
     if (result.success && result.saleData) {
       const invoiceNumber = result.saleData.invoiceNumber as string;
+      const saleId = result.saleData.id as string;
+      console.log('[POS] Sale created successfully');
+      console.log('[POS] Invoice Number:', invoiceNumber);
+      console.log('[POS] Sale ID:', saleId);
+      console.log('[POS] Full saleData:', result.saleData);
+
+      if (!saleId) {
+        console.error('[POS] ERROR: saleId is undefined!', result);
+        toast({
+          variant: 'destructive',
+          title: 'Lỗi',
+          description: 'Không thể lấy ID đơn hàng. Vui lòng kiểm tra lại trong danh sách đơn hàng.',
+        });
+        return;
+      }
+
+      setLastSaleId(saleId);
+
+      // Nếu có thanh toán nợ cũ, tạo payment record
+      if (includeDebtPayment && previousDebt > 0 && selectedCustomerId && selectedCustomerId !== WALK_IN_CUSTOMER_ID) {
+        try {
+          const paymentData = {
+            customerId: selectedCustomerId,
+            amount: previousDebt,
+            paymentDate: new Date().toISOString(),
+            paymentMethod: paymentMethod,
+            notes: `Thanh toán nợ cũ cùng đơn hàng ${invoiceNumber}`,
+          };
+
+          const paymentResult = await apiClient.createPayment(paymentData);
+
+          if (paymentResult) {
+            console.log('[POS] Debt payment recorded successfully:', paymentResult);
+            toast({
+              title: '💰 Đã ghi nhận thanh toán nợ',
+              description: `Thanh toán ${formatCurrency(previousDebt)} cho nợ cũ`,
+            });
+          }
+        } catch (error) {
+          console.error('[POS] Error recording debt payment:', error);
+          toast({
+            variant: 'destructive',
+            title: 'Cảnh báo',
+            description: 'Đơn hàng đã tạo nhưng không ghi nhận được thanh toán nợ. Vui lòng kiểm tra lại.',
+          });
+        }
+      }
 
       // Save sale data for invoice dialog
       const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
+      const selectedContractor = contractors.find(c => c.id === selectedContractorId);
       setLastSaleData({
+        saleId: result.saleData.id as string,
         invoiceNumber,
         transactionDate: new Date(),
         items: [...cart],
@@ -815,12 +1160,29 @@ export default function POSPage() {
         customerPayment,
         customerName: selectedCustomer?.name,
         customerPhone: selectedCustomer?.phone,
+        contractorName: selectedContractor?.name,
+        projectName: projectName.trim() || undefined,
       });
 
       // Show success toast with print button
       toast({
-        title: 'Thành công!',
-        description: `Đã tạo đơn hàng ${invoiceNumber}.`,
+        title: '✅ Thanh toán thành công!',
+        description: (
+          <div className="space-y-1">
+            <p>Đơn hàng <strong>{invoiceNumber}</strong> đã được tạo</p>
+            <p className="text-xs text-muted-foreground">
+              Phương thức: {paymentMethod === 'cash' ? 'Tiền mặt' :
+                paymentMethod === 'card' ? 'Thẻ' :
+                  paymentMethod === 'transfer' ? 'Chuyển khoản' :
+                    paymentMethod === 'qr' ? 'QR Code' : 'Khác'}
+            </p>
+            {includeDebtPayment && previousDebt > 0 && (
+              <p className="text-xs text-green-600 font-semibold">
+                ✓ Đã thanh toán nợ cũ: {formatCurrency(previousDebt)}
+              </p>
+            )}
+          </div>
+        ),
         action: (
           <button
             onClick={() => setShowInvoiceDialog(true)}
@@ -831,33 +1193,40 @@ export default function POSPage() {
         ),
       });
 
-      // Auto-open invoice dialog if invoiceFormat is set
-      if (settings?.invoiceFormat && settings.invoiceFormat !== 'none') {
+      // Auto-open invoice dialog if print checkbox is checked
+      // Requirements: 1.3, 1.4 - Show dialog only if checkbox is checked
+      if (printInvoice) {
         setShowInvoiceDialog(true);
       }
 
       // Reset state for new sale
       setCart([])
       setCustomerPayment(0)
-      setSelectedCustomerId(WALK_IN_CUSTOMER_ID)
+      setIncludeDebtPayment(false)
+      setSelectedCustomerId('')
+      setSelectedContractorId('')
+      setProjectName('')
       setDiscountValue(0)
       setDiscountType('amount')
       setAppliedVoucher(null)
       setVoucherDiscount(0)
       setPointsUsed(0);
       setSelectedPaymentMethod(null);
-      
-      // Clear localStorage
-      localStorage.removeItem('pos-cart');
-      localStorage.removeItem('pos-customer-id');
-      localStorage.removeItem('pos-discount-type');
-      localStorage.removeItem('pos-discount-value');
-      localStorage.removeItem('pos-points-used');
-      
+
+      // Clear localStorage with error handling
+      safeStorage.removeItem('pos-cart');
+      safeStorage.removeItem('pos-customer-id');
+      safeStorage.removeItem('pos-contractor-id');
+      safeStorage.removeItem('pos-discount-type');
+      safeStorage.removeItem('pos-discount-value');
+      safeStorage.removeItem('pos-points-used');
+      safeStorage.removeItem('pos-project-name');
+
       // Refresh data to get updated stock and customer debt
       fetchProducts();
       fetchCustomers();
       fetchActiveShift();
+      fetchProjectNames();
 
     } else {
       toast({
@@ -869,10 +1238,16 @@ export default function POSPage() {
     setIsSubmitting(false)
   }
 
-  // Auto-focus barcode input
+  // Auto-focus barcode input only once on mount.
+  // This avoids stealing focus when the cart updates (e.g. editing quantity).
   useEffect(() => {
     barcodeInputRef.current?.focus();
-  }, [cart]);
+    // Fallback focus with timeout for when the component first mounts
+    const timer = setTimeout(() => {
+      barcodeInputRef.current?.focus();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Redirect if not logged in
   useEffect(() => {
@@ -891,25 +1266,25 @@ export default function POSPage() {
         parseInt(s.slice(0, -2) + '00000'),
       ].filter(n => n > value && n.toString().length <= 9);
 
-      const finalAmountStr = Math.ceil(finalAmount).toString();
-      const len = finalAmountStr.length;
+      const amountToPayStr = Math.ceil(totalPayable).toString();
+      const len = amountToPayStr.length;
       const powerOf10 = Math.pow(10, len - 1);
-      const firstDigit = parseInt(finalAmountStr[0]);
-      
+      const firstDigit = parseInt(amountToPayStr[0]);
+
       const nextRoundUp = (firstDigit + 1) * powerOf10;
       if (nextRoundUp > value) suggestions.push(nextRoundUp);
 
-      setPaymentSuggestions([...new Set(suggestions)].sort((a,b) => a - b));
+      setPaymentSuggestions([...new Set(suggestions)].sort((a, b) => a - b));
     } else {
       setPaymentSuggestions([]);
     }
   };
-  
+
   const handleNewCustomerCreated = (isOpen: boolean, newCustomerId?: string) => {
     setIsCustomerFormOpen(isOpen);
     if (!isOpen) {
       fetchCustomers(); // Refresh customers list
-      if(newCustomerId){
+      if (newCustomerId) {
         setSelectedCustomerId(newCustomerId);
       }
     }
@@ -921,11 +1296,13 @@ export default function POSPage() {
 
   const handleShiftClosed = () => {
     setActiveShift(null);
-    router.push('/login');
+    // Chuyển hướng dựa trên role của user
+    const redirectPath = user?.role ? getPostShiftRedirectPath(user.role as UserRole) : '/login'
+    router.push(redirectPath);
   }
 
   const isLoading = customersLoading || productsLoading || unitsLoading || settingsLoading || shiftsLoading || isStoreLoading || isRoleLoading;
-  
+
   if (isLoading || (!user && !isStoreLoading)) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -935,46 +1312,58 @@ export default function POSPage() {
   }
 
   if (!activeShift) {
-    return <StartShiftDialog userId={user!.id} userName={user!.displayName || user!.email} onShiftStarted={handleShiftStarted} />;
+    return <StartShiftDialog
+      userId={user!.id}
+      userName={user!.displayName || user!.email}
+      userRole={user!.role}
+      onShiftStarted={handleShiftStarted}
+    />;
   }
 
-  const isLocked = !activeShift;
+  // Lock POS if no active shift OR if worked more than 12 hours (critical overtime)
+  const CRITICAL_OVERTIME_HOURS = 12;
+  const isCriticalOvertime = activeShift && activeShift.hoursWorked && activeShift.hoursWorked >= CRITICAL_OVERTIME_HOURS;
+  const isLocked = !activeShift || !!isCriticalOvertime;
 
   const canViewCustomers = permissions?.customers?.includes('view');
   const canAddCustomers = permissions?.customers?.includes('add');
 
   return (
     <>
-    {canAddCustomers && (
-      <CustomerForm 
-        isOpen={isCustomerFormOpen} 
-        onOpenChange={handleNewCustomerCreated} 
-      />
-    )}
-    <div className="flex flex-col h-[calc(100vh-5rem)] -m-6 bg-muted/30">
-      <header className="p-4 border-b bg-background flex items-center gap-4">
+      {canAddCustomers && (
+        <CustomerForm
+          isOpen={isCustomerFormOpen}
+          onOpenChange={handleNewCustomerCreated}
+        />
+      )}
+      <div className="flex flex-col h-[calc(100vh-5rem)] w-full -m-6 bg-muted/30 overflow-x-hidden">
+        <header className="p-4 border-b bg-background shrink-0 w-full space-y-2">
+          <div className="flex items-center gap-2 flex-nowrap overflow-x-auto">
           <Button variant="ghost" size="icon" onClick={toggleSidebar} className='shrink-0'>
-              <PanelLeft />
+            <PanelLeft />
           </Button>
-          <div className="relative flex-grow max-w-sm">
+          <div className="relative flex-1 min-w-[120px] max-w-[200px]">
             <Barcode className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
             <Input
               ref={barcodeInputRef}
               placeholder="Quét mã vạch..."
-              className="pl-10 h-12 text-lg"
+              className="pl-10 h-12 text-lg w-full"
               value={barcode}
               onChange={(e) => setBarcode(e.target.value)}
               onKeyDown={handleBarcodeScan}
               disabled={isSubmitting || isLocked}
+              autoFocus
             />
           </div>
-          <Button 
-            variant="outline" 
-            size="icon" 
-            className="h-12 w-12 shrink-0" 
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-12 w-12 shrink-0"
             onClick={() => {
               fetchProducts();
               fetchCustomers();
+              fetchContractors();
+              fetchProjectNames();
               toast({
                 title: 'Đã cập nhật',
                 description: 'Dữ liệu sản phẩm và khách hàng đã được làm mới.',
@@ -985,42 +1374,55 @@ export default function POSPage() {
           >
             <RefreshCw className="h-5 w-5" />
           </Button>
-           <Popover open={productSearchOpen} onOpenChange={setProductSearchOpen}>
+          <Popover open={productSearchOpen} onOpenChange={setProductSearchOpen}>
             <PopoverTrigger asChild>
-                <Button type="button" variant="outline" className="h-12" disabled={isLocked}>
-                    <PlusCircle className="mr-2 h-4 w-4" />
-                    Thêm thủ công
-                </Button>
+              <Button type="button" variant="outline" className="h-12 shrink-0 px-3" disabled={isLocked}>
+                <PlusCircle className="mr-2 h-4 w-4" />
+                <span>Thêm</span>
+              </Button>
             </PopoverTrigger>
             <PopoverContent className="w-[400px] p-0" align="start">
-                 <Command>
-                    <CommandInput placeholder="Tìm kiếm sản phẩm..." />
-                    <CommandList>
-                        <CommandEmpty>Không tìm thấy sản phẩm.</CommandEmpty>
-                        <CommandGroup>
-                            {products?.map((product) => (
-                            <CommandItem
-                                key={product.id}
-                                value={product.name}
-                                onSelect={() => {
-                                    addProductToCart(product);
-                                    setProductSearchOpen(false);
-                                }}
-                            >
-                                <Check
-                                    className={cn(
-                                        "mr-2 h-4 w-4",
-                                        cart.some(i => i.productId === product.id) ? "opacity-100" : "opacity-0"
-                                    )}
-                                />
-                                {product.name}
-                            </CommandItem>
-                            ))}
-                        </CommandGroup>
-                    </CommandList>
-                </Command>
+              <Command>
+                <CommandInput placeholder="Tìm kiếm sản phẩm..." />
+                <CommandList>
+                  <CommandEmpty>Không tìm thấy sản phẩm.</CommandEmpty>
+                  <CommandGroup>
+                    {products?.map((product) => {
+                      const stock = product.currentStock || (product as any).stockQuantity || 0;
+                      const isOutOfStock = stock <= 0;
+                      return (
+                        <CommandItem
+                          key={product.id}
+                          value={product.name}
+                          onSelect={() => {
+                            if (isOutOfStock) return;
+                            addProductToCart(product);
+                            setProductSearchOpen(false);
+                          }}
+                          className={cn(isOutOfStock && "opacity-50 cursor-default grayscale")}
+                        >
+                          <div className="flex items-center w-full justify-between">
+                            <div className="flex items-center">
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  cart.some(i => i.productId === product.id) ? "opacity-100" : "opacity-0"
+                                )}
+                              />
+                              {product.name}
+                            </div>
+                            {isOutOfStock && (
+                              <span className="text-xs text-destructive font-medium ml-2">Hết hàng</span>
+                            )}
+                          </div>
+                        </CommandItem>
+                      );
+                    })}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
             </PopoverContent>
-         </Popover>
+          </Popover>
           <Popover
             open={customerSearchOpen}
             onOpenChange={setCustomerSearchOpen}
@@ -1031,13 +1433,15 @@ export default function POSPage() {
                 role="combobox"
                 disabled={isLocked || !canViewCustomers}
                 className={cn(
-                  'w-[250px] justify-between h-12',
+                  'min-w-[130px] max-w-[200px] justify-between h-12 shrink-0',
                   !selectedCustomerId && 'text-muted-foreground'
                 )}
               >
-                {selectedCustomerId
-                  ? allCustomers.find((c) => c.id === selectedCustomerId)?.name
-                  : 'Chọn khách hàng...'}
+                <span className="truncate">
+                  {selectedCustomerId
+                    ? allCustomers.find((c) => c.id === selectedCustomerId)?.name
+                    : NO_CUSTOMER_LABEL}
+                </span>
                 <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
               </Button>
             </PopoverTrigger>
@@ -1047,35 +1451,76 @@ export default function POSPage() {
                 <CommandList>
                   <CommandEmpty>Không tìm thấy khách hàng.</CommandEmpty>
                   <CommandGroup>
-                    {allCustomers.map((customer) => {
+                    <CommandItem
+                      value={`${NO_CUSTOMER_LABEL} bo qua khach hang`}
+                      key="none-customer"
+                      onSelect={() => {
+                        setSelectedCustomerId('')
+                        setIncludeDebtPayment(false)
+                        setCustomerSearchOpen(false)
+                      }}
+                    >
+                      <Check
+                        className={cn(
+                          'mr-2 h-4 w-4',
+                          !selectedCustomerId ? 'opacity-100' : 'opacity-0'
+                        )}
+                      />
+                      <div>
+                        <p>{NO_CUSTOMER_LABEL}</p>
+                      </div>
+                    </CommandItem>
+                    <CommandItem
+                      value="khach le walk in"
+                      key={WALK_IN_CUSTOMER_ID}
+                      onSelect={() => {
+                        setSelectedCustomerId(WALK_IN_CUSTOMER_ID)
+                        setIncludeDebtPayment(false)
+                        setCustomerSearchOpen(false)
+                      }}
+                    >
+                      <Check
+                        className={cn(
+                          'mr-2 h-4 w-4',
+                          selectedCustomerId === WALK_IN_CUSTOMER_ID ? 'opacity-100' : 'opacity-0'
+                        )}
+                      />
+                      <div>
+                        <p>Khách lẻ</p>
+                      </div>
+                    </CommandItem>
+                    {allCustomers.filter((c) => c.id !== WALK_IN_CUSTOMER_ID).map((customer) => {
                       const debt = customer.currentDebt || 0;
                       return (
-                      <CommandItem
-                        value={`${customer.name} ${customer.phone}`}
-                        key={customer.id}
-                        onSelect={() => {
-                          setSelectedCustomerId(customer.id)
-                          setCustomerSearchOpen(false)
-                        }}
-                      >
-                        <Check
-                          className={cn(
-                            'mr-2 h-4 w-4',
-                            customer.id === selectedCustomerId
-                              ? 'opacity-100'
-                              : 'opacity-0'
-                          )}
-                        />
-                        <div>
-                          <p>{customer.name}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {customer.phone}
-                          </p>
-                           {debt > 0 && (
-                            <p className="text-xs text-destructive">Nợ: {formatCurrency(debt)}</p>
-                           )}
-                        </div>
-                      </CommandItem>
+                        <CommandItem
+                          value={`${customer.name} ${customer.phone || ''}`}
+                          key={customer.id}
+                          onSelect={() => {
+                            setSelectedCustomerId(customer.id)
+                            setIncludeDebtPayment(false) // Reset checkbox when changing customer
+                            setCustomerSearchOpen(false)
+                          }}
+                        >
+                          <Check
+                            className={cn(
+                              'mr-2 h-4 w-4',
+                              customer.id === selectedCustomerId
+                                ? 'opacity-100'
+                                : 'opacity-0'
+                            )}
+                          />
+                          <div>
+                            <p>{customer.name}</p>
+                            {customer.phone && (
+                              <p className="text-xs text-muted-foreground">
+                                {customer.phone}
+                              </p>
+                            )}
+                            {debt > 0 && (
+                              <p className="text-xs text-destructive">Nợ: {formatCurrency(debt)}</p>
+                            )}
+                          </div>
+                        </CommandItem>
                       )
                     })}
                   </CommandGroup>
@@ -1083,178 +1528,349 @@ export default function POSPage() {
                     <>
                       <CommandSeparator />
                       <CommandItem
-                          onSelect={() => {
-                            setCustomerSearchOpen(false);
-                            setIsCustomerFormOpen(true);
-                          }}
-                        >
-                          <UserPlus className="mr-2 h-4 w-4" />
-                          Thêm khách hàng mới
-                        </CommandItem>
+                        onSelect={() => {
+                          setCustomerSearchOpen(false);
+                          setIsCustomerFormOpen(true);
+                        }}
+                      >
+                        <UserPlus className="mr-2 h-4 w-4" />
+                        Thêm khách hàng mới
+                      </CommandItem>
                     </>
                   )}
                 </CommandList>
               </Command>
             </PopoverContent>
           </Popover>
-           {activeShift && <ShiftControls activeShift={activeShift} onShiftClosed={handleShiftClosed} />}
-      </header>
-
-      <main className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6 p-6 overflow-hidden">
-        {/* Cart Items */}
-        <div className="lg:col-span-2 flex flex-col h-full relative">
-          {isLocked && (
-             <div className="absolute inset-0 bg-background/80 flex flex-col items-center justify-center z-10">
-                <Lock className="h-16 w-16 text-muted-foreground mb-4" />
-                <p className="text-lg font-semibold text-muted-foreground">Giao diện bán hàng đã khóa</p>
-                <p className="text-sm text-muted-foreground">Vui lòng bắt đầu ca làm việc để mở khóa.</p>
+          <div className="min-w-[160px] max-w-[210px] shrink-0">
+            <Select
+              value={contractorSelectValue}
+              onValueChange={(value) => setSelectedContractorId(value === 'none' ? '' : value)}
+              disabled={isSubmitting || isLocked}
+            >
+              <SelectTrigger className="h-12">
+                <SelectValue placeholder="Nhà thầu (tùy chọn)" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Không gắn nhà thầu</SelectItem>
+                {contractors.map((contractor) => (
+                  <SelectItem key={contractor.id} value={contractor.id}>
+                    {contractor.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="min-w-[170px] max-w-[240px] shrink-0 flex">
+            <Input
+              value={projectName}
+              onChange={(e) => setProjectName(e.target.value)}
+              placeholder="Tùy chọn"
+              className="h-12 rounded-r-none border-r-0"
+              disabled={isSubmitting || isLocked}
+            />
+            <Popover
+              open={projectDropdownOpen}
+              onOpenChange={(open) => {
+                setProjectDropdownOpen(open);
+                if (open) {
+                  setProjectSearch('');
+                }
+              }}
+            >
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-12 w-11 rounded-l-none"
+                  disabled={isSubmitting || isLocked}
+                  aria-label="Mở danh sách công trình"
+                >
+                  <ChevronsUpDown className="h-4 w-4 opacity-60" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[280px] p-0" align="end">
+                <Command shouldFilter={false}>
+                  <CommandInput
+                    placeholder="Tìm công trình..."
+                    value={projectSearch}
+                    onValueChange={setProjectSearch}
+                  />
+                  <CommandList>
+                    <CommandEmpty>
+                      {isCustomerUnselected
+                        ? 'Chưa chọn khách hàng. Bạn có thể nhập công trình mới ở ô bên trái.'
+                        : 'Chưa có công trình đã gán. Bạn có thể nhập mới ở ô bên trái.'}
+                    </CommandEmpty>
+                    {!isCustomerUnselected && (
+                      <CommandGroup heading="Công trình đã gán">
+                        {filteredProjectOptions.map((name) => (
+                          <CommandItem
+                            key={name}
+                            value={name}
+                            onSelect={() => {
+                              setProjectName(name);
+                              setProjectDropdownOpen(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                'mr-2 h-4 w-4',
+                                normalizedProjectName.toLowerCase() === name.toLowerCase() ? 'opacity-100' : 'opacity-0'
+                              )}
+                            />
+                            {name}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    )}
+                    {normalizedProjectName && !hasExactProjectOption && (
+                      <>
+                        <CommandSeparator />
+                        <CommandGroup heading="Nhập mới">
+                          <CommandItem
+                            value={`new-${normalizedProjectName}`}
+                            onSelect={() => {
+                              setProjectName(normalizedProjectName);
+                              setProjectDropdownOpen(false);
+                            }}
+                          >
+                            <PlusCircle className="mr-2 h-4 w-4" />
+                            Dùng: {normalizedProjectName}
+                          </CommandItem>
+                        </CommandGroup>
+                      </>
+                    )}
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+          </div>
+          </div>
+          {activeShift && (
+            <div className="w-full flex justify-end">
+              <ShiftControls activeShift={activeShift} onShiftClosed={handleShiftClosed} />
             </div>
           )}
-          <h2 className="text-xl font-semibold mb-4">Đơn hàng hiện tại ({cart.length})</h2>
-          <div className="flex-1 overflow-y-auto -mr-4 pr-4 border rounded-lg">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-12">STT</TableHead>
-                  <TableHead className="w-[35%]">Sản phẩm</TableHead>
-                  <TableHead className="text-right">Đơn giá</TableHead>
-                  <TableHead className="text-center w-48">Số lượng</TableHead>
-                  <TableHead className="text-right">Thành tiền</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {cart.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={5}
-                      className="text-center h-48 text-muted-foreground"
+        </header>
+
+        {/* Overtime Warning Banner */}
+        {activeShift && activeShift.isOvertime && (
+          <div className="bg-orange-100 dark:bg-orange-950 border-b border-orange-300 dark:border-orange-800 px-6 py-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-full bg-orange-500 flex items-center justify-center">
+                  <Clock className="h-5 w-5 text-white" />
+                </div>
+                <div>
+                  <p className="font-semibold text-orange-900 dark:text-orange-100">
+                    ⚠️ Đã vượt giờ làm việc quy định
+                  </p>
+                  <p className="text-sm text-orange-700 dark:text-orange-300">
+                    Bạn đã làm việc {activeShift.hoursWorked?.toFixed(1)} giờ (giới hạn: {activeShift.maxShiftHours} giờ).
+                    Vui lòng đóng ca để nghỉ ngơi.
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                className="bg-orange-500 hover:bg-orange-600 text-white border-orange-600"
+                onClick={() => {
+                  // Trigger close shift dialog
+                  const closeButton = document.querySelector('[data-shift-close-button]') as HTMLButtonElement;
+                  if (closeButton) closeButton.click();
+                }}
+              >
+                Đóng ca ngay
+              </Button>
+            </div>
+          </div>
+        )}
+
+        <main className="flex-1 w-full overflow-hidden">
+          <div className="h-full w-full grid grid-cols-1 lg:grid-cols-3 gap-6 p-6 overflow-y-auto overflow-x-hidden">
+            {/* Cart Items */}
+            <div className="lg:col-span-2 flex flex-col h-full overflow-hidden max-w-full">
+            {isLocked && (
+              <div className="absolute inset-0 bg-background/80 flex flex-col items-center justify-center z-10">
+                <Lock className="h-16 w-16 text-muted-foreground mb-4" />
+                {isCriticalOvertime ? (
+                  <>
+                    <p className="text-lg font-semibold text-red-600">🚨 Đã làm việc quá lâu!</p>
+                    <p className="text-sm text-muted-foreground text-center max-w-md mt-2">
+                      Bạn đã làm việc {activeShift?.hoursWorked?.toFixed(1)} giờ (vượt quá {CRITICAL_OVERTIME_HOURS} giờ).
+                      Vui lòng đóng ca ngay để nghỉ ngơi. Sức khỏe của bạn rất quan trọng!
+                    </p>
+                    <Button
+                      className="mt-4"
+                      variant="destructive"
+                      onClick={() => {
+                        const closeButton = document.querySelector('[data-shift-close-button]') as HTMLButtonElement;
+                        if (closeButton) closeButton.click();
+                      }}
                     >
-                      Quét mã vạch hoặc tìm kiếm để thêm sản phẩm vào đơn
-                      hàng.
-                    </TableCell>
-                  </TableRow>
+                      Đóng ca ngay
+                    </Button>
+                  </>
                 ) : (
-                  cart.map((item, index) => {
-                    const lineTotal = item.quantity * item.stockInfo.conversionFactor * item.price;
-                    // Only show conversion if both unit names exist and are different
-                    const showConversion = item.saleUnitName && item.stockInfo.baseUnitName &&
-                      item.saleUnitName !== item.stockInfo.baseUnitName &&
-                      item.stockInfo.baseUnitName !== 'N/A' &&
-                      item.stockInfo.conversionFactor > 1;
-                    return (
-                      <TableRow key={item.productId}>
-                        <TableCell className="font-medium text-center">{index + 1}</TableCell>
-                        <TableCell className="font-medium">
-                          {item.productName}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {formatCurrency(item.price * item.stockInfo.conversionFactor)}
-                        </TableCell>
-                        <TableCell className="text-center">
-                           <div className="flex items-center justify-center gap-1">
-                             <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => updateCartItem(item.productId, item.quantity - 1)}>
-                               <MinusCircle className="h-5 w-5" />
-                             </Button>
-                             <Input
+                  <>
+                    <p className="text-lg font-semibold text-muted-foreground">Giao diện bán hàng đã khóa</p>
+                    <p className="text-sm text-muted-foreground">Vui lòng bắt đầu ca làm việc để mở khóa.</p>
+                  </>
+                )}
+              </div>
+            )}
+            <h2 className="text-xl font-semibold mb-4 shrink-0">Đơn hàng hiện tại ({cart.length})</h2>
+            <div className="flex-1 overflow-auto border rounded-lg w-full">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-12">STT</TableHead>
+                    <TableHead>Sản phẩm</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Đơn giá</TableHead>
+                    <TableHead className="text-center whitespace-nowrap">Số lượng</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Thành tiền</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {cart.length === 0 ? (
+                    <TableRow>
+                      <TableCell
+                        colSpan={5}
+                        className="text-center h-48 text-muted-foreground"
+                      >
+                        Quét mã vạch hoặc tìm kiếm để thêm sản phẩm vào đơn
+                        hàng.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    cart.map((item, index) => {
+                      const lineTotal = item.quantity * item.stockInfo.conversionFactor * item.price;
+                      // Only show conversion if both unit names exist and are different
+                      const showConversion = item.saleUnitName && item.stockInfo.baseUnitName &&
+                        item.saleUnitName !== item.stockInfo.baseUnitName &&
+                        item.stockInfo.baseUnitName !== 'N/A' &&
+                        item.stockInfo.conversionFactor > 1;
+                      return (
+                        <TableRow key={item.productId}>
+                          <TableCell className="font-medium text-center">{index + 1}</TableCell>
+                          <TableCell className="font-medium">
+                            {item.productName}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {formatCurrency(item.price * item.stockInfo.conversionFactor)}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => updateCartItem(item.productId, item.quantity - 1)}>
+                                <MinusCircle className="h-5 w-5" />
+                              </Button>
+                              <Input
                                 type="number"
                                 value={item.quantity}
                                 onChange={(e) => {
-                                    const val = e.target.value === '' ? 0 : parseFloat(e.target.value);
-                                    updateCartItem(item.productId, isNaN(val) ? 0 : val);
+                                  const val = e.target.value === '' ? 0 : parseFloat(e.target.value);
+                                  updateCartItem(item.productId, isNaN(val) ? 0 : val);
                                 }}
                                 className="w-16 text-center font-bold text-lg h-10 px-1"
-                             />
-                             {item.availableUnits.length > 1 ? (
-                               <Select
-                                 value={item.saleUnitId}
-                                 onValueChange={(value) => updateCartItemUnit(item.productId, value)}
-                               >
-                                 <SelectTrigger className="w-20 h-10">
-                                   <SelectValue placeholder="Đơn vị" />
-                                 </SelectTrigger>
-                                 <SelectContent>
-                                   {item.availableUnits.map((unit) => (
-                                     <SelectItem key={unit.id} value={unit.id}>
-                                       {unit.name}
-                                     </SelectItem>
-                                   ))}
-                                 </SelectContent>
-                               </Select>
-                             ) : (
-                               <span className="text-sm text-muted-foreground w-12">{item.saleUnitName}</span>
-                             )}
-                             <Button 
-                               variant="ghost" 
-                               size="icon" 
-                               className="h-7 w-7 shrink-0" 
-                               onClick={() => updateCartItem(item.productId, item.quantity + 1)}
-                               disabled={(() => {
-                                 const stockInBaseUnit = item.stockInfo?.stockInBaseUnit || 0;
-                                 const conversionFactor = item.stockInfo?.conversionFactor || 1;
-                                 const maxQuantity = Math.floor(stockInBaseUnit / conversionFactor);
-                                 return item.quantity >= maxQuantity;
-                               })()}
-                             >
-                               <PlusCircle className="h-5 w-5" />
-                             </Button>
-                           </div>
-                          {showConversion && (
-                            <p className="text-xs text-muted-foreground mt-1">
-                              (1 {item.saleUnitName} = {item.stockInfo.conversionFactor} {item.stockInfo.baseUnitName})
-                            </p>
-                          )}
-                          {/* Show available stock */}
-                          {(() => {
-                            const stockInBaseUnit = item.stockInfo?.stockInBaseUnit || 0;
-                            const conversionFactor = item.stockInfo?.conversionFactor || 1;
-                            const maxQuantity = Math.floor(stockInBaseUnit / conversionFactor);
-                            const isLowStock = maxQuantity <= 5;
-                            const isOutOfStock = maxQuantity === 0;
-                            
-                            return (
-                              <p className={cn(
-                                "text-xs mt-1",
-                                isOutOfStock ? "text-destructive font-semibold" : 
-                                isLowStock ? "text-orange-500 font-medium" : 
-                                "text-muted-foreground"
-                              )}>
-                                Tồn kho: {maxQuantity} {item.saleUnitName || 'đơn vị'}
+                              />
+                              {item.availableUnits.length > 1 ? (
+                                <Select
+                                  value={item.saleUnitId}
+                                  onValueChange={(value) => updateCartItemUnit(item.productId, value)}
+                                >
+                                  <SelectTrigger className="w-20 h-10">
+                                    <SelectValue placeholder="Đơn vị" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {item.availableUnits.map((unit) => (
+                                      <SelectItem key={unit.id} value={unit.id}>
+                                        {unit.name}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              ) : (
+                                <span className="text-sm text-muted-foreground w-12">{item.saleUnitName}</span>
+                              )}
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 shrink-0"
+                                onClick={() => updateCartItem(item.productId, item.quantity + 1)}
+                                disabled={(() => {
+                                  const stockInBaseUnit = item.stockInfo?.stockInBaseUnit || 0;
+                                  const conversionFactor = item.stockInfo?.conversionFactor || 1;
+                                  const maxQuantity = Math.floor(stockInBaseUnit / conversionFactor);
+                                  return item.quantity >= maxQuantity;
+                                })()}
+                              >
+                                <PlusCircle className="h-5 w-5" />
+                              </Button>
+                            </div>
+                            {showConversion && (
+                              <p className="text-xs text-muted-foreground mt-1">
+                                (1 {item.saleUnitName} = {item.stockInfo.conversionFactor} {item.stockInfo.baseUnitName})
                               </p>
-                            );
-                          })()}
-                        </TableCell>
-                        <TableCell className="text-right font-bold text-lg">
-                          {formatCurrency(lineTotal)}
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })
-                )}
-              </TableBody>
-            </Table>
+                            )}
+                            {/* Show available stock */}
+                            {(() => {
+                              const stockInBaseUnit = item.stockInfo?.stockInBaseUnit || 0;
+                              const conversionFactor = item.stockInfo?.conversionFactor || 1;
+                              const maxQuantity = Math.floor(stockInBaseUnit / conversionFactor);
+                              const isLowStock = maxQuantity <= 5;
+                              const isOutOfStock = maxQuantity === 0;
+
+                              return (
+                                <p className={cn(
+                                  "text-xs mt-1",
+                                  isOutOfStock ? "text-destructive font-semibold" :
+                                    isLowStock ? "text-orange-500 font-medium" :
+                                      "text-muted-foreground"
+                                )}>
+                                  Tồn kho: {maxQuantity} {item.saleUnitName || 'đơn vị'}
+                                </p>
+                              );
+                            })()}
+                          </TableCell>
+                          <TableCell className="text-right font-bold text-lg">
+                            {formatCurrency(lineTotal)}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </div>
           </div>
-        </div>
 
-        {/* Payment and Summary */}
-        <div className="lg:col-span-1 bg-card border rounded-lg p-6 flex flex-col">
-           <h2 className="text-xl font-semibold mb-6">Thanh toán</h2>
-          <div className="flex-1 space-y-2 overflow-y-auto text-sm pr-2 -mr-4">
-              <div className="flex justify-between items-center">
-                <Label>Tổng tiền hàng</Label>
-                <p className="font-semibold text-base">{formatCurrency(totalAmount)}</p>
-              </div>
-
-              {tierDiscountAmount > 0 && (
-                <div className="flex justify-between items-center text-primary">
-                  <Label>Ưu đãi hạng {selectedCustomer?.loyaltyTier && settings?.loyalty?.tiers.find(t => t.name === selectedCustomer.loyaltyTier)?.vietnameseName} ({tierDiscountPercentage}%)</Label>
-                  <p className="font-semibold">-{formatCurrency(tierDiscountAmount)}</p>
+          {/* Payment and Summary */}
+          <div className="lg:col-span-1 bg-card border rounded-lg p-6 flex flex-col h-full w-full max-w-full overflow-x-hidden">
+            <h2 className="text-xl font-semibold mb-6 shrink-0">Thanh toán</h2>
+            <div className="flex-1 flex flex-col gap-4 overflow-hidden w-full max-w-full">
+              <div className="space-y-2 text-sm w-full flex-1 overflow-y-auto overflow-x-hidden scrollbar-hide"
+                style={{
+                  scrollbarWidth: 'none',
+                  msOverflowStyle: 'none',
+                }}
+              >
+                <div className="flex justify-between items-center">
+                  <Label>Tổng tiền hàng</Label>
+                  <p className="font-semibold text-base">{formatCurrency(totalAmount)}</p>
                 </div>
-              )}
 
-              <div className="space-y-2 pt-2">
-                 <Label>Giảm giá</Label>
+                {tierDiscountAmount > 0 && (
+                  <div className="flex justify-between items-center text-primary">
+                    <Label>Ưu đãi hạng {selectedCustomer?.loyaltyTier && settings?.loyalty?.tiers.find(t => t.name === selectedCustomer.loyaltyTier)?.vietnameseName} ({tierDiscountPercentage}%)</Label>
+                    <p className="font-semibold">-{formatCurrency(tierDiscountAmount)}</p>
+                  </div>
+                )}
+
+                <div className="space-y-2 pt-2">
+                  <Label>Giảm giá</Label>
                   <div className="flex gap-4">
-                     <RadioGroup value={discountType} onValueChange={(value) => setDiscountType(value as 'percentage' | 'amount')} className="flex items-center">
+                    <RadioGroup value={discountType} onValueChange={(value) => setDiscountType(value as 'percentage' | 'amount')} className="flex items-center">
                       <div className="flex items-center space-x-2">
                         <RadioGroupItem value="amount" id="d_amount" />
                         <Label htmlFor="d_amount">VNĐ</Label>
@@ -1270,128 +1886,177 @@ export default function POSPage() {
                       className="h-9 text-right"
                     />
                   </div>
-              </div>
-              
-              {calculatedDiscount > 0 && (
-                <div className="flex justify-between items-center text-xs text-muted-foreground">
+                </div>
+
+                {calculatedDiscount > 0 && (
+                  <div className="flex justify-between items-center text-xs text-muted-foreground">
                     <span>Số tiền giảm:</span>
                     <span className="font-semibold">-{formatCurrency(calculatedDiscount)}</span>
-                </div>
-              )}
-              
-              {/* Voucher Input */}
-              <div className="space-y-2 pt-2">
-                <Label>Mã giảm giá</Label>
-                <VoucherInput
-                  subtotal={totalAmount}
-                  customerId={selectedCustomerId !== WALK_IN_CUSTOMER_ID ? selectedCustomerId : undefined}
-                  onVoucherApplied={handleVoucherApplied}
-                  onVoucherRemoved={handleVoucherRemoved}
-                  appliedVoucher={appliedVoucher}
-                />
-                {voucherDiscount > 0 && (
-                  <div className="flex justify-between items-center text-xs text-green-600">
-                    <span>Giảm từ voucher:</span>
-                    <span className="font-semibold">-{formatCurrency(voucherDiscount)}</span>
                   </div>
                 )}
-              </div>
-              
-              {selectedCustomer && selectedCustomer.id !== 'walk-in-customer' && settings?.loyalty?.enabled && (
+
+                {/* Voucher Input */}
                 <div className="space-y-2 pt-2">
+                  <Label>Mã giảm giá</Label>
+                  <VoucherInput
+                    subtotal={totalAmount}
+                    customerId={selectedCustomerIdForApi}
+                    onVoucherApplied={handleVoucherApplied}
+                    onVoucherRemoved={handleVoucherRemoved}
+                    appliedVoucher={appliedVoucher}
+                  />
+                  {voucherDiscount > 0 && (
+                    <div className="flex justify-between items-center text-xs text-green-600">
+                      <span>Giảm từ voucher:</span>
+                      <span className="font-semibold">-{formatCurrency(voucherDiscount)}</span>
+                    </div>
+                  )}
+                </div>
+
+                {selectedCustomer && selectedCustomer.id !== 'walk-in-customer' && settings?.loyalty?.enabled && (
+                  <div className="space-y-2 pt-2">
                     <Label htmlFor="pointsUsed">Sử dụng điểm ({selectedCustomer.loyaltyPoints || 0} điểm khả dụng)</Label>
                     <div className="flex items-center gap-2">
                       <FormattedNumberInput
-                          id="pointsUsed"
-                          value={pointsUsed}
-                          onChange={setPointsUsed}
-                          className="h-9 text-right"
-                          max={selectedCustomer.loyaltyPoints || 0}
+                        id="pointsUsed"
+                        value={pointsUsed}
+                        onChange={setPointsUsed}
+                        className="h-9 text-right"
+                        max={selectedCustomer.loyaltyPoints || 0}
                       />
                     </div>
                     {pointsDiscount > 0 && (
-                        <div className="flex justify-between items-center text-xs text-muted-foreground">
-                            <span>Giảm giá điểm thưởng ({pointsUsed} điểm):</span>
-                            <span className="font-semibold">-{formatCurrency(pointsDiscount)}</span>
-                        </div>
+                      <div className="flex justify-between items-center text-xs text-muted-foreground">
+                        <span>Giảm giá điểm thưởng ({pointsUsed} điểm):</span>
+                        <span className="font-semibold">-{formatCurrency(pointsDiscount)}</span>
+                      </div>
                     )}
-                </div>
-              )}
+                  </div>
+                )}
 
-              {/* Auto-applied promotions */}
-              {appliedPromotions.length > 0 && (
-                <div className="space-y-1 pt-2 bg-green-50 dark:bg-green-950/20 p-2 rounded">
-                  <Label className="text-green-700 dark:text-green-400">Khuyến mãi tự động</Label>
-                  {appliedPromotions.map((promo, idx) => (
-                    <div key={idx} className="flex justify-between items-center text-xs text-green-600">
-                      <span>• {promo.name}</span>
-                      <span className="font-semibold">-{formatCurrency(promo.discount)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
+                {/* Auto-applied promotions */}
+                {appliedPromotions.length > 0 && (
+                  <div className="space-y-1 pt-2 bg-green-50 dark:bg-green-950/20 p-2 rounded">
+                    <Label className="text-green-700 dark:text-green-400">Khuyến mãi tự động</Label>
+                    {appliedPromotions.map((promo, idx) => (
+                      <div key={idx} className="flex justify-between items-center text-xs text-green-600">
+                        <span>• {promo.name}</span>
+                        <span className="font-semibold">-{formatCurrency(promo.discount)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
-              {totalDiscount > 0 && (
-                <div className="flex justify-between items-center font-semibold text-primary mt-2">
-                  <Label>Tổng giảm giá</Label>
-                  <p>-{formatCurrency(totalDiscount)}</p>
-                </div>
-              )}
-              
-              {vatRate > 0 && (
-                <div className="flex justify-between items-center">
+                {totalDiscount > 0 && (
+                  <div className="flex justify-between items-center font-semibold text-primary mt-2">
+                    <Label>Tổng giảm giá</Label>
+                    <p>-{formatCurrency(totalDiscount)}</p>
+                  </div>
+                )}
+
+                {vatRate > 0 && (
+                  <div className="flex justify-between items-center">
                     <Label>Thuế VAT ({vatRate}%):</Label>
                     <span className="font-semibold">{formatCurrency(vatAmount)}</span>
-                </div>
-              )}
-              
-              <Separator className="my-2" />
+                  </div>
+                )}
 
-              <div className="flex justify-between items-center">
+                <Separator className="my-2" />
+
+                <div className="flex justify-between items-center">
                   <Label className="font-bold">Khách cần trả</Label>
                   <p className="font-bold text-base text-primary">{formatCurrency(finalAmount)}</p>
-              </div>
-
-              {/* Display points that will be earned */}
-              {earnedPoints > 0 && (
-                <div className="flex justify-between items-center text-sm text-green-600 bg-green-50 dark:bg-green-950/30 px-2 py-1 rounded">
-                  <Label className="text-green-600">Điểm sẽ nhận được</Label>
-                  <p className="font-semibold">+{earnedPoints.toLocaleString()} điểm</p>
                 </div>
-              )}
 
-               {previousDebt > 0 && (
-                <div className="flex justify-between items-center text-sm text-destructive">
-                  <Label>Nợ cũ</Label>
-                  <p className="font-semibold">{formatCurrency(previousDebt)}</p>
+                {/* Display points that will be earned */}
+                {earnedPoints > 0 && (
+                  <div className="flex justify-between items-center text-sm text-green-600 bg-green-50 dark:bg-green-950/30 px-2 py-1 rounded">
+                    <Label className="text-green-600">Điểm sẽ nhận được</Label>
+                    <p className="font-semibold">+{earnedPoints.toLocaleString()} điểm</p>
+                  </div>
+                )}
+
+                {previousDebt > 0 && (
+                  <>
+                    <div className="flex justify-between items-center text-sm text-destructive">
+                      <Label>Nợ cũ</Label>
+                      <p className="font-semibold">{formatCurrency(previousDebt)}</p>
+                    </div>
+
+                    {/* Checkbox to include debt payment */}
+                    <div className="flex items-center space-x-2 p-2 bg-orange-50 dark:bg-orange-950/20 rounded border border-orange-200 dark:border-orange-800">
+                      <Checkbox
+                        id="includeDebtPayment"
+                        checked={includeDebtPayment}
+                        onCheckedChange={(checked) => {
+                          setIncludeDebtPayment(checked as boolean);
+                          // Auto-update payment amount when checkbox changes
+                          if (checked) {
+                            setCustomerPayment(finalAmount + previousDebt);
+                          } else {
+                            setCustomerPayment(finalAmount);
+                          }
+                        }}
+                      />
+                      <label
+                        htmlFor="includeDebtPayment"
+                        className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                      >
+                        Thanh toán cả nợ cũ ({formatCurrency(previousDebt)})
+                      </label>
+                    </div>
+                  </>
+                )}
+
+                <div className="flex justify-between items-center font-bold text-base">
+                  <Label>Tổng phải trả</Label>
+                  <p className="">{formatCurrency(totalPayable)}</p>
                 </div>
-              )}
 
-              <div className="flex justify-between items-center font-bold text-base">
-                <Label>Tổng phải trả</Label>
-                <p className="">{formatCurrency(totalPayable)}</p>
-              </div>
+                {/* Credit limit warning */}
+                {selectedCustomer && selectedCustomerId !== WALK_IN_CUSTOMER_ID && selectedCustomer.creditLimit > 0 && (
+                  <div className={cn(
+                    "p-2 rounded text-xs",
+                    exceedsCreditLimit ? "bg-destructive/10 text-destructive" :
+                      remainingDebt > selectedCustomer.creditLimit * 0.8 ? "bg-orange-50 dark:bg-orange-950/20 text-orange-600" :
+                        "bg-muted text-muted-foreground"
+                  )}>
+                    <div className="flex justify-between items-center">
+                      <span>Hạn mức tín dụng:</span>
+                      <span className="font-semibold">{formatCurrency(selectedCustomer.creditLimit)}</span>
+                    </div>
+                    {remainingDebt > 0 && (
+                      <div className="flex justify-between items-center mt-1">
+                        <span>Nợ sau giao dịch:</span>
+                        <span className="font-semibold">{formatCurrency(remainingDebt)}</span>
+                      </div>
+                    )}
+                    {exceedsCreditLimit && (
+                      <p className="mt-1 font-semibold">⚠️ Vượt quá hạn mức!</p>
+                    )}
+                  </div>
+                )}
 
-              <div className="space-y-2">
-                <Label htmlFor="customerPayment">
-                  Tiền khách đưa
-                </Label>
-                 <FormattedNumberInput
-                  id="customerPayment"
-                  value={customerPayment}
-                  onChange={handleCustomerPaymentChange}
-                  className="h-12 text-xl font-bold text-right"
-                />
-              </div>
-               {paymentSuggestions.length > 0 && (
+                <div className="space-y-2">
+                  <Label htmlFor="customerPayment">
+                    Tiền khách đưa
+                  </Label>
+                  <FormattedNumberInput
+                    id="customerPayment"
+                    value={customerPayment}
+                    onChange={handleCustomerPaymentChange}
+                    className="h-12 text-xl font-bold text-right"
+                  />
+                </div>
+                {paymentSuggestions.length > 0 && (
                   <div className="flex gap-2 flex-wrap mt-2">
                     {paymentSuggestions.map((s) => {
-                       const numString = s.toLocaleString('en-US');
-                       const len = numString.length;
-                       let textSize = 'text-sm';
-                       if (len > 11) textSize = 'text-[10px]';
-                       else if (len > 7) textSize = 'text-xs';
-                      
+                      const numString = s.toLocaleString('en-US');
+                      const len = numString.length;
+                      let textSize = 'text-sm';
+                      if (len > 11) textSize = 'text-[10px]';
+                      else if (len > 7) textSize = 'text-xs';
+
                       return (
                         <Button
                           key={s}
@@ -1406,125 +2071,133 @@ export default function POSPage() {
                     })}
                   </div>
                 )}
-              <div className="flex justify-between items-center">
+                <div className="flex justify-between items-center">
                   <Label className={`font-semibold ${remainingDebt <= 0 ? 'text-green-600' : 'text-destructive'}`}>
-                      {remainingDebt <= 0 ? 'Tiền thối lại' : 'Còn thiếu'}
+                    {remainingDebt <= 0 ? 'Tiền thối lại' : 'Còn thiếu'}
                   </Label>
                   <p className={`font-bold text-base ${remainingDebt <= 0 ? 'text-green-600' : 'text-destructive'}`}>
-                      {formatCurrency(Math.abs(remainingDebt))}
+                    {formatCurrency(Math.abs(remainingDebt))}
                   </p>
-              </div>
-              {changeAmount > 0 && (
-                 <div className="flex items-center justify-end space-x-2 pt-2">
+                </div>
+                {changeAmount > 0 && (
+                  <div className="flex items-center justify-end space-x-2 pt-2">
                     <Checkbox
-                        id="isChangeReturned"
-                        checked={isChangeReturned}
-                        onCheckedChange={(checked) => setIsChangeReturned(Boolean(checked))}
+                      id="isChangeReturned"
+                      checked={isChangeReturned}
+                      onCheckedChange={(checked) => setIsChangeReturned(Boolean(checked))}
                     />
                     <Label htmlFor="isChangeReturned" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                        Đã thối tiền
+                      Đã thối tiền
                     </Label>
-                </div>
-              )}
-          </div>
-            <div className="flex gap-2">
-                <Button
-                    variant="outline"
-                    className="w-full h-14"
-                    onClick={() => {
-                    setCart([])
-                    setCustomerPayment(0)
-                    setDiscountValue(0)
-                    setAppliedVoucher(null)
-                    setVoucherDiscount(0)
-                    setPointsUsed(0);
-                    // Clear localStorage
-                    localStorage.removeItem('pos-cart');
-                    localStorage.removeItem('pos-customer-id');
-                    localStorage.removeItem('pos-discount-type');
-                    localStorage.removeItem('pos-discount-value');
-                    localStorage.removeItem('pos-points-used');
-                    }}
-                    disabled={isSubmitting || isLocked}
-                >
-                    <XCircle className="mr-2 h-5 w-5" />
-                    Hủy
-                </Button>
-                <Button
-                    className="w-full h-14 text-lg"
-                    onClick={handleCreateSale}
-                    disabled={isSubmitting || cart.length === 0 || isLocked}
-                >
-                    {selectedPaymentMethod === 'qr' && <QrCode className="mr-2 h-5 w-5" />}
-                    {selectedPaymentMethod === 'cash' && <Banknote className="mr-2 h-5 w-5" />}
-                    {!selectedPaymentMethod && 'Thanh toán'}
-                    {selectedPaymentMethod === 'qr' && 'QR Code'}
-                    {selectedPaymentMethod === 'cash' && 'Tiền mặt'}
-                    {selectedPaymentMethod === 'card' && 'Thẻ'}
-                    {selectedPaymentMethod === 'transfer' && 'Chuyển khoản'}
-                </Button>
+                  </div>
+                )}
+
+                <PrintInvoiceCheckbox
+                  checked={printInvoice}
+                  onChange={setPrintInvoice}
+                  disabled={isSubmitting || isLocked}
+                />
+                {!printInvoice && (
+                  <p className="text-xs text-muted-foreground">
+                    Không in hóa đơn: giao dịch vẫn được lưu lịch sử và ghi nhận chiết khấu.
+                  </p>
+                )}
+              </div>
             </div>
-        </div>
-      </main>
-    </div>
-    
-    {/* Invoice Print Dialog */}
-    {lastSaleData && (
-      <InvoicePrintDialog
-        open={showInvoiceDialog}
-        onClose={() => setShowInvoiceDialog(false)}
-        invoiceNumber={lastSaleData.invoiceNumber}
-        transactionDate={lastSaleData.transactionDate}
-        items={lastSaleData.items.map(item => ({
-          id: item.productId,
-          name: item.productName,
-          price: item.price,
-          quantity: item.quantity,
-          unitName: item.saleUnitName,
-        }))}
-        totalAmount={lastSaleData.totalAmount}
-        discount={lastSaleData.discount}
-        vatAmount={lastSaleData.vatAmount}
-        finalAmount={lastSaleData.finalAmount}
-        customerPayment={lastSaleData.customerPayment}
-        customerName={lastSaleData.customerName}
-        customerPhone={lastSaleData.customerPhone}
-        settings={settings}
+            <div className="flex gap-2 pt-4 border-t shrink-0 w-full">
+              <Button
+                variant="outline"
+                className="w-full h-14"
+                onClick={() => {
+                  setCart([])
+                  setCustomerPayment(0)
+                  setIncludeDebtPayment(false)
+                  setSelectedCustomerId('')
+                  setSelectedContractorId('')
+                  setProjectName('')
+                  setDiscountValue(0)
+                  setAppliedVoucher(null)
+                  setVoucherDiscount(0)
+                  setPointsUsed(0);
+                  setPrintInvoice(loadPrintPreference());
+                  // Clear localStorage with error handling
+                  safeStorage.removeItem('pos-cart');
+                  safeStorage.removeItem('pos-customer-id');
+                  safeStorage.removeItem('pos-contractor-id');
+                  safeStorage.removeItem('pos-discount-type');
+                  safeStorage.removeItem('pos-discount-value');
+                  safeStorage.removeItem('pos-points-used');
+                  safeStorage.removeItem('pos-project-name');
+                }}
+                disabled={isSubmitting || isLocked}
+              >
+                <XCircle className="mr-2 h-5 w-5" />
+                Hủy
+              </Button>
+              <Button
+                className="w-full h-14 text-lg"
+                onClick={handleCreateSale}
+                disabled={isSubmitting || (cart.length === 0 && !includeDebtPayment) || isLocked || exceedsCreditLimit}
+              >
+                {selectedPaymentMethod === 'qr' && <QrCode className="mr-2 h-5 w-5" />}
+                {selectedPaymentMethod === 'cash' && <Banknote className="mr-2 h-5 w-5" />}
+                {exceedsCreditLimit ? 'Vượt hạn mức' : !selectedPaymentMethod ? (includeDebtPayment && cart.length === 0 ? 'Thanh toán nợ' : 'Thanh toán') : ''}
+                {!exceedsCreditLimit && selectedPaymentMethod === 'qr' && 'QR Code'}
+                {!exceedsCreditLimit && selectedPaymentMethod === 'cash' && 'Tiền mặt'}
+                {!exceedsCreditLimit && selectedPaymentMethod === 'card' && 'Thẻ'}
+                {!exceedsCreditLimit && selectedPaymentMethod === 'transfer' && 'Chuyển khoản'}
+              </Button>
+            </div>
+          </div>
+          </div>
+        </main>
+      </div>
+
+      {/* Invoice Print Dialog */}
+      {lastSaleData && (
+        <InvoicePrintDialog
+          saleId={lastSaleData.saleId}
+          open={showInvoiceDialog}
+          onClose={() => setShowInvoiceDialog(false)}
+          invoiceNumber={lastSaleData.invoiceNumber}
+          transactionDate={lastSaleData.transactionDate}
+          items={lastSaleData.items.map(item => ({
+            id: item.productId,
+            name: item.productName,
+            price: item.price,
+            quantity: item.quantity,
+            unitName: item.saleUnitName,
+          }))}
+          totalAmount={lastSaleData.totalAmount}
+          discount={lastSaleData.discount}
+          vatAmount={lastSaleData.vatAmount}
+          finalAmount={lastSaleData.finalAmount}
+          customerPayment={lastSaleData.customerPayment}
+          customerName={lastSaleData.customerName}
+          customerPhone={lastSaleData.customerPhone}
+          contractorName={lastSaleData.contractorName}
+          projectName={lastSaleData.projectName}
+          settings={settings}
+          storeName={currentStore?.name}
+        />
+      )}
+
+      {/* Payment Method Selector */}
+      <PaymentMethodSelector
+        open={showPaymentMethodDialog}
+        onClose={() => setShowPaymentMethodDialog(false)}
+        onSelectMethod={handlePaymentMethodSelected}
+        amount={finalAmount}
       />
-    )}
-    
-    {/* Payment Method Selector */}
-    <PaymentMethodSelector
-      open={showPaymentMethodDialog}
-      onClose={() => setShowPaymentMethodDialog(false)}
-      onSelectMethod={handlePaymentMethodSelected}
-      amount={finalAmount}
-    />
-    
-    {/* QR Payment Dialog */}
-    <QRPaymentDialog
-      open={showQRPaymentDialog}
-      onClose={() => setShowQRPaymentDialog(false)}
-      onSuccess={() => processSale('qr')}
-      amount={finalAmount}
-      orderInfo={`Thanh toán đơn hàng - ${new Date().toLocaleString('vi-VN')}`}
-    />
-    
-    {/* Payment Gateway Dialog */}
-    <PaymentGatewayDialog
-      open={showPaymentGatewayDialog}
-      onClose={() => setShowPaymentGatewayDialog(false)}
-      onSuccess={(gateway, transactionId) => {
-        toast({
-          title: 'Thanh toán thành công',
-          description: `Đã thanh toán qua ${gateway}`,
-        });
-        processSale('gateway');
-      }}
-      amount={finalAmount}
-      orderId={`ORDER-${Date.now()}`}
-      orderInfo={`Thanh toán đơn hàng - ${new Date().toLocaleString('vi-VN')}`}
-    />
+
+      {/* QR Payment Dialog */}
+      <QRPaymentDialog
+        open={showQRPaymentDialog}
+        onClose={() => setShowQRPaymentDialog(false)}
+        onSuccess={() => processSale('qr')}
+        amount={finalAmount}
+        orderInfo={`Thanh toán đơn hàng - ${new Date().toLocaleString('vi-VN')}`}
+      />
     </>
   )
 }

@@ -13,8 +13,15 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { getDebtRiskPrediction } from '@/app/actions'
-import { type PredictDebtRiskOutput } from '@/ai/flows/predict-debt-risk'
 import { ScrollArea } from '@/components/ui/scroll-area'
+
+type PredictDebtRiskOutput = {
+  riskAssessment: string;
+  riskFactors: string;
+  recommendations: string;
+  riskLevel?: 'low' | 'medium' | 'high' | 'critical';
+  riskScore?: number;
+}
 
 interface DebtHistoryItem {
   id: string;

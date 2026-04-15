@@ -50,6 +50,8 @@ export declare class InventoryService {
     /**
      * Perform automatic unit conversion
      * Converts base units to conversion units when threshold is reached
+     * Note: This method is deprecated and kept for backward compatibility
+     * The new model uses quantity per unit instead of baseUnitStock/conversionUnitStock
      */
     private performAutoConversion;
     /**
@@ -70,6 +72,7 @@ export declare class InventoryService {
     addInventory(productId: string, storeId: string, quantity: number, unitId: string, notes?: string): Promise<ProductInventory>;
     /**
      * Manual inventory adjustment with conversion log
+     * Note: This method uses the new model with quantity per unit
      */
     adjustInventory(productId: string, storeId: string, newConversionStock: number, newBaseStock: number, reason: string): Promise<{
         inventory: ProductInventory;

@@ -6,8 +6,7 @@ const __dirname = path.dirname(__filename);
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Fix workspace root warning
-  outputFileTracingRoot: path.join(__dirname),
+  allowedDevOrigins: ['*'],
   typescript: {
     ignoreBuildErrors: true,
   },
@@ -53,9 +52,6 @@ const nextConfig = {
         pathname: '/**',
       },
     ],
-  },
-  devIndicators: {
-    allowedDevOrigins: ["*"],
   },
 };
 

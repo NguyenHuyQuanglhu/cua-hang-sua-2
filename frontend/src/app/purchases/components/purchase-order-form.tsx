@@ -39,7 +39,7 @@ import {
 } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { Textarea } from '@/components/ui/textarea'
-import { Product, Unit, PurchaseOrderItem, PurchaseOrder, SalesItem, Supplier } from '@/lib/types'
+import { Product, Unit, PurchaseOrderItem, PurchaseOrder, SalesItem, Supplier, Contractor } from '@/lib/types'
 import { useToast } from '@/hooks/use-toast'
 import { useRouter } from 'next/navigation'
 import { Check, ChevronsUpDown, PlusCircle, Trash2, ChevronLeft, Barcode } from 'lucide-react'
@@ -59,7 +59,8 @@ const purchaseOrderItemSchema = z.object({
 });
 
 const purchaseOrderSchema = z.object({
-  supplierId: z.string().optional(),
+  supplierId: z.string().min(1, "Vui lòng chọn nhà cung cấp."),
+  contractorId: z.string().optional(),
   importDate: z.string().min(1, "Ngày nhập là bắt buộc."),
   items: z.array(purchaseOrderItemSchema).min(1, "Đơn nhập phải có ít nhất một sản phẩm."),
   notes: z.string().optional(),
@@ -70,6 +71,7 @@ type PurchaseOrderFormValues = z.infer<typeof purchaseOrderSchema>;
 interface PurchaseOrderFormProps {
   products: Product[];
   suppliers: Supplier[];
+  contractors: Contractor[];
   units: Unit[];
   allSalesItems: SalesItem[];
   purchaseOrder?: PurchaseOrder;
@@ -102,11 +104,12 @@ const FormattedNumberInput = ({ value, onChange, ...props }: { value: number; on
 };
 
 
-export function PurchaseOrderForm({ products, suppliers, units, allSalesItems, purchaseOrder, draftItems, isDialog = false, onSuccess }: PurchaseOrderFormProps) {
+export function PurchaseOrderForm({ products, suppliers, contractors, units, allSalesItems, purchaseOrder, draftItems, isDialog = false, onSuccess }: PurchaseOrderFormProps) {
   const { toast } = useToast();
   const router = useRouter();
   const [productSearchOpen, setProductSearchOpen] = useState(false);
   const [supplierSearchOpen, setSupplierSearchOpen] = useState(false);
+  const [contractorSearchOpen, setContractorSearchOpen] = useState(false);
   const isEditMode = !!purchaseOrder;
   
   // Debug logging
@@ -139,11 +142,13 @@ export function PurchaseOrderForm({ products, suppliers, units, allSalesItems, p
     resolver: zodResolver(purchaseOrderSchema),
     defaultValues: isEditMode ? {
         supplierId: purchaseOrder.supplierId,
+        contractorId: purchaseOrder.contractorId || '',
         importDate: new Date(purchaseOrder.importDate).toISOString().split('T')[0],
         notes: purchaseOrder.notes || '',
         items: purchaseOrder.items || []
     } : {
       supplierId: '',
+      contractorId: '',
       importDate: new Date().toISOString().split('T')[0],
       items: draftItems || [],
       notes: '',
@@ -162,6 +167,7 @@ export function PurchaseOrderForm({ products, suppliers, units, allSalesItems, p
       
       form.reset({
         supplierId: purchaseOrder.supplierId || '',
+        contractorId: purchaseOrder.contractorId || '',
         importDate: new Date(purchaseOrder.importDate).toISOString().split('T')[0],
         notes: purchaseOrder.notes || '',
         items: (purchaseOrder.items || []).map(item => ({
@@ -175,6 +181,7 @@ export function PurchaseOrderForm({ products, suppliers, units, allSalesItems, p
     } else if (draftItems && draftItems.length > 0) {
       form.reset({
         supplierId: '',
+        contractorId: '',
         importDate: new Date().toISOString().split('T')[0],
         notes: 'Đơn hàng nháp tạo từ đề xuất của AI',
         items: draftItems,
@@ -275,6 +282,7 @@ export function PurchaseOrderForm({ products, suppliers, units, allSalesItems, p
     
     const orderData = {
         supplierId: data.supplierId,
+        contractorId: data.contractorId || undefined,
         importDate: data.importDate,
         notes: data.notes,
         totalAmount: totalAmount,
@@ -307,7 +315,7 @@ export function PurchaseOrderForm({ products, suppliers, units, allSalesItems, p
     }
   };
   
-  const addProductToOrder = (productId: string) => {
+  const addProductToOrder = async (productId: string) => {
     const product = productsMap.get(productId);
     if (product) {
       console.log('Adding product:', product.name, 'Unit ID:', product.unitId);
@@ -325,6 +333,44 @@ export function PurchaseOrderForm({ products, suppliers, units, allSalesItems, p
       const productUnitId = product.unitId || '';
       console.log('Selected unit ID:', productUnitId);
       
+      // Get last purchase cost from selected supplier
+      let lastCost = 0;
+      const selectedSupplierId = form.getValues('supplierId');
+      
+      if (selectedSupplierId) {
+        try {
+          const token = localStorage.getItem('auth_token');
+          const storeId = localStorage.getItem('store_id');
+          const headers: Record<string, string> = {};
+          if (token) headers['Authorization'] = `Bearer ${token}`;
+          if (storeId) headers['X-Store-Id'] = storeId;
+
+          // Fetch last purchase from this supplier for this product
+          const response = await fetch(`/api/purchases?supplierId=${selectedSupplierId}&pageSize=100`, {
+            headers,
+          });
+
+          if (response.ok) {
+            const result = await response.json();
+            const purchases = result.data || [];
+            
+            // Find the most recent purchase with this product
+            for (const purchase of purchases) {
+              if (purchase.items && Array.isArray(purchase.items)) {
+                const item = purchase.items.find((i: any) => i.productId === productId);
+                if (item && item.cost) {
+                  lastCost = item.cost;
+                  console.log(`Found last cost for ${product.name} from supplier: ${lastCost}`);
+                  break;
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Error fetching last cost:', error);
+        }
+      }
+      
       // Get the current length before prepend
       const currentLength = 0; // Will be at index 0 after prepend
       
@@ -332,7 +378,7 @@ export function PurchaseOrderForm({ products, suppliers, units, allSalesItems, p
         productId: product.id, 
         productName: product.name,
         quantity: 1, 
-        cost: 0,
+        cost: lastCost, // Use last cost from supplier
         unitId: productUnitId
       });
       
@@ -472,6 +518,64 @@ export function PurchaseOrderForm({ products, suppliers, units, allSalesItems, p
                         />
                          <FormField
                             control={form.control}
+                            name="contractorId"
+                            render={({ field }) => (
+                                <FormItem className="flex flex-col">
+                                    <FormLabel>Nhà thầu</FormLabel>
+                                    <Popover open={contractorSearchOpen} onOpenChange={setContractorSearchOpen}>
+                                        <PopoverTrigger asChild>
+                                            <FormControl>
+                                            <Button
+                                                variant="outline"
+                                                role="combobox"
+                                                className={cn("w-full justify-between", !field.value && "text-muted-foreground")}
+                                            >
+                                                {field.value ? contractors.find((c) => c.id === field.value)?.name : "Chọn nhà thầu"}
+                                                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                                            </Button>
+                                            </FormControl>
+                                        </PopoverTrigger>
+                                        <PopoverContent className="w-[--radix-popover-trigger-width] p-0">
+                                            <Command>
+                                                <CommandInput placeholder="Tìm nhà thầu..." />
+                                                <CommandList>
+                                                    <CommandEmpty>Không tìm thấy.</CommandEmpty>
+                                                    <CommandGroup>
+                                                        <CommandItem
+                                                            key="clear-contractor"
+                                                            value=""
+                                                            onSelect={() => {
+                                                                form.setValue("contractorId", "")
+                                                                setContractorSearchOpen(false)
+                                                            }}
+                                                        >
+                                                            <Check className={cn("mr-2 h-4 w-4", !field.value ? "opacity-100" : "opacity-0")}/>
+                                                            Không chọn
+                                                        </CommandItem>
+                                                    {contractors.map((contractor) => (
+                                                        <CommandItem
+                                                            value={contractor.name}
+                                                            key={contractor.id}
+                                                            onSelect={() => {
+                                                                form.setValue("contractorId", contractor.id)
+                                                                setContractorSearchOpen(false)
+                                                            }}
+                                                        >
+                                                            <Check className={cn("mr-2 h-4 w-4", contractor.id === field.value ? "opacity-100" : "opacity-0")}/>
+                                                            {contractor.name}
+                                                        </CommandItem>
+                                                    ))}
+                                                    </CommandGroup>
+                                                </CommandList>
+                                            </Command>
+                                        </PopoverContent>
+                                    </Popover>
+                                    <FormMessage />
+                                </FormItem>
+                            )}
+                        />
+                         <FormField
+                            control={form.control}
                             name="importDate"
                             render={({ field }) => (
                                 <FormItem>
@@ -567,7 +671,6 @@ export function PurchaseOrderForm({ products, suppliers, units, allSalesItems, p
                         {fields.length === 0 ? (
                           <div className="text-center py-8 text-muted-foreground">
                             <p>Chưa có sản phẩm nào. Hãy thêm sản phẩm vào đơn nhập hàng.</p>
-                            <p className="text-xs mt-2">Debug: watchedItems = {watchedItems?.length || 0}, fields = {fields.length}</p>
                           </div>
                         ) : (
                           <>

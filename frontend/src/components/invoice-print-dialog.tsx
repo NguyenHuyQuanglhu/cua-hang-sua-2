@@ -16,6 +16,7 @@ interface CartItem {
 }
 
 interface InvoicePrintDialogProps {
+  saleId: string
   open: boolean
   onClose: () => void
   invoiceNumber: string
@@ -28,10 +29,14 @@ interface InvoicePrintDialogProps {
   customerPayment: number
   customerName?: string
   customerPhone?: string
+  contractorName?: string
+  projectName?: string
   settings: ThemeSettings | null
+  storeName?: string
 }
 
 export function InvoicePrintDialog({
+  saleId,
   open,
   onClose,
   invoiceNumber,
@@ -44,11 +49,14 @@ export function InvoicePrintDialog({
   customerPayment,
   customerName,
   customerPhone,
+  contractorName,
+  projectName,
   settings,
+  storeName,
 }: InvoicePrintDialogProps) {
   const printRef = useRef<HTMLDivElement>(null)
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     const printContent = printRef.current
     if (!printContent) return
 
@@ -111,11 +119,21 @@ export function InvoicePrintDialog({
       </html>
     `)
     printWindow.document.close()
+    
+    // Update sale status to 'printed' after opening print dialog
+    try {
+      const { updateSaleStatus } = await import('@/app/sales/actions')
+      await updateSaleStatus(saleId, 'printed')
+    } catch (error) {
+      console.error('Failed to update sale status:', error)
+    }
   }
 
   const change = customerPayment - finalAmount
   const invoiceFormat = settings?.invoiceFormat || 'A4'
   const isThermal = invoiceFormat === '80mm' || invoiceFormat === '58mm'
+  const displayBuyerLabel = customerName ? 'Khách hàng' : contractorName ? 'Nhà thầu' : 'Khách hàng'
+  const displayBuyerName = customerName || contractorName || 'Khách lẻ'
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -138,9 +156,11 @@ export function InvoicePrintDialog({
             {settings?.companyBusinessLine && (
               <p className="text-sm text-gray-600">{settings.companyBusinessLine}</p>
             )}
-            <h1 className="company-name text-2xl font-bold text-orange-500">
-              {settings?.companyName || 'TÊN DOANH NGHIỆP'}
-            </h1>
+            {storeName && (
+              <h1 className="company-name text-3xl font-bold text-orange-500 mb-2">
+                {storeName}
+              </h1>
+            )}
             {settings?.companyAddress && (
               <p className="company-info text-sm text-gray-600">{settings.companyAddress}</p>
             )}
@@ -160,8 +180,10 @@ export function InvoicePrintDialog({
 
           {/* Customer Info */}
           <div className="customer-info text-sm mb-4">
-            <p><strong>Khách hàng:</strong> {customerName || 'Khách lẻ'}</p>
+            <p><strong>{displayBuyerLabel}:</strong> {displayBuyerName}</p>
+            {customerName && contractorName && <p><strong>Nhà thầu:</strong> {contractorName}</p>}
             {customerPhone && <p><strong>SĐT:</strong> {customerPhone}</p>}
+            {projectName && <p><strong>Công trình:</strong> {projectName}</p>}
           </div>
 
           {/* Items Table */}

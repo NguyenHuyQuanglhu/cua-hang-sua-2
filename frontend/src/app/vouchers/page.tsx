@@ -55,7 +55,7 @@ export default function VouchersPage() {
   const fetchVouchers = async () => {
     setIsLoading(true)
     try {
-      const response = await apiClient.request('/vouchers', { method: 'GET' })
+      const response = await apiClient.request<{ data?: Voucher[] }>('/vouchers', { method: 'GET' })
       setVouchers(response.data || [])
     } catch (error) {
       console.error('Error fetching vouchers:', error)

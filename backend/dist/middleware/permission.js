@@ -30,6 +30,7 @@ function requireModulePermission(module, action, options = {}) {
     return async (req, res, next) => {
         try {
             if (!req.user) {
+                console.log('[PERMISSION] No user in request');
                 res.status(401).json({
                     error: 'Chưa xác thực',
                     errorCode: 'AUTH001',
@@ -39,6 +40,14 @@ function requireModulePermission(module, action, options = {}) {
             const userId = req.user.id;
             const tenantId = req.tenantId;
             const storeId = options.checkStoreAccess ? req.storeId : undefined;
+            console.log('[PERMISSION] Checking permission:', {
+                userId,
+                module,
+                action,
+                userRole: req.user.role,
+                storeId,
+                tenantId
+            });
             // Check permission using PermissionService
             const result = await permission_service_1.permissionService.checkPermission(userId, module, action, storeId, tenantId ? {
                 userId,
@@ -46,13 +55,16 @@ function requireModulePermission(module, action, options = {}) {
                 role: req.user.role,
                 customPermissions: req.user.permissions,
             } : undefined);
+            console.log('[PERMISSION] Permission check result:', result);
             if (!result.allowed) {
+                console.log('[PERMISSION] Access denied:', result.reason);
                 res.status(403).json({
                     error: result.reason || 'Không đủ quyền hạn',
                     errorCode: result.errorCode || 'PERM001',
                 });
                 return;
             }
+            console.log('[PERMISSION] Access granted');
             next();
         }
         catch (error) {

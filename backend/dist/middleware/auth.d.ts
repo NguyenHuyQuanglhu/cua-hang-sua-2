@@ -16,6 +16,7 @@ export interface AuthUser {
     id: string;
     email: string;
     displayName?: string;
+    photoURL?: string;
     role: string;
     storeId?: string;
     tenantId?: string;

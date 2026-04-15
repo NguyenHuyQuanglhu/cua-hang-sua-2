@@ -62,6 +62,7 @@ class PermissionService {
             // Get or load permission context
             const permContext = context || await this.getPermissionContext(userId);
             if (!permContext) {
+                console.error('[PermissionService] No permission context found for user:', userId);
                 return {
                     allowed: false,
                     reason: 'Không tìm thấy thông tin người dùng',
@@ -210,6 +211,7 @@ class PermissionService {
           WHERE id = @userId AND status = 'active'
         `);
             if (userResult.recordset.length === 0) {
+                console.log('[PermissionService] User not found or inactive:', userId);
                 return null;
             }
             const user = userResult.recordset[0];
@@ -229,7 +231,7 @@ class PermissionService {
             }
             catch (err) {
                 // Permissions table may not exist in legacy databases
-                console.log('Permissions table not found, using default permissions');
+                console.log('[PermissionService] Permissions table not found, using default permissions');
             }
             const storePermissions = new Map();
             for (const row of storePermsResult.recordset) {
@@ -240,16 +242,22 @@ class PermissionService {
                 const perms = storePermissions.get(storeId);
                 perms[row.Module] = JSON.parse(row.Actions);
             }
-            return {
+            const context = {
                 userId,
                 tenantId: tenantId || '',
                 role: user.role,
                 customPermissions,
                 storePermissions: storePermissions.size > 0 ? storePermissions : undefined,
             };
+            return context;
         }
         catch (error) {
-            console.error('Error loading permission context:', error);
+            console.error('[PermissionService] Error loading permission context:', {
+                userId,
+                tenantId,
+                error: error instanceof Error ? error.message : String(error),
+                timestamp: new Date().toISOString()
+            });
             return null;
         }
     }

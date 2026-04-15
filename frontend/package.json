@@ -6,7 +6,7 @@
     "clean": "if exist .next rmdir /s /q .next",
     "dev": "next dev -p 3000",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p 3000",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "vitest --run",
@@ -62,10 +62,14 @@
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.1",
+    "@types/jest": "^30.0.0",
     "@types/node": "20.19.30",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "@vitejs/plugin-react": "^5.1.2",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "14.2.35",
+    "fast-check": "^4.5.3",
     "jsdom": "^27.4.0",
     "typescript": "5.9.3",
     "vitest": "^4.0.16"

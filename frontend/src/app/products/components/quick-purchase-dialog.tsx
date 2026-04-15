@@ -35,6 +35,7 @@ import { useStore } from '@/contexts/store-context'
 import { Alert, AlertDescription } from "@/components/ui/alert"
 
 const quickPurchaseSchema = z.object({
+  supplierId: z.string().min(1, "Vui lòng chọn nhà cung cấp."),
   productId: z.string().min(1, "Vui lòng chọn sản phẩm."),
   quantity: z.coerce.number().min(0.01, "Số lượng phải lớn hơn 0."),
   cost: z.coerce.number().min(0, "Giá phải là số không âm."),
@@ -49,6 +50,7 @@ interface Product {
   name: string;
   unitId: string;
   costPrice?: number;
+  supplierName?: string;
 }
 
 interface Unit {
@@ -58,11 +60,18 @@ interface Unit {
   conversionFactor?: number;
 }
 
+interface Supplier {
+  id: string;
+  name: string;
+  phone?: string;
+}
+
 interface QuickPurchaseDialogProps {
   isOpen: boolean;
   onOpenChange: (isOpen: boolean) => void;
   products: Product[];
   units: Unit[];
+  suppliers: Supplier[];
   preselectedProductId?: string;
   onSuccess?: () => void; // Add callback for successful purchase
 }
@@ -72,6 +81,7 @@ export function QuickPurchaseDialog({
   onOpenChange, 
   products, 
   units,
+  suppliers,
   preselectedProductId,
   onSuccess
 }: QuickPurchaseDialogProps) {
@@ -79,12 +89,15 @@ export function QuickPurchaseDialog({
   const router = useRouter();
   const { currentStore } = useStore();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [supplierProducts, setSupplierProducts] = useState<string[]>([]); // Product IDs for selected supplier
+  const [isLoadingProducts, setIsLoadingProducts] = useState(false);
 
   const unitsMap = new Map(units.map(u => [u.id, u]));
 
   const form = useForm<QuickPurchaseFormValues>({
     resolver: zodResolver(quickPurchaseSchema),
     defaultValues: {
+      supplierId: '',
       productId: preselectedProductId || '',
       quantity: 1,
       cost: 0,
@@ -94,7 +107,59 @@ export function QuickPurchaseDialog({
   });
 
   const selectedProductId = form.watch('productId');
+  const selectedSupplierId = form.watch('supplierId');
   const selectedProduct = products.find(p => p.id === selectedProductId);
+
+  // Fetch products for selected supplier
+  useEffect(() => {
+    if (!selectedSupplierId || !currentStore?.id) {
+      setSupplierProducts([]);
+      return;
+    }
+
+    const fetchSupplierProducts = async () => {
+      setIsLoadingProducts(true);
+      try {
+        const token = localStorage.getItem('auth_token');
+        const headers: Record<string, string> = {
+          'X-Store-Id': currentStore.id,
+        };
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        // Fetch purchase orders for this supplier to get product list
+        const response = await fetch(`/api/purchases?supplierId=${selectedSupplierId}&pageSize=1000`, {
+          headers,
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          const purchases = result.data || [];
+          
+          // Extract unique product IDs from purchase items
+          const productIds = new Set<string>();
+          for (const purchase of purchases) {
+            if (purchase.items && Array.isArray(purchase.items)) {
+              purchase.items.forEach((item: any) => {
+                if (item.productId) {
+                  productIds.add(item.productId);
+                }
+              });
+            }
+          }
+          
+          setSupplierProducts(Array.from(productIds));
+        }
+      } catch (error) {
+        console.error('Error fetching supplier products:', error);
+      } finally {
+        setIsLoadingProducts(false);
+      }
+    };
+
+    fetchSupplierProducts();
+  }, [selectedSupplierId, currentStore]);
 
   // Auto-select unit and fill cost when product changes
   useEffect(() => {
@@ -110,6 +175,18 @@ export function QuickPurchaseDialog({
       }
     }
   }, [selectedProduct, form]);
+
+  // Reset product selection when supplier changes
+  useEffect(() => {
+    if (selectedSupplierId) {
+      form.setValue('productId', '');
+    }
+  }, [selectedSupplierId, form]);
+
+  // Filter products based on selected supplier
+  const filteredProducts = selectedSupplierId && supplierProducts.length > 0
+    ? products.filter(p => supplierProducts.includes(p.id))
+    : products;
 
   const onSubmit = async (data: QuickPurchaseFormValues) => {
     // Check if store is selected
@@ -154,6 +231,7 @@ export function QuickPurchaseDialog({
         method: 'POST',
         headers,
         body: JSON.stringify({
+          supplierId: data.supplierId,
           productId: data.productId,
           quantity: data.quantity,        // Original quantity
           cost: data.cost,                // Original cost
@@ -234,25 +312,92 @@ export function QuickPurchaseDialog({
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <FormField
               control={form.control}
+              name="supplierId"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Nhà cung cấp</FormLabel>
+                  <Select onValueChange={field.onChange} value={field.value}>
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Chọn nhà cung cấp" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      {suppliers.length === 0 ? (
+                        <div className="p-2 text-sm text-muted-foreground text-center">
+                          Chưa có nhà cung cấp. Vui lòng thêm nhà cung cấp trước.
+                        </div>
+                      ) : (
+                        suppliers.map(supplier => (
+                          <SelectItem key={supplier.id} value={supplier.id}>
+                            {supplier.name}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                  {suppliers.length === 0 && (
+                    <p className="text-sm text-amber-600">
+                      Bạn cần tạo nhà cung cấp trước. Vào menu "Nhà cung cấp" để thêm.
+                    </p>
+                  )}
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
               name="productId"
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Sản phẩm</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
+                  <Select 
+                    onValueChange={field.onChange} 
+                    value={field.value}
+                    disabled={!selectedSupplierId || isLoadingProducts}
+                  >
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder="Chọn sản phẩm" />
+                        <SelectValue placeholder={
+                          !selectedSupplierId 
+                            ? "Chọn nhà cung cấp trước" 
+                            : isLoadingProducts 
+                            ? "Đang tải..." 
+                            : "Chọn sản phẩm"
+                        } />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      {products.map(product => (
-                        <SelectItem key={product.id} value={product.id}>
-                          {product.name}
-                        </SelectItem>
-                      ))}
+                      {filteredProducts.length === 0 ? (
+                        <div className="p-2 text-sm text-muted-foreground text-center">
+                          {selectedSupplierId 
+                            ? "Chưa có sản phẩm nào từ NCC này. Hãy nhập lần đầu bằng form đầy đủ."
+                            : "Vui lòng chọn nhà cung cấp trước"
+                          }
+                        </div>
+                      ) : (
+                        filteredProducts.map(product => (
+                          <SelectItem key={product.id} value={product.id}>
+                            <div className="flex flex-col">
+                              <span>{product.name}</span>
+                              {product.supplierName && (
+                                <span className="text-xs text-muted-foreground">
+                                  NCC: {product.supplierName}
+                                </span>
+                              )}
+                            </div>
+                          </SelectItem>
+                        ))
+                      )}
                     </SelectContent>
                   </Select>
                   <FormMessage />
+                  {selectedSupplierId && filteredProducts.length === 0 && !isLoadingProducts && (
+                    <p className="text-sm text-amber-600">
+                      Nhà cung cấp này chưa có sản phẩm nào. Vui lòng tạo đơn nhập hàng đầy đủ trước.
+                    </p>
+                  )}
                 </FormItem>
               )}
             />

@@ -78,9 +78,22 @@ export default function StoresPage() {
     }
   };
 
-  const handleSelectStore = (store: StoreType) => {
-    switchStore(store.id);
-    router.push('/dashboard');
+  const handleSelectStore = async (store: StoreType) => {
+    const success = await switchStore(store.id);
+    if (success) {
+      toast({
+        title: '✅ Chuyển cửa hàng thành công',
+        description: `Đã chuyển sang cửa hàng: ${store.name}`,
+        duration: 3000,
+      });
+      router.push('/dashboard');
+    } else {
+      toast({
+        variant: 'destructive',
+        title: 'Lỗi',
+        description: 'Không thể chuyển đến cửa hàng này',
+      });
+    }
   };
 
   if (isLoading) {

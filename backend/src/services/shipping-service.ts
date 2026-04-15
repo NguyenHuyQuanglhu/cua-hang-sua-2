@@ -8,7 +8,7 @@
  * Supports shipping fee calculation, order creation, and tracking.
  */
 
-import { executeQuery } from '../db';
+import { query } from '../db/index';
 
 // Shipping address
 export interface ShippingAddress {
@@ -154,7 +154,7 @@ export async function calculateGHNFee(request: ShippingRequest): Promise<Shippin
       }),
     });
 
-    const data = await response.json();
+    const data: any = await response.json();
 
     if (data.code === 200 && data.data) {
       return {
@@ -165,7 +165,7 @@ export async function calculateGHNFee(request: ShippingRequest): Promise<Shippin
     }
 
     return { success: false, error: data.message || 'Failed to calculate fee' };
-  } catch (error) {
+  } catch (error: any) {
     console.error('GHN fee calculation error:', error);
     return { success: false, error: 'Failed to calculate shipping fee' };
   }
@@ -179,7 +179,7 @@ export async function createGHNOrder(request: ShippingRequest): Promise<Shipping
   }
 
   try {
-    const items = request.items.map(item => ({
+    const items = request.items.map((item: any) => ({
       name: item.name,
       quantity: item.quantity,
       weight: item.weight,
@@ -210,7 +210,7 @@ export async function createGHNOrder(request: ShippingRequest): Promise<Shipping
       }),
     });
 
-    const data = await response.json();
+    const data: any = await response.json();
 
     if (data.code === 200 && data.data) {
       // Log shipping order
@@ -233,7 +233,7 @@ export async function createGHNOrder(request: ShippingRequest): Promise<Shipping
     }
 
     return { success: false, error: data.message || 'Failed to create shipping order' };
-  } catch (error) {
+  } catch (error: any) {
     console.error('GHN create order error:', error);
     return { success: false, error: 'Failed to create shipping order' };
   }
@@ -258,7 +258,7 @@ export async function trackGHNOrder(trackingCode: string): Promise<TrackingResul
       }),
     });
 
-    const data = await response.json();
+    const data: any = await response.json();
 
     if (data.code === 200 && data.data) {
       const statusMap: Record<string, string> = {
@@ -290,7 +290,7 @@ export async function trackGHNOrder(trackingCode: string): Promise<TrackingResul
     }
 
     return { success: false, error: data.message || 'Failed to track order' };
-  } catch (error) {
+  } catch (error: any) {
     console.error('GHN tracking error:', error);
     return { success: false, error: 'Failed to track order' };
   }
@@ -304,7 +304,7 @@ export async function calculateGHTKFee(request: ShippingRequest): Promise<Shippi
   }
 
   try {
-    const totalValue = request.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    const totalValue = request.items.reduce((sum: number, item: any) => sum + item.price * item.quantity, 0);
 
     const response = await fetch(`${config.apiUrl}/services/shipment/fee`, {
       method: 'POST',
@@ -324,7 +324,7 @@ export async function calculateGHTKFee(request: ShippingRequest): Promise<Shippi
       }),
     });
 
-    const data = await response.json();
+    const data: any = await response.json();
 
     if (data.success && data.fee) {
       return {
@@ -335,7 +335,7 @@ export async function calculateGHTKFee(request: ShippingRequest): Promise<Shippi
     }
 
     return { success: false, error: data.message || 'Failed to calculate fee' };
-  } catch (error) {
+  } catch (error: any) {
     console.error('GHTK fee calculation error:', error);
     return { success: false, error: 'Failed to calculate shipping fee' };
   }
@@ -349,8 +349,8 @@ export async function createGHTKOrder(request: ShippingRequest): Promise<Shippin
   }
 
   try {
-    const totalValue = request.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
-    const products = request.items.map(item => ({
+    const totalValue = request.items.reduce((sum: number, item: any) => sum + item.price * item.quantity, 0);
+    const products = request.items.map((item: any) => ({
       name: item.name,
       weight: item.weight / 1000, // GHTK uses kg
       quantity: item.quantity,
@@ -389,7 +389,7 @@ export async function createGHTKOrder(request: ShippingRequest): Promise<Shippin
       }),
     });
 
-    const data = await response.json();
+    const data: any = await response.json();
 
     if (data.success && data.order) {
       await logShippingOrder({
@@ -411,7 +411,7 @@ export async function createGHTKOrder(request: ShippingRequest): Promise<Shippin
     }
 
     return { success: false, error: data.message || 'Failed to create shipping order' };
-  } catch (error) {
+  } catch (error: any) {
     console.error('GHTK create order error:', error);
     return { success: false, error: 'Failed to create shipping order' };
   }
@@ -432,7 +432,7 @@ export async function trackGHTKOrder(trackingCode: string): Promise<TrackingResu
       },
     });
 
-    const data = await response.json();
+    const data: any = await response.json();
 
     if (data.success && data.order) {
       const statusMap: Record<number, string> = {
@@ -459,7 +459,7 @@ export async function trackGHTKOrder(trackingCode: string): Promise<TrackingResu
     }
 
     return { success: false, error: data.message || 'Failed to track order' };
-  } catch (error) {
+  } catch (error: any) {
     console.error('GHTK tracking error:', error);
     return { success: false, error: 'Failed to track order' };
   }
@@ -475,12 +475,12 @@ async function logShippingOrder(data: {
   status: string;
 }): Promise<void> {
   try {
-    await executeQuery(
+    await query(
       `INSERT INTO ShippingOrders (OrderID, Provider, TrackingCode, ShippingOrderID, Fee, Status, CreatedAt)
        VALUES (@orderId, @provider, @trackingCode, @shippingOrderId, @fee, @status, GETDATE())`,
-      data
+      data as Record<string, any>
     );
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to log shipping order:', error);
   }
 }
@@ -491,11 +491,11 @@ export async function updateShippingStatus(
   status: string
 ): Promise<void> {
   try {
-    await executeQuery(
+    await query(
       `UPDATE ShippingOrders SET Status = @status, UpdatedAt = GETDATE() WHERE TrackingCode = @trackingCode`,
       { trackingCode, status }
     );
-  } catch (error) {
+  } catch (error: any) {
     console.error('Failed to update shipping status:', error);
   }
 }

@@ -54,7 +54,7 @@ import { getShifts } from './actions'
 import { Shift } from '@/lib/repositories/shift-repository'
 
 type SortKey = 'startTime' | 'userName' | 'status' | 'totalRevenue' | 'cashDifference';
-type StatusFilter = 'all' | 'active' | 'closed';
+type StatusFilter = 'all' | 'open' | 'closed';
 
 export default function ShiftsPage() {
   const [searchTerm, setSearchTerm] = useState('')
@@ -78,11 +78,35 @@ export default function ShiftsPage() {
     const userMap = new Map<string, { id: string; name: string }>();
     shifts.forEach(shift => {
       if (!userMap.has(shift.userId)) {
-        userMap.set(shift.userId, { id: shift.userId, name: shift.userName });
+        userMap.set(shift.userId, { id: shift.userId, name: shift.userName || 'Không rõ' });
       }
     });
     return Array.from(userMap.values());
   }, [shifts]);
+
+  const normalizeShift = useCallback((raw: Record<string, unknown>): Shift => ({
+    id: String(raw.id ?? ''),
+    storeId: String(raw.storeId ?? ''),
+    userId: String(raw.userId ?? ''),
+    userName: raw.userName ? String(raw.userName) : undefined,
+    startTime: String(raw.startTime ?? new Date().toISOString()),
+    endTime: raw.endTime ? String(raw.endTime) : undefined,
+    startingCash: Number(raw.startingCash ?? 0),
+    endingCash: raw.endingCash !== undefined ? Number(raw.endingCash) : undefined,
+    expectedCash: raw.expectedCash !== undefined ? Number(raw.expectedCash) : undefined,
+    cashDifference: raw.cashDifference !== undefined ? Number(raw.cashDifference) : undefined,
+    status: raw.status === 'closed' ? 'closed' : 'open',
+    totalSales: raw.totalSales !== undefined ? Number(raw.totalSales) : undefined,
+    totalTransactions: raw.totalTransactions !== undefined ? Number(raw.totalTransactions) : undefined,
+    totalRevenue: raw.totalRevenue !== undefined ? Number(raw.totalRevenue) : undefined,
+    cashSales: raw.cashSales !== undefined ? Number(raw.cashSales) : undefined,
+    cashPayments: raw.cashPayments !== undefined ? Number(raw.cashPayments) : undefined,
+    totalCashInDrawer: raw.totalCashInDrawer !== undefined ? Number(raw.totalCashInDrawer) : undefined,
+    salesCount: raw.salesCount !== undefined ? Number(raw.salesCount) : undefined,
+    notes: raw.notes ? String(raw.notes) : undefined,
+    createdAt: String(raw.createdAt ?? new Date().toISOString()),
+    updatedAt: raw.updatedAt ? String(raw.updatedAt) : undefined,
+  }), []);
 
   // Fetch shifts
   const fetchShifts = useCallback(async () => {
@@ -97,7 +121,7 @@ export default function ShiftsPage() {
       });
       
       if (result.success && result.data) {
-        setShifts(result.data);
+        setShifts(result.data.map(normalizeShift));
       } else {
         setError(result.error || 'Không thể lấy danh sách ca làm việc');
       }
@@ -106,17 +130,25 @@ export default function ShiftsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [dateRange]);
+  }, [dateRange, normalizeShift]);
 
   useEffect(() => {
     fetchShifts();
+  }, [fetchShifts]);
+
+  useEffect(() => {
+    const refreshInterval = setInterval(() => {
+      fetchShifts();
+    }, 15000);
+
+    return () => clearInterval(refreshInterval);
   }, [fetchShifts]);
 
   const filteredShifts = useMemo(() => {
     return shifts?.filter(shift => {
       const term = searchTerm.toLowerCase()
       const searchMatch = !term ||
-        shift.userName.toLowerCase().includes(term) ||
+        (shift.userName || '').toLowerCase().includes(term) ||
         shift.id.toLowerCase().includes(term);
       
       const statusMatch = statusFilter === 'all' || shift.status === statusFilter;
@@ -291,7 +323,7 @@ export default function ShiftsPage() {
                     <DropdownMenuLabel>Lọc theo Trạng thái</DropdownMenuLabel>
                     <DropdownMenuRadioGroup value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
                         <DropdownMenuRadioItem value="all">Tất cả</DropdownMenuRadioItem>
-                        <DropdownMenuRadioItem value="active">Đang hoạt động</DropdownMenuRadioItem>
+                        <DropdownMenuRadioItem value="open">Đang hoạt động</DropdownMenuRadioItem>
                         <DropdownMenuRadioItem value="closed">Đã đóng</DropdownMenuRadioItem>
                     </DropdownMenuRadioGroup>
                     <DropdownMenuSeparator />
@@ -332,12 +364,12 @@ export default function ShiftsPage() {
                     </TableCell>
                     <TableCell>{shift.userName}</TableCell>
                     <TableCell>
-                        <Badge variant={shift.status === 'active' ? 'default' : 'secondary'}>
-                            {shift.status === 'active' ? 'Đang hoạt động' : 'Đã đóng'}
+                      <Badge variant={shift.status === 'open' ? 'default' : 'secondary'}>
+                        {shift.status === 'open' ? 'Đang hoạt động' : 'Đã đóng'}
                         </Badge>
                     </TableCell>
                      <TableCell className="text-right">{formatCurrency(shift.startingCash)}</TableCell>
-                    <TableCell className="text-right font-semibold text-primary">{formatCurrency(shift.totalRevenue)}</TableCell>
+                    <TableCell className="text-right font-semibold text-primary">{formatCurrency(shift.totalRevenue || 0)}</TableCell>
                     <TableCell className={`text-right font-semibold ${shift.cashDifference && shift.cashDifference !== 0 ? 'text-destructive' : ''}`}>{formatCurrency(shift.cashDifference || 0)}</TableCell>
                     <TableCell>
                       <DropdownMenu>

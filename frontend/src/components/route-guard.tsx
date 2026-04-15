@@ -82,6 +82,10 @@ export function RouteGuard({ children }: RouteGuardProps) {
     if (authStatus.status === 'unauthenticated' && !hasRedirected) {
       setHasRedirected(true);
       router.push('/login');
+      // Auto reload page after redirect to login
+      setTimeout(() => {
+        window.location.reload();
+      }, 100);
     }
   }, [authStatus.status, hasRedirected, router]);
 

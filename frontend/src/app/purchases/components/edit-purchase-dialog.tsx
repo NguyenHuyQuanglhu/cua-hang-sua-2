@@ -8,7 +8,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { PurchaseOrderForm } from './purchase-order-form'
-import { Product, Unit, Supplier, PurchaseOrder } from '@/lib/types'
+import { Product, Unit, Supplier, Contractor, PurchaseOrder } from '@/lib/types'
 import { useToast } from '@/hooks/use-toast'
 import { useStore } from '@/contexts/store-context'
 
@@ -29,6 +29,7 @@ export function EditPurchaseDialog({
   const [purchaseOrder, setPurchaseOrder] = useState<PurchaseOrder | null>(null)
   const [products, setProducts] = useState<Product[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
+  const [contractors, setContractors] = useState<Contractor[]>([])
   const [units, setUnits] = useState<Unit[]>([])
   const { currentStore } = useStore()
   const { toast } = useToast()
@@ -66,11 +67,12 @@ export function EditPurchaseDialog({
       console.log('Store ID:', currentStore.id);
       console.log('Headers:', headers);
 
-      // Fetch purchase order, products, suppliers, and units in parallel
-      const [purchaseRes, productsRes, suppliersRes, unitsRes] = await Promise.all([
+      // Fetch purchase order, products, suppliers, contractors, and units in parallel
+      const [purchaseRes, productsRes, suppliersRes, contractorsRes, unitsRes] = await Promise.all([
         fetch(`/api/purchases/${purchaseOrderId}`, { headers }),
         fetch('/api/products', { headers }),
         fetch('/api/suppliers', { headers }),
+          fetch('/api/proxy/contractors', { headers }),
         fetch('/api/units', { headers }),
       ])
 
@@ -90,19 +92,23 @@ export function EditPurchaseDialog({
       // Backend returns arrays directly, not wrapped in objects
       const productsData = productsRes.ok ? await productsRes.json() : { data: [] }
       const suppliersData = suppliersRes.ok ? await suppliersRes.json() : { suppliers: [] }
+      const contractorsData = contractorsRes.ok ? await contractorsRes.json() : { data: [] }
       const unitsData = unitsRes.ok ? await unitsRes.json() : []
 
       console.log('Products response:', productsData);
       console.log('Suppliers response:', suppliersData);
+      console.log('Contractors response:', contractorsData);
       console.log('Units response:', unitsData);
 
       // Handle different response formats
       const productsArray = productsData.data || productsData || [];
       const suppliersArray = suppliersData.data || suppliersData.suppliers || suppliersData || [];
+      const contractorsArray = contractorsData.data || contractorsData || [];
       const unitsArray = Array.isArray(unitsData) ? unitsData : [];
 
       console.log('Products:', productsArray.length);
       console.log('Suppliers:', suppliersArray.length);
+      console.log('Contractors:', contractorsArray.length);
       console.log('Units:', unitsArray.length);
 
       const purchaseOrderData = purchaseData.purchaseOrder || purchaseData;
@@ -111,6 +117,7 @@ export function EditPurchaseDialog({
       setPurchaseOrder(purchaseOrderData)
       setProducts(productsArray)
       setSuppliers(suppliersArray)
+      setContractors(contractorsArray)
       setUnits(unitsArray)
     } catch (error) {
       console.error('Error fetching data:', error)
@@ -151,6 +158,7 @@ export function EditPurchaseDialog({
             <PurchaseOrderForm
               products={products}
               suppliers={suppliers}
+              contractors={contractors}
               units={units}
               allSalesItems={[]}
               purchaseOrder={purchaseOrder}

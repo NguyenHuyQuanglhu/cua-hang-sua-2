@@ -2,6 +2,11 @@
  * Service for managing loyalty points operations
  */
 export declare class LoyaltyPointsService {
+    private getConfiguredTiers;
+    private getEffectiveSettings;
+    private hasLoyaltyTransactionsTable;
+    private getCustomerSnapshot;
+    private getCurrentBalance;
     /**
      * Calculate points earned from a purchase amount
      */
@@ -16,6 +21,17 @@ export declare class LoyaltyPointsService {
     earnPoints(customerId: string, storeId: string, purchaseAmount: number, saleId: string, userId?: string): Promise<{
         points: number;
         newBalance: number;
+        newTier?: string;
+        tierUpgraded?: boolean;
+    }>;
+    /**
+     * Earn points from a direct customer payment (debt payment flow)
+     */
+    earnPointsFromPayment(customerId: string, storeId: string, paymentAmount: number, paymentId: string, userId?: string): Promise<{
+        points: number;
+        newBalance: number;
+        newTier?: string;
+        tierUpgraded?: boolean;
     }>;
     /**
      * Redeem points for a discount
@@ -23,12 +39,14 @@ export declare class LoyaltyPointsService {
     redeemPoints(customerId: string, storeId: string, pointsToRedeem: number, orderAmount: number, saleId: string, userId?: string): Promise<{
         discount: number;
         newBalance: number;
+        newTier?: string;
     }>;
     /**
      * Adjust points manually (admin function)
      */
     adjustPoints(customerId: string, storeId: string, pointsAdjustment: number, reason: string, userId: string): Promise<{
         newBalance: number;
+        newTier?: string;
     }>;
     /**
      * Get customer points balance
@@ -55,6 +73,20 @@ export declare class LoyaltyPointsService {
         maxPoints?: number;
         discount?: number;
     }>;
+    /**
+     * Recalculate loyalty tiers for all customers in a store
+     */
+    recalculateAllTiers(storeId: string): Promise<{
+        updated: number;
+    }>;
+    /**
+     * Get loyalty tier information
+     */
+    getTierInfo(tier: string): {
+        name: string;
+        vietnameseName: string;
+        minPoints: number;
+    };
 }
 export declare const loyaltyPointsService: LoyaltyPointsService;
 //# sourceMappingURL=loyalty-points-service.d.ts.map

@@ -335,7 +335,26 @@ class TenantProvisioningService {
         FOREIGN KEY (StoreId) REFERENCES Stores(Id)
       )
     `);
-        // 11. Shifts table
+        // 11. Contractors table
+        await pool.request().query(`
+      IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Contractors' AND xtype='U')
+      CREATE TABLE Contractors (
+        Id NVARCHAR(36) PRIMARY KEY,
+        StoreId NVARCHAR(36) NOT NULL,
+        Name NVARCHAR(255) NOT NULL,
+        ContactPerson NVARCHAR(255),
+        Email NVARCHAR(255),
+        Phone NVARCHAR(50),
+        Address NVARCHAR(500),
+        TaxCode NVARCHAR(50),
+        IdentityNumber NVARCHAR(50),
+        Description NVARCHAR(MAX),
+        CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+        UpdatedAt DATETIME NOT NULL DEFAULT GETDATE(),
+        FOREIGN KEY (StoreId) REFERENCES Stores(Id)
+      )
+    `);
+        // 12. Shifts table
         await pool.request().query(`
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Shifts' AND xtype='U')
       CREATE TABLE Shifts (
@@ -360,7 +379,7 @@ class TenantProvisioningService {
         FOREIGN KEY (UserId) REFERENCES Users(Id)
       )
     `);
-        // 12. Sales table
+        // 13. Sales table
         await pool.request().query(`
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Sales' AND xtype='U')
       CREATE TABLE Sales (
@@ -368,6 +387,7 @@ class TenantProvisioningService {
         StoreId NVARCHAR(36) NOT NULL,
         InvoiceNumber NVARCHAR(50) NOT NULL,
         CustomerId NVARCHAR(36),
+        ContractorId NVARCHAR(36),
         ShiftId NVARCHAR(36),
         TransactionDate DATETIME NOT NULL,
         Status NVARCHAR(20) NOT NULL DEFAULT 'pending',
@@ -388,10 +408,11 @@ class TenantProvisioningService {
         UpdatedAt DATETIME NOT NULL DEFAULT GETDATE(),
         FOREIGN KEY (StoreId) REFERENCES Stores(Id),
         FOREIGN KEY (CustomerId) REFERENCES Customers(Id),
+        FOREIGN KEY (ContractorId) REFERENCES Contractors(Id),
         FOREIGN KEY (ShiftId) REFERENCES Shifts(Id)
       )
     `);
-        // 13. SalesItems table
+        // 14. SalesItems table
         await pool.request().query(`
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='SalesItems' AND xtype='U')
       CREATE TABLE SalesItems (
@@ -412,7 +433,7 @@ class TenantProvisioningService {
      * Create remaining tenant tables
      */
     async createRemainingTenantTables(pool) {
-        // 14. PurchaseOrders table
+        // 15. PurchaseOrders table
         await pool.request().query(`
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='PurchaseOrders' AND xtype='U')
       CREATE TABLE PurchaseOrders (
@@ -420,16 +441,18 @@ class TenantProvisioningService {
         StoreId NVARCHAR(36) NOT NULL,
         OrderNumber NVARCHAR(50) NOT NULL,
         SupplierId NVARCHAR(36),
+        ContractorId NVARCHAR(36),
         ImportDate DATETIME NOT NULL,
         TotalAmount DECIMAL(18,2) NOT NULL,
         Notes NVARCHAR(MAX),
         CreatedAt DATETIME NOT NULL DEFAULT GETDATE(),
         UpdatedAt DATETIME NOT NULL DEFAULT GETDATE(),
         FOREIGN KEY (StoreId) REFERENCES Stores(Id),
-        FOREIGN KEY (SupplierId) REFERENCES Suppliers(Id)
+        FOREIGN KEY (SupplierId) REFERENCES Suppliers(Id),
+        FOREIGN KEY (ContractorId) REFERENCES Contractors(Id)
       )
     `);
-        // 15. PurchaseOrderItems table
+        // 16. PurchaseOrderItems table
         await pool.request().query(`
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='PurchaseOrderItems' AND xtype='U')
       CREATE TABLE PurchaseOrderItems (
@@ -445,7 +468,7 @@ class TenantProvisioningService {
         FOREIGN KEY (UnitId) REFERENCES Units(Id)
       )
     `);
-        // 16. Payments table
+        // 17. Payments table
         await pool.request().query(`
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Payments' AND xtype='U')
       CREATE TABLE Payments (
@@ -460,7 +483,7 @@ class TenantProvisioningService {
         FOREIGN KEY (CustomerId) REFERENCES Customers(Id)
       )
     `);
-        // 17. SupplierPayments table
+        // 18. SupplierPayments table
         await pool.request().query(`
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='SupplierPayments' AND xtype='U')
       CREATE TABLE SupplierPayments (
@@ -475,7 +498,7 @@ class TenantProvisioningService {
         FOREIGN KEY (SupplierId) REFERENCES Suppliers(Id)
       )
     `);
-        // 18. CashTransactions table
+        // 19. CashTransactions table
         await pool.request().query(`
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='CashTransactions' AND xtype='U')
       CREATE TABLE CashTransactions (
@@ -492,7 +515,7 @@ class TenantProvisioningService {
         FOREIGN KEY (StoreId) REFERENCES Stores(Id)
       )
     `);
-        // 19. AuditLogs table
+        // 20. AuditLogs table
         await pool.request().query(`
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='AuditLogs' AND xtype='U')
       CREATE TABLE AuditLogs (
@@ -510,7 +533,7 @@ class TenantProvisioningService {
         FOREIGN KEY (StoreId) REFERENCES Stores(Id)
       )
     `);
-        // 20. Settings table
+        // 21. Settings table
         await pool.request().query(`
       IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Settings' AND xtype='U')
       CREATE TABLE Settings (
@@ -539,9 +562,12 @@ class TenantProvisioningService {
             'CREATE INDEX IX_Products_StoreId ON Products(StoreId)',
             'CREATE INDEX IX_Products_CategoryId ON Products(CategoryId)',
             'CREATE INDEX IX_Products_Sku ON Products(Sku)',
+            'CREATE INDEX IX_Contractors_StoreId ON Contractors(StoreId)',
             'CREATE INDEX IX_Sales_StoreId ON Sales(StoreId)',
             'CREATE INDEX IX_Sales_CustomerId ON Sales(CustomerId)',
+            'CREATE INDEX IX_Sales_ContractorId ON Sales(ContractorId)',
             'CREATE INDEX IX_Sales_TransactionDate ON Sales(TransactionDate)',
+            'CREATE INDEX IX_PurchaseOrders_ContractorId ON PurchaseOrders(ContractorId)',
             'CREATE INDEX IX_Customers_StoreId ON Customers(StoreId)',
             'CREATE INDEX IX_Customers_Phone ON Customers(Phone)',
             'CREATE INDEX IX_AuditLogs_StoreId ON AuditLogs(StoreId)',

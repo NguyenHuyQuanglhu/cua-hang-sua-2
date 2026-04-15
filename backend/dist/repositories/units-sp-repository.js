@@ -19,7 +19,7 @@ class UnitsSPRepository extends sp_base_repository_1.SPBaseRepository {
      */
     mapToEntity(record) {
         return {
-            id: record.id || record.Id,
+            id: record.id || record.Id || '',
             storeId: record.store_id || record.storeId || '',
             name: record.name,
             description: record.description || undefined,
@@ -54,9 +54,14 @@ class UnitsSPRepository extends sp_base_repository_1.SPBaseRepository {
             baseUnitId: input.baseUnitId || null,
             conversionFactor: input.conversionFactor ?? 1,
         };
-        await this.executeSP('sp_Units_Create', params);
-        // Fetch and return the created unit
-        const unit = await this.getById(id, input.storeId);
+        // sp_Units_Create returns the created unit directly
+        const result = await this.executeSPSingle('sp_Units_Create', params);
+        if (result) {
+            return this.mapToEntity(result);
+        }
+        // Fallback: fetch by id (case-insensitive comparison)
+        const units = await this.getByStore(input.storeId);
+        const unit = units.find((u) => u.id.toLowerCase() === id.toLowerCase());
         if (!unit) {
             throw new Error('Failed to create unit');
         }
@@ -121,7 +126,7 @@ class UnitsSPRepository extends sp_base_repository_1.SPBaseRepository {
      */
     async getById(id, storeId) {
         const units = await this.getByStore(storeId);
-        return units.find((u) => u.id === id) || null;
+        return units.find((u) => u.id.toLowerCase() === id.toLowerCase()) || null;
     }
     /**
      * Find unit by name within a store

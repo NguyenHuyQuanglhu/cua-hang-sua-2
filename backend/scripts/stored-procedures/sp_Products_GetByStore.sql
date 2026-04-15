@@ -58,8 +58,13 @@ BEGIN
             GROUP BY pl.unit_id, u.name
             FOR JSON PATH
         ), '[]') AS avgCostByUnit,
-        -- Total stock in base unit for sorting/filtering
-        ISNULL((SELECT SUM(Quantity) FROM ProductInventory WHERE ProductId = p.id AND StoreId = @storeId), p.stock_quantity) AS currentStock
+        -- Total stock in base unit for sorting/filtering (convert all units to base unit)
+        -- Total stock in default base unit for sorting/filtering
+        ISNULL((
+            SELECT SUM(pi.Quantity)
+            FROM ProductInventory pi
+            WHERE pi.ProductId = p.id AND pi.StoreId = @storeId AND pi.UnitId = p.unit_id
+        ), p.stock_quantity) AS currentStock
     FROM Products p
     LEFT JOIN Categories c ON p.category_id = c.id
     WHERE p.store_id = @storeId

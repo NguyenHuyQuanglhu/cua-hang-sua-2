@@ -53,6 +53,8 @@ export type PurchaseLot = {
   quantity: number;
   cost: number;
   unitId: string;
+  supplierId?: string;
+  supplierName?: string;
 }
 
 export type Product = {
@@ -77,6 +79,20 @@ export type Supplier = {
   address?: string;
   taxCode?: string;
   notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type Contractor = {
+  id: string;
+  name: string;
+  contactPerson?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  taxCode?: string;
+  identityNumber?: string;
+  description?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -116,6 +132,8 @@ export type Sale = {
   id: string;
   invoiceNumber: string;
   customerId: string;
+  contractorId?: string;
+  projectName?: string;
   shiftId?: string; // Add shiftId to Sale
   transactionDate: string; // ISO 8601 date string
   status: 'pending' | 'unprinted' | 'printed';
@@ -271,6 +289,8 @@ export type PurchaseOrder = {
   id: string;
   orderNumber: string;
   supplierId?: string;
+  contractorId?: string;
+  contractorName?: string;
   importDate: string; // ISO date string
   items: PurchaseOrderItem[];
   totalAmount: number;
@@ -279,6 +299,13 @@ export type PurchaseOrder = {
   notes?: string;
   createdAt: any; // server timestamp
 }
+
+// Alias for backward compatibility
+export type Purchase = PurchaseOrder & {
+  purchaseDate: string; // Alias for importDate
+  invoiceNumber: string; // Alias for orderNumber
+  supplierName?: string;
+};
 
 export type CashTransaction = {
     id: string;
@@ -307,6 +334,10 @@ export type Shift = {
   cashDifference?: number; // Difference between theoretical and actual
   totalRevenue: number;
   salesCount: number;
+  hourlyRate?: number; // Lương theo giờ
+  maxShiftHours?: number; // Giới hạn giờ làm việc
+  hoursWorked?: number; // Số giờ đã làm
+  isOvertime?: boolean; // Đã vượt giờ quy định
 }
 
 
@@ -453,7 +484,7 @@ export type CartItem = {
 
 export type OrderStatus = 'pending' | 'confirmed' | 'processing' | 'shipped' | 'delivered' | 'cancelled';
 export type PaymentStatus = 'pending' | 'paid' | 'refunded' | 'failed';
-export type PaymentMethod = 'cod' | 'bank_transfer' | 'momo' | 'vnpay' | 'zalopay';
+export type PaymentMethod = 'cod' | 'bank_transfer';
 
 export type ShippingAddress = {
   fullName: string;

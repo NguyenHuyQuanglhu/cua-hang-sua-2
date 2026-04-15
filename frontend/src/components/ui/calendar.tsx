@@ -15,12 +15,14 @@ function Calendar({
   showOutsideDays = true,
   ...props
 }: CalendarProps) {
+  const currentYear = new Date().getFullYear()
+
   return (
     <DayPicker
       showOutsideDays={showOutsideDays}
       captionLayout="dropdown-buttons"
-      fromYear={2020}
-      toYear={2030}
+      fromYear={props.fromYear ?? 1900}
+      toYear={props.toYear ?? currentYear + 10}
       className={cn("p-3", className)}
       classNames={{
         months: "flex flex-col sm:flex-row space-y-4 sm:space-x-4 sm:space-y-0",

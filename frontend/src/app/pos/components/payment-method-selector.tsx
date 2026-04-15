@@ -9,10 +9,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { QrCode, Banknote, CreditCard, Wallet, Globe } from 'lucide-react';
+import { QrCode, Banknote, CreditCard, Wallet } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type PaymentMethod = 'cash' | 'qr' | 'card' | 'transfer' | 'gateway';
+export type PaymentMethod = 'cash' | 'qr' | 'card' | 'transfer';
 
 interface PaymentMethodSelectorProps {
   open: boolean;
@@ -36,13 +36,6 @@ export function PaymentMethodSelector({
       icon: Banknote,
       description: 'Thanh toán bằng tiền mặt',
       color: 'bg-green-500 hover:bg-green-600',
-    },
-    {
-      id: 'gateway' as PaymentMethod,
-      name: 'Cổng thanh toán',
-      icon: Globe,
-      description: 'VNPay, MoMo, ZaloPay, Trả góp',
-      color: 'bg-indigo-500 hover:bg-indigo-600',
     },
     {
       id: 'qr' as PaymentMethod,

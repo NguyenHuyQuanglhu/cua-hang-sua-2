@@ -20,6 +20,7 @@ export interface Shift {
   cashDifference?: number;
   totalRevenue: number;
   salesCount: number;
+  notes?: string;
 }
 
 /**
@@ -65,6 +66,7 @@ interface ShiftRecord {
   cash_difference: number | null;
   total_revenue: number;
   sales_count: number;
+  notes: string | null;
   [key: string]: SqlValue;
 }
 

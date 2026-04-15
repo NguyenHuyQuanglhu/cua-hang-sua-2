@@ -85,27 +85,32 @@ export default function SoldProductsReportPage() {
       try {
         setProductsLoading(true);
         const productsData = await apiClient.getProducts();
-        setProducts(productsData.data || []);
+        console.log('[SoldProducts] Products response:', productsData);
+        setProducts(Array.isArray(productsData) ? productsData : (productsData as any).data || []);
         setProductsLoading(false);
 
         setCategoriesLoading(true);
         const categoriesData = await apiClient.getCategories();
-        setCategories(categoriesData.data || []);
+        console.log('[SoldProducts] Categories data:', categoriesData);
+        setCategories(Array.isArray(categoriesData) ? categoriesData : (categoriesData as any).data || []);
         setCategoriesLoading(false);
 
         setUnitsLoading(true);
         const unitsData = await apiClient.getUnits();
-        setUnits(unitsData.data || []);
+        console.log('[SoldProducts] Units response:', unitsData);
+        setUnits(Array.isArray(unitsData) ? unitsData : (unitsData as any).data || []);
         setUnitsLoading(false);
 
         setSalesLoading(true);
         const salesData = await apiClient.getSales();
-        setSales(salesData.data || []);
+        console.log('[SoldProducts] Sales response:', salesData);
+        setSales(Array.isArray(salesData) ? salesData : (salesData as any).data || []);
         setSalesLoading(false);
 
         setCustomersLoading(true);
         const customersData = await apiClient.getCustomers();
-        setCustomers(customersData.data || []);
+        console.log('[SoldProducts] Customers response:', customersData);
+        setCustomers(Array.isArray(customersData) ? customersData : (customersData as any).data || []);
         setCustomersLoading(false);
       } catch (error) {
         console.error('Error fetching sold products data:', error);
@@ -125,7 +130,11 @@ export default function SoldProductsReportPage() {
   const [salesItemsLoading, setSalesItemsLoading] = useState(true);
 
   const productsMap = useMemo(() => new Map(products?.map(p => [p.id, p])), [products]);
-  const categoriesMap = useMemo(() => new Map(categories?.map(c => [c.id, c.name])), [categories]);
+  const categoriesMap = useMemo(() => {
+    const map = new Map(categories?.map(c => [c.id, c.name]));
+    console.log('[SoldProducts] Categories map size:', map.size, 'Categories:', categories);
+    return map;
+  }, [categories]);
   const unitsMap = useMemo(() => new Map(units?.map(u => [u.id, u])), [units]);
   const salesMap = useMemo(() => new Map(sales?.map(s => [s.id, s])), [sales]);
   const customersMap = useMemo(() => new Map(customers?.map((c: any) => [c.id, c.name])), [customers]);
@@ -190,10 +199,21 @@ export default function SoldProductsReportPage() {
         const saleUnit = unitsMap.get(product.unitId);
         const baseUnit = saleUnit?.baseUnitId ? unitsMap.get(saleUnit.baseUnitId) : saleUnit;
         
+        // Get category name - check if categoryId exists and is in the map
+        let categoryName = 'Chưa phân loại';
+        if (product.categoryId) {
+          const foundCategory = categoriesMap.get(product.categoryId);
+          if (foundCategory) {
+            categoryName = foundCategory;
+          } else {
+            console.log(`[SoldProducts] Category not found for product ${product.name}, categoryId: ${product.categoryId}`);
+          }
+        }
+        
         results.push({
           productId,
           productName: product.name,
-          categoryName: categoriesMap.get(product.categoryId) || 'Chưa phân loại',
+          categoryName,
           totalQuantity: data.totalQuantity,
           totalRevenue: data.totalRevenue,
           avgPrice: data.totalRevenue / data.totalQuantity,

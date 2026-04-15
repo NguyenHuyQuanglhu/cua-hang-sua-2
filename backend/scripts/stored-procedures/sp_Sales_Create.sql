@@ -27,7 +27,8 @@ CREATE PROCEDURE sp_Sales_Create
     @customerPayment DECIMAL(18,2) = 0,
     @previousDebt DECIMAL(18,2) = 0,
     @remainingDebt DECIMAL(18,2) = 0,
-    @status NVARCHAR(20) = 'pending'
+    @status NVARCHAR(20) = 'pending',
+    @createdBy UNIQUEIDENTIFIER = NULL
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -37,28 +38,29 @@ BEGIN
         
         -- Insert into Sales table
         INSERT INTO Sales (
-            Id,
-            StoreId,
-            InvoiceNumber,
-            CustomerId,
-            ShiftId,
-            TransactionDate,
-            Status,
-            TotalAmount,
-            VatAmount,
-            FinalAmount,
-            Discount,
-            DiscountType,
-            DiscountValue,
-            TierDiscountPercentage,
-            TierDiscountAmount,
-            PointsUsed,
-            PointsDiscount,
-            CustomerPayment,
-            PreviousDebt,
-            RemainingDebt,
-            CreatedAt,
-            UpdatedAt
+            id,
+            store_id,
+            invoice_number,
+            customer_id,
+            shift_id,
+            transaction_date,
+            status,
+            total_amount,
+            vat_amount,
+            final_amount,
+            discount,
+            discount_type,
+            discount_value,
+            tier_discount_percentage,
+            tier_discount_amount,
+            points_used,
+            points_discount,
+            customer_payment,
+            previous_debt,
+            remaining_debt,
+            CreatedBy,
+            created_at,
+            updated_at
         )
         VALUES (
             @id,
@@ -81,6 +83,7 @@ BEGIN
             @customerPayment,
             @previousDebt,
             @remainingDebt,
+            @createdBy,
             GETDATE(),
             GETDATE()
         );
@@ -89,32 +92,33 @@ BEGIN
         
         -- Return the created sale
         SELECT 
-            s.Id AS id,
-            s.StoreId AS storeId,
-            s.InvoiceNumber AS invoiceNumber,
-            s.CustomerId AS customerId,
+            s.id AS id,
+            s.store_id AS storeId,
+            s.invoice_number AS invoiceNumber,
+            s.customer_id AS customerId,
             c.full_name AS customerName,
-            s.ShiftId AS shiftId,
-            s.TransactionDate AS transactionDate,
-            s.Status AS status,
-            s.TotalAmount AS totalAmount,
-            s.VatAmount AS vatAmount,
-            s.FinalAmount AS finalAmount,
-            s.Discount AS discount,
-            s.DiscountType AS discountType,
-            s.DiscountValue AS discountValue,
-            s.TierDiscountPercentage AS tierDiscountPercentage,
-            s.TierDiscountAmount AS tierDiscountAmount,
-            s.PointsUsed AS pointsUsed,
-            s.PointsDiscount AS pointsDiscount,
-            s.CustomerPayment AS customerPayment,
-            s.PreviousDebt AS previousDebt,
-            s.RemainingDebt AS remainingDebt,
-            s.CreatedAt AS createdAt,
-            s.UpdatedAt AS updatedAt
+            s.shift_id AS shiftId,
+            s.transaction_date AS transactionDate,
+            s.status AS status,
+            s.total_amount AS totalAmount,
+            s.vat_amount AS vatAmount,
+            s.final_amount AS finalAmount,
+            s.discount AS discount,
+            s.discount_type AS discountType,
+            s.discount_value AS discountValue,
+            s.tier_discount_percentage AS tierDiscountPercentage,
+            s.tier_discount_amount AS tierDiscountAmount,
+            s.points_used AS pointsUsed,
+            s.points_discount AS pointsDiscount,
+            s.customer_payment AS customerPayment,
+            s.previous_debt AS previousDebt,
+            s.remaining_debt AS remainingDebt,
+            s.CreatedBy AS createdBy,
+            s.created_at AS createdAt,
+            s.updated_at AS updatedAt
         FROM Sales s
-        LEFT JOIN Customers c ON s.CustomerId = c.id
-        WHERE s.Id = @id AND s.StoreId = @storeId;
+        LEFT JOIN Customers c ON s.customer_id = c.id
+        WHERE s.id = @id AND s.store_id = @storeId;
         
     END TRY
     BEGIN CATCH

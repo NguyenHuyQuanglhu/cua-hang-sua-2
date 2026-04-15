@@ -4,7 +4,62 @@ const express_1 = require("express");
 const uuid_1 = require("uuid");
 const auth_1 = require("../middleware/auth");
 const units_sp_repository_1 = require("../repositories/units-sp-repository");
+const product_units_repository_1 = require("../repositories/product-units-repository");
 const router = (0, express_1.Router)();
+function extractUnitDeleteErrorInfo(error) {
+    if (!error || typeof error !== 'object') {
+        return { message: '' };
+    }
+    const err = error;
+    const parsedNumber = Number(err.number ?? err.originalError?.info?.number ?? err.originalError?.number);
+    const message = String(err.message ?? err.originalError?.info?.message ?? err.originalError?.message ?? '').trim();
+    return {
+        number: Number.isFinite(parsedNumber) ? parsedNumber : undefined,
+        message,
+    };
+}
+function getIdentifierTail(identifier) {
+    const normalized = identifier.replace(/[\[\]"]/g, '');
+    const parts = normalized.split('.').filter(Boolean);
+    return parts.length > 0 ? parts[parts.length - 1] : normalized;
+}
+function mapUnitDeleteError(error) {
+    const { number, message } = extractUnitDeleteErrorInfo(error);
+    if (!message) {
+        return null;
+    }
+    if (/unit not found/i.test(message)) {
+        return {
+            status: 404,
+            message: 'Không tìm thấy đơn vị tính.',
+        };
+    }
+    const isConstraintError = number === 547 ||
+        /reference constraint|foreign key|conflicted with the reference constraint/i.test(message);
+    if (!isConstraintError) {
+        return null;
+    }
+    const tableRaw = message.match(/table\s+"([^"]+)"/i)?.[1];
+    const columnRaw = message.match(/column\s+'([^']+)'/i)?.[1];
+    const table = tableRaw ? getIdentifierTail(tableRaw) : undefined;
+    const column = columnRaw ? getIdentifierTail(columnRaw) : undefined;
+    if (table && column) {
+        return {
+            status: 409,
+            message: `Không thể xóa đơn vị tính vì đang được sử dụng ở ${table}.${column}. Vui lòng cập nhật hoặc xóa dữ liệu liên quan trước.`,
+        };
+    }
+    if (table) {
+        return {
+            status: 409,
+            message: `Không thể xóa đơn vị tính vì đang được sử dụng ở bảng ${table}. Vui lòng cập nhật hoặc xóa dữ liệu liên quan trước.`,
+        };
+    }
+    return {
+        status: 409,
+        message: 'Không thể xóa đơn vị tính vì đang được sử dụng trong dữ liệu. Vui lòng cập nhật hoặc xóa dữ liệu liên quan trước.',
+    };
+}
 router.use(auth_1.authenticate);
 router.use(auth_1.storeContext);
 // GET /api/units
@@ -132,7 +187,98 @@ router.delete('/:id', async (req, res) => {
     }
     catch (error) {
         console.error('Delete unit error:', error);
+        const mapped = mapUnitDeleteError(error);
+        if (mapped) {
+            res.status(mapped.status).json({ error: mapped.message });
+            return;
+        }
         res.status(500).json({ error: 'Failed to delete unit' });
+    }
+});
+// ==================== Product Unit Configurations ====================
+// GET /api/units/product-configs - Get all product unit configurations
+router.get('/product-configs', async (req, res) => {
+    try {
+        const storeId = req.storeId;
+        const configs = await product_units_repository_1.productUnitsRepository.findAllProductsWithConversion(storeId);
+        res.json({ success: true, data: configs });
+    }
+    catch (error) {
+        console.error('Get product unit configs error:', error);
+        res.status(500).json({ success: false, error: 'Failed to get product unit configurations' });
+    }
+});
+// GET /api/units/product-configs/:productId - Get product unit configuration by product ID
+router.get('/product-configs/:productId', async (req, res) => {
+    try {
+        const { productId } = req.params;
+        const storeId = req.storeId;
+        const config = await product_units_repository_1.productUnitsRepository.findByProductWithNames(productId, storeId);
+        res.json({ success: true, data: config });
+    }
+    catch (error) {
+        console.error('Get product unit config error:', error);
+        res.status(500).json({ success: false, error: 'Failed to get product unit configuration' });
+    }
+});
+// POST /api/units/product-configs - Create or update product unit configuration
+router.post('/product-configs', async (req, res) => {
+    try {
+        const storeId = req.storeId;
+        const { productId, baseUnitId, conversionUnitId, conversionRate, baseUnitPrice, conversionUnitPrice } = req.body;
+        if (!productId || !baseUnitId || !conversionUnitId || !conversionRate) {
+            res.status(400).json({ success: false, error: 'Missing required fields' });
+            return;
+        }
+        // Check if configuration already exists
+        const existing = await product_units_repository_1.productUnitsRepository.findByProduct(productId, storeId);
+        if (existing) {
+            // Update existing configuration
+            const updated = await product_units_repository_1.productUnitsRepository.update(existing.id, {
+                baseUnitId,
+                conversionUnitId,
+                conversionRate: Number(conversionRate),
+                baseUnitPrice: Number(baseUnitPrice) || 0,
+                conversionUnitPrice: Number(conversionUnitPrice) || 0,
+            }, storeId);
+            res.json({ success: true, data: updated });
+        }
+        else {
+            // Create new configuration
+            const created = await product_units_repository_1.productUnitsRepository.create({
+                productId,
+                storeId,
+                baseUnitId,
+                conversionUnitId,
+                conversionRate: Number(conversionRate),
+                baseUnitPrice: Number(baseUnitPrice) || 0,
+                conversionUnitPrice: Number(conversionUnitPrice) || 0,
+                isActive: true,
+            }, storeId);
+            res.status(201).json({ success: true, data: created });
+        }
+    }
+    catch (error) {
+        console.error('Upsert product unit config error:', error);
+        res.status(500).json({ success: false, error: 'Failed to save product unit configuration' });
+    }
+});
+// DELETE /api/units/product-configs/:productId - Delete product unit configuration
+router.delete('/product-configs/:productId', async (req, res) => {
+    try {
+        const { productId } = req.params;
+        const storeId = req.storeId;
+        const existing = await product_units_repository_1.productUnitsRepository.findByProduct(productId, storeId);
+        if (!existing) {
+            res.status(404).json({ success: false, error: 'Product unit configuration not found' });
+            return;
+        }
+        await product_units_repository_1.productUnitsRepository.delete(existing.id, storeId);
+        res.json({ success: true });
+    }
+    catch (error) {
+        console.error('Delete product unit config error:', error);
+        res.status(500).json({ success: false, error: 'Failed to delete product unit configuration' });
     }
 });
 exports.default = router;

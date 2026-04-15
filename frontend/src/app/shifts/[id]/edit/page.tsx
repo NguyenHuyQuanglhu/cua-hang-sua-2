@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { EditShiftForm } from './components/edit-shift-form'
 import { getShift } from '../../actions'
-import { Shift } from '@/lib/repositories/shift-repository'
+import type { Shift } from '@/lib/repositories/shift-repository'
 
 export default function EditShiftPage() {
   const params = useParams();
@@ -30,7 +30,7 @@ export default function EditShiftPage() {
           setError(result.error || 'Không tìm thấy ca làm việc');
           return;
         }
-        setShift(result.shift);
+        setShift(result.shift as unknown as Shift);
       } catch (err) {
         setError('Đã xảy ra lỗi khi tải dữ liệu');
       } finally {

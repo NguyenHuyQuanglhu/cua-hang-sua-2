@@ -25,9 +25,19 @@ import {
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
-import { Supplier } from '@/lib/types'
 import { upsertSupplier } from '../actions'
 import { useToast } from '@/hooks/use-toast'
+
+interface SupplierFormModel {
+  id: string;
+  name: string;
+  contactPerson?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  taxCode?: string;
+  notes?: string;
+}
 
 const supplierFormSchema = z.object({
   name: z.string().min(1, "Tên nhà cung cấp không được để trống."),
@@ -44,7 +54,7 @@ type SupplierFormValues = z.infer<typeof supplierFormSchema>;
 interface SupplierFormProps {
   isOpen: boolean;
   onOpenChange: (isOpen: boolean) => void;
-  supplier?: Supplier;
+  supplier?: SupplierFormModel;
 }
 
 export function SupplierForm({ isOpen, onOpenChange, supplier }: SupplierFormProps) {
